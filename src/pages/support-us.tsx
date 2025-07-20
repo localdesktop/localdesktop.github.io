@@ -23,7 +23,7 @@ function SupportUs() {
               className="button button--primary button--lg"
               to={config.customFields.repositoryUrl as string}
             >
-              ⭐️ Please star our GitHub repository
+              ⭐️ Star us on GitHub
             </Link>
             <Link
               className="button button--secondary button--lg"
