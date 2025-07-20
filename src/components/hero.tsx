@@ -2,7 +2,6 @@ import Link from "@docusaurus/Link";
 import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 import Heading from "@theme/Heading";
 import config from "@site/docusaurus.config";
-import GitHubButton from "react-github-btn";
 
 export const COMPONENTS = [
   {
@@ -74,24 +73,19 @@ export default function Hero() {
             ))}
           </span>
         </p>
-        <div className="flex items-center justify-center gap-4 ">
+        <div className="flex items-center justify-center gap-4">
           <Link
-            className="button button--secondary !p-[5px_10px] !text-xs !rounded-[.25em]"
+            className="button button--primary button--lg"
             to={config.customFields.downloadUrl as string}
           >
             Download APK
           </Link>
-          <div className="flex justify-center items-center [&>span>span]:flex">
-            <GitHubButton
-              href={config.customFields.repositoryUrl as string}
-              data-color-scheme="no-preference: light; light: light; dark: dark;"
-              data-size="large"
-              data-show-count="true"
-              aria-label="Star us on GitHub"
-            >
-              Star
-            </GitHubButton>
-          </div>
+          <Link
+            className="button button--secondary button--lg"
+            to={`${config.customFields.repositoryUrl}//stargazers`}
+          >
+            ⭐️ Star us on GitHub
+          </Link>
         </div>
       </div>
     </header>

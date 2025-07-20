@@ -1,7 +1,6 @@
 import Layout from "@theme/Layout";
 import Heading from "@theme/Heading";
 import BuyMeACoffee from "../components/buy-me-a-coffee";
-import Future from "../components/future";
 import Link from "@docusaurus/Link";
 import config from "@site/docusaurus.config";
 
