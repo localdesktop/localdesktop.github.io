@@ -10,7 +10,7 @@ This is an advanced topic. Proceed with your own risk.
 
 Local Desktop uses 3 commands to set up your desktop environment:
 
-```toml
+```toml title="/etc/localdesktop/localdesktop.toml"
 [command]
 check="pacman -Q xorg-xwayland && pacman -Qg xfce4 && pacman -Q onboard"
 install="stdbuf -oL pacman -Syu xorg-xwayland xfce4 onboard --noconfirm --noprogressbar"
@@ -20,7 +20,7 @@ launch="XDG_RUNTIME_DIR=/tmp Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-un
 You can change these 3 commands to install and launch your custom desktop environment. Please share your successful setups with us and we can put them here to help others.
 
 :::success Tips
-The `try_*` configs are very handy to try different config values **without breaking anything**. Check out the [Configurations](/docs/user/configuration-reference#special-try_-configs) section for more details.
+The `try_check`, `try_install`, `try_launch` configs are very handy to try different config values **without breaking anything**. Check out the [Configurations](/docs/user/configurations#special-try_-configs) documentation for more details about `try_*`.
 :::
 
 ### check
@@ -42,8 +42,6 @@ When `check` fails, this command will be executed next. This is exactly the comm
 - Always include the `--noconfirm` flag, otherwise, it will get stuck because it is waiting for a confirmation that never comes.
 - For a clear output, include `--noprogressbar`.
 
-stdbuf -oL pacman -Syu xorg-xwayland xfce4 onboard --noconfirm --noprogressbar
-
 :::info Recipe
 Just keep all the syntax and put all the packages/groups between `pacman -Syu` and the first `--`. For example: `pacman -Syu package-1 package-group-2 package-3 --noconfirm`.
 :::
@@ -64,6 +62,6 @@ Put important environment variables at the beginning of the command like `XDG_RU
 ## Config templates
 
 ```toml
-[command]
+[command] title="/etc/localdesktop/localdesktop.toml"
 Waiting for your contribution...
 ```

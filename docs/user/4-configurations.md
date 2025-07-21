@@ -50,4 +50,4 @@ Some important notes:
 - This rule applies to **all** configs.
 - It is not required for the `try_` config to be inside the same group as the normal config. But it is strongly recommended to do so, and to put the `try_` variant right under its normal variant.
 - If a normal config appears multiple times, the **first** entry is applied. If a `try_` config appears multiple times, the **last** entry is applied. This behavior is not guaranteed, and is subject to change. But in general, it is **invalid** to have duplicate config keys inside a TOML file.
-- If both the `try_` and normal configs exist, the `try_` config will always be applied.
+- `try_x` and `x` are not duplicate keys. `try_x` always has higher priority than `x`.
