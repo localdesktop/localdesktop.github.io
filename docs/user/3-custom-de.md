@@ -61,7 +61,28 @@ Put important environment variables at the beginning of the command like `XDG_RU
 
 ## Config templates
 
-```toml
-[command] title="/etc/localdesktop/localdesktop.toml"
-Waiting for your contribution...
+### KDE Plasma
+
+```toml title="/etc/localdesktop/localdesktop.toml"
+[command]
+try_check = "pacman -Qg plasma"
+try_install = "stdbuf -oL pacman -Syu plasma --noconfirm --noprogressbar"
+# X11 session via Xwayland
+try_launch = "XDG_RUNTIME_DIR=/tmp Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-launch startplasma-x11 2>&1"
+# Wayland session
+try_launch = "XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 /usr/lib/plasma-dbus-run-session-if-needed startplasma-wayland 2>&1"
+```
+
+![KDE Plasma on Local Desktop](/img/kde.webp)
+
+Feedback:
+
+- The time zone is not set; however, it is simple to set one with KDE's UI.
+- "Could not enter folder tags:." error popups.
+- The Wayland session offers notably better performance than the X11 session or PRoot Distro + Termux:X11, but some features (e.g., Spectacle screenshots) may not work. With KDE 7 dropping X11 support, improving Wayland compatibility and being less dependent on Xwayland will be a bigger priority.
+
+### Others
+
+```toml title="/etc/localdesktop/localdesktop.toml"
+Feel free to contribute your configs by using the "Edit this page" link below
 ```

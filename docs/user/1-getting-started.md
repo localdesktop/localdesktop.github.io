@@ -85,4 +85,4 @@ adb shell settings put global settings_enable_monitor_phantom_procs false
 
 ## What didn’t work?
 
-We are still working on the application. If you find any bugs, please open an issue on [GitHub](https://github.com/localdesktop/localdesktop/issues). Remember to star the project if you want quick updates 😀
+We are still working on the application. If you find any bugs, feel free to open an issue on [GitHub](https://github.com/localdesktop/localdesktop/issues). Please star the project to show your support and keep us motivated to provide quick updates 🙏
