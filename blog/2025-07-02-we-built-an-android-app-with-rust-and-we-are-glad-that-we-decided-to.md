@@ -1,5 +1,5 @@
 ---
-title: We built an Android app with Rust, and we're glad that we decided to.
+title: We built an Android app with Rust, and we're glad that we decided to
 authors:
   - name: Mister Teddy
     title: Creator & Maintainer of Local Desktop

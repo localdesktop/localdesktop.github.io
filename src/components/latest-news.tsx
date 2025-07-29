@@ -2,13 +2,13 @@ import React, { useEffect, useState } from "react";
 import { Feed, Item } from "../types";
 
 const pastelColors = [
-  "bg-red-50 dark:bg-zinc-950",
-  "bg-yellow-50 dark:bg-zinc-950",
-  "bg-green-50 dark:bg-zinc-950",
-  "bg-blue-50 dark:bg-zinc-950",
-  "bg-purple-50 dark:bg-zinc-950",
-  "bg-pink-50 dark:bg-zinc-950",
-  "bg-indigo-50 dark:bg-zinc-950",
+  "bg-red-50 dark:bg-red-950",
+  "bg-yellow-50 dark:bg-yellow-950",
+  "bg-green-50 dark:bg-green-950",
+  "bg-blue-50 dark:bg-blue-950",
+  "bg-purple-50 dark:bg-purple-950",
+  "bg-pink-50 dark:bg-pink-950",
+  "bg-indigo-50 dark:bg-indigo-950",
 ];
 
 export default function BlogFeed() {
@@ -35,27 +35,24 @@ export default function BlogFeed() {
         <h2 className="text-3xl font-bold text-center">
           <a href="/blog">Latest News</a>
         </h2>
-        <div className="flex flex-wrap gap-8">
+        <div className="flex flex-wrap gap-6">
           {posts.length > 0 && (
             <>
               {/* Left: Featured latest post */}
-              <div className="flex-grow flex-shrink-0 basis-[640px]">
+              <div className="flex-grow lg:flex-shrink-0 lg:basis-[640px] overflow-hidden">
                 <article
                   className={`p-6 rounded-2xl h-full space-y-2 ${
                     pastelColors[0 % pastelColors.length]
                   }`}
                 >
                   <h3 className="text-2xl font-semibold">
-                    <a href={posts[0].url} className="hover:underline">
-                      {posts[0].title}
-                    </a>
+                    <a href={posts[0].url}>{posts[0].title}</a>
                   </h3>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                  <p className="text-sm opacity-50">
                     {new Date(posts[0].date_modified).toLocaleDateString()}{" "}
                     &middot; By{" "}
                     <a
                       href={posts[0].author?.url}
-                      className="underline"
                       target="_blank"
                       rel="noopener noreferrer"
                     >
@@ -70,9 +67,12 @@ export default function BlogFeed() {
               </div>
 
               {/* Right: List of other posts */}
-              <div className="flex-none basis-96 space-y-6">
+              <div className="lg:flex-none lg:basis-96 space-y-6">
                 {posts.slice(1).map((post, i) => (
-                  <a href={post.url}>
+                  <a
+                    href={post.url}
+                    className="block hover:no-underline hover:[&_h4]:underline"
+                  >
                     <article
                       key={post.id}
                       className={`p-4 rounded-2xl ${
@@ -80,8 +80,10 @@ export default function BlogFeed() {
                       }`}
                     >
                       <h4 className="text-lg font-semibold">{post.title}</h4>
-                      {new Date(post.date_modified).toLocaleDateString()}{" "}
-                      &middot; {post.author?.name}
+                      <p className="text-sm opacity-50 !mb-0">
+                        {new Date(post.date_modified).toLocaleDateString()}{" "}
+                        &middot; {post.author?.name}
+                      </p>
                     </article>
                   </a>
                 ))}
