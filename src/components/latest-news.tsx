@@ -31,32 +31,34 @@ export default function BlogFeed() {
 
   return (
     <section className="flex items-center justify-center py-8 w-full">
-      <div className="container mx-auto px-4">
-        <h2 className="text-3xl font-bold mb-8 text-center">Latest News</h2>
-        <div className="flex flex-wrap -mx-4">
+      <div className="container mx-auto !space-y-8">
+        <h2 className="text-3xl font-bold text-center">
+          <a href="/blog">Latest News</a>
+        </h2>
+        <div className="flex flex-wrap gap-8">
           {posts.length > 0 && (
             <>
               {/* Left: Featured latest post */}
-              <div className="w-full lg:w-2/3 px-4 mb-8 lg:mb-0">
+              <div className="flex-grow flex-shrink-0 basis-[640px]">
                 <article
-                  className={`p-6 rounded-2xl h-full ${
+                  className={`p-6 rounded-2xl h-full space-y-2 ${
                     pastelColors[0 % pastelColors.length]
                   }`}
                 >
-                  <h3 className="text-2xl font-semibold mb-2">
-                    <a
-                      href={posts[0].url}
-                      className="hover:underline"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
+                  <h3 className="text-2xl font-semibold">
+                    <a href={posts[0].url} className="hover:underline">
                       {posts[0].title}
                     </a>
                   </h3>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-4">
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
                     {new Date(posts[0].date_modified).toLocaleDateString()}{" "}
                     &middot; By{" "}
-                    <a href={posts[0].author?.url} className="underline">
+                    <a
+                      href={posts[0].author?.url}
+                      className="underline"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
                       {posts[0].author?.name}
                     </a>
                   </p>
@@ -68,35 +70,21 @@ export default function BlogFeed() {
               </div>
 
               {/* Right: List of other posts */}
-              <div className="w-full lg:w-1/3 px-4">
-                <div className="space-y-6">
-                  {posts.slice(1).map((post, i) => (
+              <div className="flex-none basis-96 space-y-6">
+                {posts.slice(1).map((post, i) => (
+                  <a href={post.url}>
                     <article
                       key={post.id}
                       className={`p-4 rounded-2xl ${
                         pastelColors[(i + 1) % pastelColors.length]
                       }`}
                     >
-                      <h4 className="text-lg font-semibold">
-                        <a
-                          href={post.url}
-                          className="hover:underline"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {post.title}
-                        </a>
-                      </h4>
-                      <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                        {new Date(post.date_modified).toLocaleDateString()}{" "}
-                        &middot;{" "}
-                        <a href={post.author?.url} className="underline">
-                          {post.author?.name}
-                        </a>
-                      </p>
+                      <h4 className="text-lg font-semibold">{post.title}</h4>
+                      {new Date(post.date_modified).toLocaleDateString()}{" "}
+                      &middot; {post.author?.name}
                     </article>
-                  ))}
-                </div>
+                  </a>
+                ))}
               </div>
             </>
           )}

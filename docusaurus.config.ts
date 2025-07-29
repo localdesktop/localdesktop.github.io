@@ -107,7 +107,7 @@ const config: Config = {
           position: "left",
           label: "Developer Manual",
         },
-        { to: "/blog", label: "Blog", position: "left" },
+        { to: "/blog", label: "News", position: "left" },
         {
           href: repositoryUrl,
           label: "GitHub",
