@@ -77,13 +77,7 @@ const config: Config = {
     ],
   ],
 
-  scripts: [
-    {
-      src: "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4231427019106835",
-      async: true,
-      crossorigin: "anonymous",
-    },
-  ],
+  scripts: [],
 
   themeConfig: {
     // Replace with your project's social card
