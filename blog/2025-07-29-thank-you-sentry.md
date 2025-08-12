@@ -1,10 +1,6 @@
 ---
 title: Thank You, Sentry
-authors:
-  - name: Mister Teddy
-    title: Creator & Maintainer of Polar Bear
-    url: https://mister-teddy.github.io
-    image_url: https://avatars2.githubusercontent.com/u/29925961
+authors: teddy
 tags: [for-user, sponsorship, gratitude]
 ---
 

@@ -1,10 +1,6 @@
 ---
 title: 100 GitHub ⭐️, a Small Milestone, and a Big Thank You
-authors:
-  - name: Mister Teddy
-    title: Creator & Maintainer of Local Desktop
-    url: https://mister-teddy.github.io
-    image_url: https://avatars2.githubusercontent.com/u/29925961
+authors: teddy
 tags: [for-user, milestone]
 ---
 

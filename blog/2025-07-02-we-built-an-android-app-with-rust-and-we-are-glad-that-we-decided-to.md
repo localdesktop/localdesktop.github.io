@@ -1,10 +1,6 @@
 ---
 title: We built an Android app with Rust, and we're glad that we decided to
-authors:
-  - name: Mister Teddy
-    title: Creator & Maintainer of Local Desktop
-    url: https://mister-teddy.github.io
-    image_url: https://avatars2.githubusercontent.com/u/29925961
+authors: teddy
 tags: [for-dev, rust, ndk]
 ---
 
