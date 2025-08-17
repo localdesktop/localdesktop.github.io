@@ -41,9 +41,6 @@ importers:
       react-dom:
         specifier: ^19.0.0
         version: 19.0.0(react@19.0.0)
-      react-github-btn:
-        specifier: ^1.4.0
-        version: 1.4.0(react@19.0.0)
       tailwindcss:
         specifier: ^4.1.10
         version: 4.1.10
@@ -3009,9 +3006,6 @@ packages:
     resolution: {integrity: sha512-ts6Wi+2j3jQjqi70w5AlN8DFnkSwC+MqmxEzdEALB2qXZYV3X/b1CTfgPLGJNMeAWxdPfU8FO1ms3NUfaHCPYg==}
     engines: {node: '>=10'}
 
-  github-buttons@2.29.1:
-    resolution: {integrity: sha512-TV3YgAKda5hPz75n7QXmGCsSzgVya1vvmBieebg3EB5ScmashTZ0FldViG1aU2d4V5rcAGrtQ7k5uAaCo0A4PA==}
-
   github-slugger@1.5.0:
     resolution: {integrity: sha512-wIh+gKBI9Nshz2o46B0B3f5k/W+WI9ZAv6y5Dn5WJ5SK1t0TnDimB4WE5rmTD05ZAIn8HALCZVmCsvj0w0v0lw==}
 
@@ -4729,11 +4723,6 @@ packages:
 
   react-fast-compare@3.2.2:
     resolution: {integrity: sha512-nsO+KSNgo1SbJqJEYRE9ERzo7YtYbou/OqjSQKxV7jcKox7+usiUVZOAC+XnDOABXggQTno0Y1CpVnuWEc1boQ==}
-
-  react-github-btn@1.4.0:
-    resolution: {integrity: sha512-lV4FYClAfjWnBfv0iNlJUGhamDgIq6TayD0kPZED6VzHWdpcHmPfsYOZ/CFwLfPv4Zp+F4m8QKTj0oy2HjiGXg==}
-    peerDependencies:
-      react: '>=16.3.0'
 
   react-is@16.13.1:
     resolution: {integrity: sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==}
@@ -9634,8 +9623,6 @@ snapshots:
 
   get-stream@6.0.1: {}
 
-  github-buttons@2.29.1: {}
-
   github-slugger@1.5.0: {}
 
   glob-parent@5.1.2:
@@ -11712,11 +11699,6 @@ snapshots:
   react-error-overlay@6.1.0: {}
 
   react-fast-compare@3.2.2: {}
-
-  react-github-btn@1.4.0(react@19.0.0):
-    dependencies:
-      github-buttons: 2.29.1
-      react: 19.0.0
 
   react-is@16.13.1: {}
 
