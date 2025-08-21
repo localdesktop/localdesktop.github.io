@@ -8,8 +8,9 @@ const downloadUrl = "https://github.com/localdesktop/localdesktop/releases";
 const repositoryUrl = "https://github.com/localdesktop/localdesktop";
 
 const config: Config = {
-  title: "Local Desktop",
-  tagline: "Run desktop Linux on Android.",
+  title: "Local Desktop | Linux on Android",
+  tagline:
+    "Local Desktop helps you run a desktop Linux environment on your Android device.",
   favicon: "img/favicon.ico",
 
   // Set the production url of your site here
@@ -81,6 +82,13 @@ const config: Config = {
   themeConfig: {
     // Replace with your project's social card
     image: "img/logo.png",
+    metadata: [
+      {
+        name: "keywords",
+        content:
+          "linux on android, android desktop environment, mobile linux, android virtualization, linux desktop mobile, android linux app, desktop environment android, run linux android, mobile desktop, android terminal, linux mobile app",
+      },
+    ],
     navbar: {
       title: "Local Desktop",
       logo: {

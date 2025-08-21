@@ -5,7 +5,6 @@ import type { WrapperProps } from "@docusaurus/types";
 import useRouteContext from "@docusaurus/useRouteContext";
 import { useLocation } from "@docusaurus/router";
 import Head from "@docusaurus/Head";
-import ExecutionEnvironment from "@docusaurus/ExecutionEnvironment";
 
 type Props = WrapperProps<typeof LayoutType>;
 
@@ -19,10 +18,6 @@ export default function LayoutWrapper(props: Props): ReactNode {
     window.self !== window.top || // in iframe
     ["/privacy", "/support-us"].includes(pathname) || // excluded pages
     routes.plugin.name === "native"; // 404 pages
-
-  if (noAdsense && !ExecutionEnvironment.canUseDOM) {
-    console.log("🛑 Excluded AdSense on page ", location.pathname);
-  }
 
   return (
     <>
