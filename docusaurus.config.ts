@@ -9,8 +9,7 @@ const repositoryUrl = "https://github.com/localdesktop/localdesktop";
 
 const config: Config = {
   title: "Local Desktop",
-  tagline:
-    "Local Desktop helps you run a desktop Linux environment on your Android device.",
+  tagline: "Run desktop Linux on Android.",
   favicon: "img/favicon.ico",
 
   // Set the production url of your site here

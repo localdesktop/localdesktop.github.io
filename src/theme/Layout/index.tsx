@@ -15,7 +15,8 @@ export default function LayoutWrapper(props: Props): ReactNode {
 
   const pathname = location.pathname.replace(/\/$/, ""); // strip the trailing /
   const noAdsense =
-    (typeof window !== "undefined" && window.self !== window.top) || // in iframe
+    typeof window === "undefined" || // SSG
+    window.self !== window.top || // in iframe
     ["/privacy", "/support-us"].includes(pathname) || // excluded pages
     routes.plugin.name === "native"; // 404 pages
 
