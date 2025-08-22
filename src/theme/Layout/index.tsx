@@ -16,7 +16,7 @@ export default function LayoutWrapper(props: Props): ReactNode {
   const noAdsense =
     typeof window === "undefined" || // SSG
     window.self !== window.top || // in iframe
-    ["/privacy", "/support-us"].includes(pathname) || // excluded pages
+    ["", "/privacy", "/support-us"].includes(pathname) || // excluded pages
     routes.plugin.name === "native"; // 404 pages
 
   return (
