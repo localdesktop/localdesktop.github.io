@@ -18,6 +18,7 @@ pub mod android {
     pub mod proot {
         pub mod launch;
         pub mod process;
+        pub mod ptrace;
         pub mod setup;
     }
     pub mod utils {

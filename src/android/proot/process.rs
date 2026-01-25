@@ -1,34 +1,83 @@
+use super::ptrace;
 use crate::android::utils::application_context::get_application_context;
-use crate::core::{config, logging::PolarBearExpectation};
-use smithay::reexports::rustix::path::Arg;
-use std::io::BufRead;
-use std::io::BufReader;
-use std::process::{Child, Command, Stdio};
+use crate::core::config;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 
 pub type Log = Box<dyn Fn(String)>;
 
 pub struct ArchProcess {
     pub command: String,
-    pub user: String,
-    pub process: Option<Child>,
+    pub user: Option<String>,
+    pub log: Option<Log>,
 }
 
 impl ArchProcess {
-    fn setup_base_command() -> Command {
+    /// Runs the process inside the proot environment.
+    /// Returns true if the process exited with code 0, false otherwise.
+    pub fn run(self) -> bool {
+        let mut binds: Vec<(String, String)> = Vec::new();
+        binds.push(("/dev".to_string(), "/dev".to_string()));
+        binds.push(("/proc".to_string(), "/proc".to_string()));
+        binds.push(("/sys".to_string(), "/sys".to_string()));
+        binds.push((
+            format!("{}/tmp", config::ARCH_FS_ROOT),
+            "/dev/shm".to_string(),
+        ));
+
+        let context = get_application_context();
+        if context.permission_all_files_access {
+            binds.push(("/sdcard".to_string(), "/android".to_string()));
+            binds.push(("/sdcard".to_string(), "/root/Android".to_string()));
+        }
+
+        binds.push(("/dev/urandom".to_string(), "/dev/random".to_string()));
+        binds.push(("/proc/self/fd".to_string(), "/dev/fd".to_string()));
+        binds.push(("/proc/self/fd/0".to_string(), "/dev/stdin".to_string()));
+        binds.push(("/proc/self/fd/1".to_string(), "/dev/stdout".to_string()));
+        binds.push(("/proc/self/fd/2".to_string(), "/dev/stderr".to_string()));
+        binds.push((
+            format!("{}/proc/.loadavg", config::ARCH_FS_ROOT),
+            "/proc/loadavg".to_string(),
+        ));
+        binds.push((
+            format!("{}/proc/.stat", config::ARCH_FS_ROOT),
+            "/proc/stat".to_string(),
+        ));
+        binds.push((
+            format!("{}/proc/.uptime", config::ARCH_FS_ROOT),
+            "/proc/uptime".to_string(),
+        ));
+        binds.push((
+            format!("{}/proc/.version", config::ARCH_FS_ROOT),
+            "/proc/version".to_string(),
+        ));
+        binds.push((
+            format!("{}/proc/.vmstat", config::ARCH_FS_ROOT),
+            "/proc/vmstat".to_string(),
+        ));
+        binds.push((
+            format!("{}/proc/.sysctl_entry_cap_last_cap", config::ARCH_FS_ROOT),
+            "/proc/sys/kernel/cap_last_cap".to_string(),
+        ));
+        binds.push((
+            format!(
+                "{}/proc/.sysctl_inotify_max_user_watches",
+                config::ARCH_FS_ROOT
+            ),
+            "/proc/sys/fs/inotify/max_user_watches".to_string(),
+        ));
+        binds.push((
+            format!("{}/sys/.empty", config::ARCH_FS_ROOT),
+            "/sys/fs/selinux".to_string(),
+        ));
+
         let context = get_application_context();
         let proot_loader = context.native_library_dir.join("libproot_loader.so");
-
         let mut process = Command::new(context.native_library_dir.join("libproot.so"));
         process
             .env("PROOT_LOADER", proot_loader)
-            .env("PROOT_TMP_DIR", context.data_dir);
-        process
-    }
-
-    fn with_args(mut process: Command) -> Command {
-        let context = get_application_context();
-
-        process
+            .env("PROOT_TMP_DIR", context.data_dir)
             .arg("-r")
             .arg(config::ARCH_FS_ROOT)
             .arg("-L")
@@ -36,37 +85,10 @@ impl ArchProcess {
             .arg("--sysvipc")
             .arg("--kill-on-exit")
             .arg("--root-id")
-            .arg("--bind=/dev")
-            .arg("--bind=/proc")
-            .arg("--bind=/sys")
-            .arg(format!("--bind={}/tmp:/dev/shm", config::ARCH_FS_ROOT));
+            .arg("/usr/bin/env")
+            .arg("-i");
 
-        if context.permission_all_files_access {
-            process
-                .arg("--bind=/sdcard:/android")
-                .arg("--bind=/sdcard:/root/Android");
-        }
-
-        process
-            .arg("--bind=/dev/urandom:/dev/random")
-            .arg("--bind=/proc/self/fd:/dev/fd")
-            .arg("--bind=/proc/self/fd/0:/dev/stdin")
-            .arg("--bind=/proc/self/fd/1:/dev/stdout")
-            .arg("--bind=/proc/self/fd/2:/dev/stderr")
-            .arg(format!("--bind={}/proc/.loadavg:/proc/loadavg", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.stat:/proc/stat", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.uptime:/proc/uptime", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.version:/proc/version", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.vmstat:/proc/vmstat", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/sys/.empty:/sys/fs/selinux", config::ARCH_FS_ROOT));
-        process
-    }
-
-    fn with_env_vars(mut process: Command, user: &str) -> Command {
-        process.arg("/usr/bin/env").arg("-i");
-
+        let user = self.user.unwrap_or("root".to_string());
         let home = if user == "root" {
             "HOME=/root".to_string()
         } else {
@@ -80,127 +102,48 @@ impl ArchProcess {
             .arg("TMPDIR=/tmp")
             .arg(format!("USER={}", user))
             .arg(format!("LOGNAME={}", user));
-        process
-    }
 
-    fn with_user_shell(mut process: Command, user: &str) -> Command {
         if user == "root" {
             process.arg("sh");
         } else {
             process
                 .arg("runuser")
                 .arg("-u")
-                .arg(user)
+                .arg(&user)
                 .arg("--")
                 .arg("sh");
         }
+
         process
-    }
-
-    pub fn is_supported() -> bool {
-        let check_command = "cat /proc/cpuinfo";
-        Self::setup_base_command()
-            .arg("-r")
-            .arg("/")
-            .arg("-L")
-            .arg("--link2symlink")
-            .arg("--sysvipc")
-            .arg("--kill-on-exit")
-            .arg("--root-id")
-            .arg("sh")
-            .arg("-c")
-            .arg(check_command)
-            .output()
-            .map(|res| res.stderr.is_empty())
-            .unwrap_or(false)
-    }
-
-    /// Run the command inside Proot
-    pub fn spawn(mut self) -> Self {
-        let mut process = Self::setup_base_command();
-        process = Self::with_args(process);
-        process = Self::with_env_vars(process, &self.user);
-        process = Self::with_user_shell(process, &self.user);
-
-        let child = process
             .arg("-c")
             .arg(&self.command)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .pb_expect("Failed to run command");
+            .stderr(Stdio::piped());
 
-        self.process.replace(child);
-        self
-    }
+        println!("Running command in arch proot: {}", &self.command);
+        println!("As user: {}", &user);
+        println!("With binds: {:?}", &binds);
 
-    pub fn exec(command: &str) -> Self {
-        ArchProcess {
-            command: command.to_string(),
-            user: "root".to_string(),
-            process: None,
-        }
-        .spawn()
-    }
+        let mut child = match ptrace::spawn_traced(process, binds) {
+            Ok(child) => child,
+            Err(_) => return false,
+        };
 
-    pub fn exec_as(command: &str, user: &str) -> Self {
-        ArchProcess {
-            command: command.to_string(),
-            user: user.to_string(),
-            process: None,
-        }
-        .spawn()
-    }
-
-    pub fn with_log(self, mut log: impl FnMut(String)) {
-        if let Some(child) = self.process {
-            let reader = BufReader::new(child.stdout.unwrap());
-            for line in reader.lines() {
-                let line = line.unwrap();
-                log(line);
+        if let Some(log) = &self.log {
+            if let Some(stdout) = child.take_stdout() {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        log(line);
+                    }
+                }
             }
         }
-    }
 
-    pub fn exec_with_panic_on_error(command: &str) {
-        let mut process = Self::setup_base_command();
-        process = Self::with_args(process);
-        process = Self::with_env_vars(process, "root");
-        process = Self::with_user_shell(process, "root");
-
-        let output = process
-            .arg("-c")
-            .arg(command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .pb_expect("Failed to run command");
-
-        let error_output = String::from_utf8_lossy(&output.stderr);
-        if error_output.contains("fatal error: see `libproot.so --help`") {
-            panic!("PRoot error: {}", error_output);
-        }
-    }
-
-    pub fn wait_with_output(self) -> std::io::Result<std::process::Output> {
-        if let Some(child) = self.process {
-            child.wait_with_output()
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Process not spawned",
-            ))
-        }
-    }
-
-    pub fn wait(self) -> std::io::Result<std::process::ExitStatus> {
-        if let Some(mut child) = self.process {
-            child.wait()
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Process not spawned",
-            ))
+        match child.wait() {
+            Ok(code) => code == 0,
+            Err(_) => false,
         }
     }
 }

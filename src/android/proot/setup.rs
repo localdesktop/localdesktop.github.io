@@ -4,7 +4,7 @@ use crate::{
         app::build::PolarBearBackend,
         backend::{
             wayland::{Compositor, WaylandBackend},
-            webview::{ErrorVariant, WebviewBackend},
+            webview::WebviewBackend,
         },
         utils::application_context::get_application_context,
         utils::ndk::run_in_jvm,
@@ -224,11 +224,14 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
         launch: _,
     } = context.local_config.command;
 
+    let check_command = check.clone();
     let installed = move || {
-        ArchProcess::exec(&check)
-            .wait()
-            .pb_expect("Failed to check whether the installation target is installed")
-            .success()
+        ArchProcess {
+            command: check_command.clone(),
+            user: None,
+            log: None,
+        }
+        .run()
     };
 
     if installed() {
@@ -239,12 +242,23 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
     return Some(thread::spawn(move || {
         // Install dependencies until `check` succeed
         loop {
-            ArchProcess::exec_with_panic_on_error("rm -f /var/lib/pacman/db.lck");
-            ArchProcess::exec(&install).with_log(|it| {
-                mpsc_sender
-                    .send(SetupMessage::Progress(it))
-                    .pb_expect("Failed to send log message");
-            });
+            ArchProcess {
+                command: "rm -f /var/lib/pacman/db.lck".to_string(),
+                user: None,
+                log: None,
+            }
+            .run();
+            let log_sender = mpsc_sender.clone();
+            ArchProcess {
+                command: install.clone(),
+                user: None,
+                log: Some(Box::new(move |it| {
+                    log_sender
+                        .send(SetupMessage::Progress(it))
+                        .pb_expect("Failed to send log message");
+                })),
+            }
+            .run();
             if installed() {
                 break;
             }
@@ -706,20 +720,6 @@ fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
 pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let (sender, receiver) = mpsc::channel();
     let progress = Arc::new(Mutex::new(0));
-
-    if ArchProcess::is_supported() {
-        sender
-            .send(SetupMessage::Progress(
-                "✅ Your device is supported!".to_string(),
-            ))
-            .unwrap_or(());
-    } else {
-        return PolarBearBackend::WebView(WebviewBackend {
-            socket_port: 0,
-            progress,
-            error: ErrorVariant::Unsupported,
-        });
-    }
 
     let options = SetupOptions {
         android_app,
