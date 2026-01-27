@@ -17,6 +17,7 @@ impl ArchProcess {
     /// Returns true if the process exited with code 0, false otherwise.
     pub fn run(self) -> bool {
         let mut binds: Vec<(String, String)> = Vec::new();
+        binds.push((config::ARCH_FS_ROOT.to_string(), "/".to_string()));
         binds.push(("/dev".to_string(), "/dev".to_string()));
         binds.push(("/proc".to_string(), "/proc".to_string()));
         binds.push(("/sys".to_string(), "/sys".to_string()));
@@ -72,21 +73,8 @@ impl ArchProcess {
             "/sys/fs/selinux".to_string(),
         ));
 
-        let context = get_application_context();
-        let proot_loader = context.native_library_dir.join("libproot_loader.so");
-        let mut process = Command::new(context.native_library_dir.join("libproot.so"));
-        process
-            .env("PROOT_LOADER", proot_loader)
-            .env("PROOT_TMP_DIR", context.data_dir)
-            .arg("-r")
-            .arg(config::ARCH_FS_ROOT)
-            .arg("-L")
-            .arg("--link2symlink")
-            .arg("--sysvipc")
-            .arg("--kill-on-exit")
-            .arg("--root-id")
-            .arg("/usr/bin/env")
-            .arg("-i");
+        let mut process = Command::new("/usr/bin/env");
+        process.arg("-i");
 
         let user = self.user.unwrap_or("root".to_string());
         let home = if user == "root" {
