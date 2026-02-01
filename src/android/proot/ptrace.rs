@@ -1,15 +1,14 @@
+use nix::errno::Errno;
+use nix::libc;
 use nix::sys::ptrace;
 use nix::sys::ptrace::Options;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::Pid;
-use nix::errno::Errno;
-use nix::libc;
 use std::fs;
 use std::io;
-use std::os::unix::process::CommandExt;
-use std::process::{Child, ChildStderr, ChildStdout, Command};
 use std::mem;
+use std::process::{Child, ChildStderr, ChildStdout, Command};
 use std::thread;
 
 pub struct Args {
@@ -284,7 +283,11 @@ fn write_bytes(pid: Pid, addr: usize, bytes: &[u8]) -> nix::Result<()> {
         } else {
             i32::from_ne_bytes(word[..4].try_into().unwrap()) as i64
         };
-        ptrace::write(pid, (addr + offset) as ptrace::AddressType, data as libc::c_long)?;
+        ptrace::write(
+            pid,
+            (addr + offset) as ptrace::AddressType,
+            data as libc::c_long,
+        )?;
         offset += word_size;
     }
 
@@ -447,18 +450,6 @@ fn handle_syscall(_pid: Pid, _binds: &[(String, String)]) -> nix::Result<()> {
 }
 
 pub fn spawn_traced(mut command: Command, binds: Vec<(String, String)>) -> io::Result<TracedChild> {
-    unsafe {
-        command.pre_exec(|| {
-            ptrace::traceme().map_err(nix_to_io)?;
-            // Pause until the parent sets ptrace options.
-            let rc = unsafe { nix::libc::raise(nix::libc::SIGSTOP) };
-            if rc != 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-
     let child = command.spawn()?;
     let pid = Pid::from_raw(child.id() as i32);
 
@@ -475,18 +466,34 @@ pub fn launch(args: Args) -> io::Result<i32> {
 }
 
 fn trace_loop(pid: Pid, binds: Vec<(String, String)>) -> io::Result<i32> {
-    loop {
-        match waitpid(pid, None).map_err(nix_to_io)? {
-            WaitStatus::Stopped(_, Signal::SIGSTOP) => break,
-            WaitStatus::Exited(_, code) => return Ok(code),
-            WaitStatus::Signaled(_, sig, _) => return Ok(128 + sig as i32),
-            _ => {}
+    match ptrace::attach(pid) {
+        Ok(()) => {}
+        Err(err) if err == Errno::ESRCH => {
+            match waitpid(pid, None).map_err(nix_to_io)? {
+                WaitStatus::Exited(_, code) => return Ok(code),
+                WaitStatus::Signaled(_, sig, _) => return Ok(128 + sig as i32),
+                _ => return Err(io::Error::new(io::ErrorKind::Other, "ptrace attach failed")),
+            }
         }
+        Err(err) => return Err(nix_to_io(err)),
+    }
+
+    match waitpid(pid, None).map_err(nix_to_io)? {
+        WaitStatus::Exited(_, code) => return Ok(code),
+        WaitStatus::Signaled(_, sig, _) => return Ok(128 + sig as i32),
+        WaitStatus::Stopped(_, _) => {}
+        _ => {}
     }
 
     let options = Options::PTRACE_O_TRACESYSGOOD | Options::PTRACE_O_EXITKILL;
     ptrace::setoptions(pid, options).map_err(nix_to_io)?;
-    ptrace::syscall(pid, None).map_err(nix_to_io)?;
+    let syscall_tracing = !binds.is_empty();
+    let mut started_syscall = !syscall_tracing;
+    if syscall_tracing {
+        ptrace::syscall(pid, None).map_err(nix_to_io)?;
+    } else {
+        ptrace::cont(pid, None).map_err(nix_to_io)?;
+    }
 
     let mut in_syscall = false;
     loop {
@@ -501,7 +508,11 @@ fn trace_loop(pid: Pid, binds: Vec<(String, String)>) -> io::Result<i32> {
                 ptrace::syscall(pid, None).map_err(nix_to_io)?;
             }
             WaitStatus::PtraceEvent(_, _, _) | WaitStatus::Continued(_) => {
-                ptrace::syscall(pid, None).map_err(nix_to_io)?;
+                if syscall_tracing {
+                    ptrace::syscall(pid, None).map_err(nix_to_io)?;
+                } else {
+                    ptrace::cont(pid, None).map_err(nix_to_io)?;
+                }
             }
             WaitStatus::Stopped(_, sig) => {
                 let deliver = if sig == Signal::SIGTRAP {
@@ -509,7 +520,14 @@ fn trace_loop(pid: Pid, binds: Vec<(String, String)>) -> io::Result<i32> {
                 } else {
                     Some(sig)
                 };
-                ptrace::syscall(pid, deliver).map_err(nix_to_io)?;
+                if syscall_tracing {
+                    if !started_syscall {
+                        started_syscall = true;
+                    }
+                    ptrace::syscall(pid, deliver).map_err(nix_to_io)?;
+                } else {
+                    ptrace::cont(pid, deliver).map_err(nix_to_io)?;
+                }
             }
             WaitStatus::StillAlive => {}
         }
@@ -578,7 +596,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn launch_reports_success_exit_code() {
         let Some(code) = launch_exit_code("true", Vec::new()) else {
             return;
@@ -587,7 +604,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn launch_propagates_nonzero_exit_code() {
         let Some(code) = launch_exit_code("exit 42", Vec::new()) else {
             return;
@@ -596,7 +612,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn launch_rewrites_bound_paths() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -611,7 +626,10 @@ mod tests {
 
         let guest_dir = "/__ld_guest_bind_test";
         let command = format!("cat {}/hello.txt > /dev/null", guest_dir);
-        let binds = vec![(host_dir.to_string_lossy().to_string(), guest_dir.to_string())];
+        let binds = vec![(
+            host_dir.to_string_lossy().to_string(),
+            guest_dir.to_string(),
+        )];
         let result = launch_exit_code(&command, binds);
 
         let _ = fs::remove_dir_all(&host_dir);
