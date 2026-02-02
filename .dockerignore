@@ -1,0 +1,13 @@
+.cache
+.git
+.github
+.helix
+.vscode
+.zed
+.gitignore
+Dockerfile
+LICENSE
+localdesktop.apk
+Makefile
+README.md
+target

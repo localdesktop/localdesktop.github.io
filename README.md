@@ -59,6 +59,20 @@ You can find the output APK in:
 open target/x/release/android/gradle/app/build/outputs/apk/debug/
 ```
 
+#### Docker
+
+If you have issues setting up your local development environment as detailed above, you can make use of the included Dockerfile to build an APK on a single command. This will take a long time so it's not recommended if you can make use of any of the other methods
+
+```bash
+make build-docker
+```
+
+You can find the output APK in:
+
+```bash
+open target/x/release/android/gradle/app/build/outputs/apk/debug/
+```
+
 ### How to develop
 
 #### Termux
