@@ -15,6 +15,14 @@ RUN source $HOME/.cargo/env && rustup target add aarch64-linux-android
 # Install musl-dev libraries
 RUN apk add musl-dev libgcc build-base clang llvm lld
 
+# If running on an ARM based host, install glib compatibility layer
+# This installs multi-arch libraries needed to compile in musl
+RUN case "$ARCH" in \
+    aarch64|armeb|armel|armhf|armv7) \
+        apk add gcompat \
+        ;; \
+    esac
+
 RUN mkdir /app
 
 # Install patched xbuild
