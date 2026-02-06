@@ -111,12 +111,7 @@ impl ArchProcess {
             .arg("-c")
             .arg(check_command)
             .output()
-            .map(|res| {
-                log::error!("✅ {}\n{}", check_command, res.stderr.to_string_lossy());
-                log::info!("✅ {}\n{}", check_command, res.stdout.to_string_lossy());
-                res.stderr.is_empty()
-            })
-            .inspect_err(|e| log::error!("❌ Spawn check command failed: {}", e))
+            .map(|res| res.stderr.is_empty())
             .unwrap_or(false)
     }
 

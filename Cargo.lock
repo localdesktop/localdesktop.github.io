@@ -1471,7 +1471,7 @@ checksum = "4ee93343901ab17bd981295f2cf0026d4ad018c7c31ba84549a4ddbb47a45104"
 
 [[package]]
 name = "localdesktop"
-version = "1.4.9"
+version = "1.4.11"
 dependencies = [
  "android-sdkmanager-rs",
  "android_logger",
