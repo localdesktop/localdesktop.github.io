@@ -3,6 +3,7 @@ name = "localdesktop"
 version = "1.5.0"
 edition = "2021"
 build = "build.rs"
+default-run = "build_apk"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
@@ -13,12 +14,16 @@ strip = true      # Automatically strip symbols from the binary.
 opt-level = "z"   # Optimize for size.
 lto = true
 codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
 
 [target.'cfg(target_os = "android")'.dependencies] # Deps used for Local Desktop
 tracing = "0.1.41"
 jni = "0.21.1"
 mockall = "0.13.1"
-nix = { version = "0.30.1", features = ["ptrace"] }
+nix = { version = "0.30.1", features = ["ptrace", "fs"] }
 android_logger = { version = "0.14", default-features = false }
 winit = { version = "0.30.11", features = [
     "android-native-activity",
@@ -81,3 +86,13 @@ zip = { version = "0.6.3", default-features = false, features = ["deflate"] }
 [patch.crates-io]
 smithay = { path = "patches/smithay" }
 winit = { path = "patches/winit" }
+
+[[bin]]
+name = "build_apk"
+path = "src/bin/build_apk.rs"
+
+[[bin]]
+name = "rootless_chroot_loader"
+path = "src/bin/rootless_chroot_loader.rs"
+test = false
+bench = false

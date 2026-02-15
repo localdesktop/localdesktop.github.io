@@ -1,7 +1,6 @@
 use super::ptrace;
 use crate::android::utils::application_context::get_application_context;
 use crate::core::config;
-use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 
 pub type Log = Box<dyn Fn(String)>;
@@ -17,7 +16,6 @@ impl ArchProcess {
     /// Returns true if the process exited with code 0, false otherwise.
     pub fn run(self) -> bool {
         let mut binds: Vec<(String, String)> = Vec::new();
-        binds.push((config::ARCH_FS_ROOT.to_string(), "/".to_string()));
         binds.push(("/dev".to_string(), "/dev".to_string()));
         binds.push(("/proc".to_string(), "/proc".to_string()));
         binds.push(("/sys".to_string(), "/sys".to_string()));
@@ -109,29 +107,24 @@ impl ArchProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        println!("Running command in arch proot: {}", &self.command);
+        println!("Running command in arch rootless-chroot: {}", &self.command);
         println!("As user: {}", &user);
         println!("With binds: {:?}", &binds);
 
-        let mut child = match ptrace::spawn_traced(process, binds) {
-            Ok(child) => child,
-            Err(_) => return false,
-        };
+        let shim = context
+            .native_library_dir
+            .join("librootless_chroot_loader.so")
+            .into_os_string();
 
-        if let Some(log) = &self.log {
-            if let Some(stdout) = child.take_stdout() {
-                let reader = BufReader::new(stdout);
-                for line in reader.lines() {
-                    if let Ok(line) = line {
-                        log(line);
-                    }
-                }
-            }
-        }
+        let log = self.log.map(|l| Box::new(move |s| (l)(s)) as Box<dyn FnMut(String)>);
 
-        match child.wait() {
-            Ok(code) => code == 0,
-            Err(_) => false,
-        }
+        let code = ptrace::rootless_chroot(ptrace::Args {
+            command: process,
+            rootfs: config::ARCH_FS_ROOT.to_string(),
+            binds,
+            shim_exe: Some(shim),
+            log,
+        });
+        code == 0
     }
 }
