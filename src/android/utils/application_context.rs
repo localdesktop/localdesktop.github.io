@@ -126,3 +126,11 @@ pub fn get_application_context() -> ApplicationContext {
         .clone()
         .pb_expect("ApplicationContext is not initialized. Please make sure `ApplicationContext::build(&android_app);` is called in `android_main`.");
 }
+
+#[cfg(test)]
+pub fn set_application_context_for_tests(ctx: ApplicationContext) {
+    let mut guard = APPLICATION_CONTEXT
+        .write()
+        .pb_expect("Failed to write application context (tests)");
+    *guard = Some(ctx);
+}

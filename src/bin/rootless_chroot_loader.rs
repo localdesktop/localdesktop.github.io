@@ -76,6 +76,7 @@ const PROT_GROWSDOWN: usize = 0x01000000;
 
 const O_RDONLY: usize = 0;
 const AT_FDCWD: isize = -100;
+const SHIM_DEBUG_LOGS: bool = false;
 
 #[inline(always)]
 unsafe fn syscall0(nr: usize) -> isize {
@@ -286,7 +287,7 @@ const SA_RESTORER: u64 = 0x0400_0000;
 const SA_ONSTACK: u64 = 0x0800_0000;
 const SA_RESTART: u64 = 0x1000_0000;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn shim_segv_handler(sig: i32, _info: *mut u8, uctx: *mut UContext) {
     write_str("loader_shim: caught SIGSEGV\n");
     write_hex("loader_shim: sig=", sig as Word);
@@ -409,25 +410,31 @@ unsafe fn install_sigsys_emulation_handler() {
             return;
         }
         let uc = &mut *uctx;
-        // Decode siginfo for SIGSYS: call_addr (u64) at +16, syscall (i32) at +24, arch (u32) at +28.
-        let mut sysno: i32 = -1;
-        if !info.is_null() {
-            let base = info as *const u8;
-            // best-effort: trust header exists
-            let _hdr = &*(base as *const SigInfoHeader);
-            sysno = core::ptr::read_unaligned(base.add(24) as *const i32);
-        }
+        // Prefer the syscall number from the trapped register state (x8) rather than relying on
+        // `siginfo_t` layout details (which are easy to get subtly wrong across ABIs).
+        let sysno: i32 = uc.uc_mcontext.regs[8] as i32;
 
         // Emulate (skip) selected syscalls.
         // On aarch64, return value is in x0.
         if sysno == 99 {
             // set_robust_list: pretend success.
             uc.uc_mcontext.regs[0] = 0;
+            uc.uc_mcontext.pc = uc.uc_mcontext.pc.wrapping_add(4);
+            return;
+        }
+        if sysno == 439 {
+            // faccessat2: Android seccomp commonly traps this. Many userspace libraries use it
+            // as a best-effort capability/permission probe. For our rootless environment, treat
+            // it as success rather than aborting on ENOSYS.
+            write_str("loader_shim: emu faccessat2\n");
+            uc.uc_mcontext.regs[0] = 0;
+            uc.uc_mcontext.pc = uc.uc_mcontext.pc.wrapping_add(4);
             return;
         }
 
         // Default: pretend ENOSYS.
         uc.uc_mcontext.regs[0] = (!38u64).wrapping_add(1); // -ENOSYS
+        uc.uc_mcontext.pc = uc.uc_mcontext.pc.wrapping_add(4);
     }
 
     unsafe extern "C" {
@@ -914,10 +921,15 @@ unsafe fn c_strlen(mut p: *const u8) -> usize {
 }
 
 unsafe fn write_str(s: &str) {
-    sys_write(2, s.as_ptr(), s.len());
+    if SHIM_DEBUG_LOGS {
+        sys_write(2, s.as_ptr(), s.len());
+    }
 }
 
 unsafe fn write_hex(label: &str, v: Word) {
+    if !SHIM_DEBUG_LOGS {
+        return;
+    }
     write_str(label);
     write_str("0x");
     let mut buf = [0u8; core::mem::size_of::<Word>() * 2];
@@ -932,6 +944,9 @@ unsafe fn write_hex(label: &str, v: Word) {
 }
 
 unsafe fn write_cstr(label: &str, mut p: *const u8) {
+    if !SHIM_DEBUG_LOGS {
+        return;
+    }
     write_str(label);
     if p.is_null() {
         write_str("(null)\n");
@@ -977,7 +992,7 @@ unsafe fn mmap_stack(len: usize) -> *mut u8 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_start(sp: *mut Word) -> ! {
     write_str("loader_shim: start\n");
     // Preserve the original kernel-provided stack pointer.
@@ -1310,11 +1325,11 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 // When this binary is built with `panic=unwind` (e.g. via `cargo test` profile),
 // `core` may still reference the Rust EH personality. We never unwind (panic handler exits),
 // so a stub is sufficient to satisfy the linker.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rust_eh_personality() {}
 
 // `core` may emit calls to these even when you don't call them directly.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn memset(mut dst: *mut u8, c: i32, mut n: usize) -> *mut u8 {
     let ret = dst;
     let byte = c as u8;
@@ -1326,7 +1341,7 @@ pub unsafe extern "C" fn memset(mut dst: *mut u8, c: i32, mut n: usize) -> *mut 
     ret
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn memcpy(mut dst: *mut u8, mut src: *const u8, mut n: usize) -> *mut u8 {
     let ret = dst;
     while n != 0 {
@@ -1338,7 +1353,7 @@ pub unsafe extern "C" fn memcpy(mut dst: *mut u8, mut src: *const u8, mut n: usi
     ret
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
     let ret = dst;
     if (dst as usize) == (src as usize) || n == 0 {

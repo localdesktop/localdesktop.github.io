@@ -28,6 +28,7 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
+    time::Duration,
 };
 use tar::Archive;
 use winit::platform::android::activity::AndroidApp;
@@ -240,8 +241,18 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
 
     let mpsc_sender = mpsc_sender.clone();
     return Some(thread::spawn(move || {
-        // Install dependencies until `check` succeed
+        // Install dependencies until `check` succeeds, but don't loop forever: if pacman/network
+        // is broken on first boot, we want a clear error instead of an apparent hang.
+        let max_attempts: u32 = 5;
+        let mut attempt: u32 = 0;
         loop {
+            attempt += 1;
+
+            let _ = mpsc_sender.send(SetupMessage::Progress(format!(
+                "Installing dependencies (attempt {}/{})...",
+                attempt, max_attempts
+            )));
+
             ArchProcess {
                 command: "rm -f /var/lib/pacman/db.lck".to_string(),
                 user: None,
@@ -249,7 +260,7 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
             }
             .run();
             let log_sender = mpsc_sender.clone();
-            ArchProcess {
+            let code = ArchProcess {
                 command: install.clone(),
                 user: None,
                 log: Some(Box::new(move |it| {
@@ -258,10 +269,24 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
                         .pb_expect("Failed to send log message");
                 })),
             }
-            .run();
-            if installed() {
+            .run_code();
+
+            if code == 0 && installed() {
                 break;
             }
+
+            if attempt >= max_attempts {
+                let _ = mpsc_sender.send(SetupMessage::Error(format!(
+                    "Dependency installation failed after {} attempts (last exit code {}).",
+                    attempt, code
+                )));
+                panic!(
+                    "install_dependencies: failed after {} attempts (last exit code {})",
+                    attempt, code
+                );
+            }
+
+            thread::sleep(Duration::from_secs(2));
         }
     }));
 }
