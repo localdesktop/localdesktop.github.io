@@ -3,6 +3,7 @@ use nix::sys::ptrace::AddressType;
 use nix::sys::{ptrace, wait};
 use nix::unistd::Pid;
 use std::{
+    collections::HashMap,
     ffi::{CString, OsString},
     io::Read,
     os::unix::ffi::OsStrExt,
@@ -76,14 +77,21 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
     // Wait for the initial exec stop and enable syscall-stops.
     wait::waitpid(pid, None).unwrap();
     // Debug-only startup maps dump.
-    ptrace::setoptions(pid, ptrace::Options::PTRACE_O_TRACESYSGOOD).unwrap();
-    ptrace::syscall(pid, None).unwrap();
+    let trace_opts = ptrace::Options::PTRACE_O_TRACESYSGOOD
+        | ptrace::Options::PTRACE_O_TRACECLONE
+        | ptrace::Options::PTRACE_O_TRACEFORK
+        | ptrace::Options::PTRACE_O_TRACEVFORK
+        | ptrace::Options::PTRACE_O_TRACEEXEC
+        | ptrace::Options::PTRACE_O_EXITKILL;
+    let _ = ptrace::setoptions(pid, trace_opts);
+    let _ = ptrace::syscall(pid, None);
 
     // Prepare to read stdout/stderr non-blockingly
     let mut buf = [0u8; 4096];
     let mut carry = String::new();
     let mut carry_err = String::new();
-    let mut in_syscall = false;
+    let mut in_syscall_fallback: HashMap<Pid, bool> = HashMap::new();
+    let mut pending_sp_restore: HashMap<Pid, PendingSysenterRestore> = HashMap::new();
     let do_rewrite = true;
     let mut step_remaining: Option<u32> = None;
     // Mitigation: glibc ld-linux writes TPIDR_EL0 early. On Android, linker64 assumes TPIDR_EL0
@@ -94,16 +102,17 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
     let mut patched_guest_tpidr_msr = true;
     let mut exit_code: i32 = 1;
     loop {
-        match wait::waitpid(pid, None) {
-            Ok(wait::WaitStatus::PtraceSyscall(_)) => {
+        match wait::waitpid(Pid::from_raw(-1), Some(wait::WaitPidFlag::__WALL)) {
+            Ok(wait::WaitStatus::PtraceSyscall(tracee)) => {
                 drain_stdout(&mut stdout, &mut buf, &mut carry, &mut args.log);
                 drain_stdout(&mut stderr, &mut buf, &mut carry_err, &mut args.log);
 
-                // PtraceSyscall stops alternate between syscall-entry and syscall-exit.
-                // `in_syscall == false` => entry stop; `in_syscall == true` => exit stop.
-                if let Ok(regs) = read_regs(pid) {
+                let is_entry = ptrace_syscall_is_entry(tracee, &mut in_syscall_fallback);
+                if let Ok(regs) = read_regs(tracee) {
                     if !patched_guest_tpidr_msr {
-                        if let Ok(maps_txt) = fs::read_to_string(format!("/proc/{}/maps", pid)) {
+                        if let Ok(maps_txt) =
+                            fs::read_to_string(format!("/proc/{}/maps", tracee))
+                        {
                             if let Some(line) = maps_txt.lines().find(|l| {
                                 l.contains("archfs/usr/lib/ld-linux-aarch64.so.1")
                                     && l.contains("r-xp")
@@ -113,7 +122,7 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                                                                            // Offsets observed in this rootfs build via `llvm-objdump -d`.
                                     for off in [0x16ed0u64, 0x19da0u64] {
                                         let addr = start + off;
-                                        let _ = write_bytes(pid, addr as usize, &nop);
+                                        let _ = write_bytes(tracee, addr as usize, &nop);
                                     }
                                     eprintln!(
                                         "patched guest ld-linux: disabled TPIDR_EL0 writes (base=0x{start:x})"
@@ -124,15 +133,42 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                         }
                     }
 
-                    let is_guest = should_rewrite_from_pc(pid, regs.pc, &rootfs_abs_s);
+                    let is_guest = should_rewrite_from_pc(tracee, regs.pc, &rootfs_abs_s);
 
-                    if do_rewrite && !in_syscall && is_guest {
-                        if let Err(e) = rewrite_syscall_path_with_regs(pid, regs, &mappings) {
-                            eprintln!("rewrite error: {e}");
+                    if do_rewrite && is_entry && is_guest {
+                        match rewrite_syscall_path_with_regs(tracee, regs, &mappings) {
+                            Ok(Some(r)) => {
+                                pending_sp_restore.insert(tracee, r);
+                            }
+                            Ok(None) => {}
+                            Err(e) => eprintln!("rewrite error: {e}"),
+                        }
+                    }
+                    if !is_entry {
+                        if let Some(r) = pending_sp_restore.remove(&tracee) {
+                            if let Ok(mut regs_exit) = read_regs(tracee) {
+                                if let Some((mapped_path, mode, flags)) = r.access_emu.as_ref() {
+                                    let ret = regs_exit.regs[0] as i64;
+                                    if ret == -(nix::libc::ENETDOWN as i64)
+                                        || (r.syscall == nix::libc::SYS_faccessat2
+                                            && ret == -(nix::libc::EINVAL as i64))
+                                    {
+                                        let fixed = emulate_faccessat_result(
+                                            tracee,
+                                            mapped_path,
+                                            *mode,
+                                            *flags,
+                                        );
+                                        regs_exit.regs[0] = fixed as u64;
+                                    }
+                                }
+                                regs_exit.sp = r.original_sp;
+                                let _ = write_regs(tracee, &regs_exit);
+                            }
                         }
                     }
 
-                    if in_syscall
+                    if !is_entry
                         && is_guest
                         && (regs.regs[8] as i64) == nix::libc::SYS_set_robust_list
                     {
@@ -140,21 +176,19 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                     }
                 }
 
-                in_syscall = !in_syscall;
-
                 if let Some(rem) = step_remaining {
                     if rem <= 1 {
                         step_remaining = None;
-                        ptrace::syscall(pid, None).unwrap();
+                        let _ = ptrace::syscall(tracee, None);
                     } else {
                         step_remaining = Some(rem - 1);
-                        ptrace::step(pid, None).unwrap();
+                        let _ = ptrace::step(tracee, None);
                     }
                 } else {
-                    ptrace::syscall(pid, None).unwrap();
+                    let _ = ptrace::syscall(tracee, None);
                 }
             }
-            Ok(wait::WaitStatus::Stopped(_, sig)) => {
+            Ok(wait::WaitStatus::Stopped(tracee, sig)) => {
                 drain_stdout(&mut stdout, &mut buf, &mut carry, &mut args.log);
                 drain_stdout(&mut stderr, &mut buf, &mut carry_err, &mut args.log);
 
@@ -162,22 +196,22 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                     if let Some(rem) = step_remaining {
                         if rem <= 1 {
                             step_remaining = None;
-                            ptrace::syscall(pid, None).unwrap();
+                            let _ = ptrace::syscall(tracee, None);
                         } else {
                             step_remaining = Some(rem - 1);
-                            ptrace::step(pid, None).unwrap();
+                            let _ = ptrace::step(tracee, None);
                         }
                     }
                     continue;
                 }
 
                 if sig == nix::sys::signal::Signal::SIGSEGV {
-                    if let Ok(regs) = read_regs(pid) {
-                        let maps_txt = fs::read_to_string(format!("/proc/{}/maps", pid))
+                    if let Ok(regs) = read_regs(tracee) {
+                        let maps_txt = fs::read_to_string(format!("/proc/{}/maps", tracee))
                             .unwrap_or_else(|_| String::new());
                         let mut fault_addr_kernel: Option<u64> = None;
                         if let Some((signo, errno, code, addr)) =
-                            segv_siginfo_decoded(pid, &maps_txt)
+                            segv_siginfo_decoded(tracee, &maps_txt)
                         {
                             eprintln!(
                                 "siginfo: signo={} errno={} code={} ({}) si_addr=0x{:x}",
@@ -189,7 +223,7 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                             );
                             fault_addr_kernel = Some(addr);
                         }
-                        let si_addr = fault_addr_kernel.or_else(|| segv_fault_addr(pid));
+                        let si_addr = fault_addr_kernel.or_else(|| segv_fault_addr(tracee));
                         eprintln!(
                             "tracee stopped on SIGSEGV pc=0x{:x} sp=0x{:x} si_addr={}",
                             regs.pc,
@@ -204,11 +238,11 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                         // Android/linker signal chaining which can clobber regs/PC.
                         if let Some(addr) = si_addr {
                             let around_sp = read_bytes_process_vm_best_effort(
-                                pid,
+                                tracee,
                                 (regs.sp as usize).saturating_sub(128 * 1024),
                                 256 * 1024,
                             );
-                            let siginfo_raw = read_siginfo_raw(pid);
+                            let siginfo_raw = read_siginfo_raw(tracee);
                             if let Some(sf) =
                                 find_aarch64_sigframe_in_stack_blob(&around_sp, addr, &siginfo_raw)
                             {
@@ -574,14 +608,19 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                     }
                     // Don't try to "let Android handle it" while we're debugging; it tends to
                     // jump into linker64/sigchain and obscures the real fault site.
-                    let _ = ptrace::kill(pid);
-                    let _ = wait::waitpid(pid, None);
+                    let _ = ptrace::kill(tracee);
+                    let _ = wait::waitpid(tracee, None);
                     exit_code = 128 + (nix::sys::signal::Signal::SIGSEGV as i32);
                     break;
                 }
-                ptrace::syscall(pid, Some(sig)).unwrap();
+                let _ = ptrace::syscall(tracee, Some(sig));
             }
-            Ok(wait::WaitStatus::Exited(_, code)) => {
+            Ok(wait::WaitStatus::Exited(tracee, code)) => {
+                in_syscall_fallback.remove(&tracee);
+                pending_sp_restore.remove(&tracee);
+                if tracee != pid {
+                    continue;
+                }
                 drain_stdout(&mut stdout, &mut buf, &mut carry, &mut args.log);
                 drain_stdout(&mut stderr, &mut buf, &mut carry_err, &mut args.log);
                 // Flush any trailing partial line.
@@ -606,14 +645,31 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                 exit_code = code;
                 break;
             }
-            Ok(wait::WaitStatus::Signaled(_, sig, _)) => {
+            Ok(wait::WaitStatus::Signaled(tracee, sig, _)) => {
+                in_syscall_fallback.remove(&tracee);
+                pending_sp_restore.remove(&tracee);
+                if tracee != pid {
+                    continue;
+                }
                 drain_stdout(&mut stdout, &mut buf, &mut carry, &mut args.log);
                 drain_stdout(&mut stderr, &mut buf, &mut carry_err, &mut args.log);
                 exit_code = 128 + (sig as i32);
                 break;
             }
+            Ok(wait::WaitStatus::PtraceEvent(tracee, _, _evt)) => {
+                if let Ok(new_raw) = ptrace::getevent(tracee) {
+                    let new_pid = Pid::from_raw(new_raw as i32);
+                    let _ = ptrace::setoptions(new_pid, trace_opts);
+                    let _ = ptrace::syscall(new_pid, None);
+                }
+                let _ = ptrace::syscall(tracee, None);
+            }
+            Ok(wait::WaitStatus::Continued(tracee)) => {
+                let _ = ptrace::syscall(tracee, None);
+            }
+            Ok(wait::WaitStatus::StillAlive) => {}
             Ok(_) => {
-                ptrace::syscall(pid, None).unwrap();
+                let _ = ptrace::syscall(pid, None);
             }
             Err(e) => {
                 println!("{e:?}");
@@ -683,74 +739,162 @@ fn drain_stdout<'a>(
     }
 }
 
-fn rewrite_syscall_path(pid: Pid, mappings: &[(String, String)]) -> nix::Result<()> {
-    let regs = read_regs(pid)?;
-    rewrite_syscall_path_with_regs(pid, regs, mappings)
+struct PendingSysenterRestore {
+    original_sp: u64,
+    syscall: i64,
+    access_emu: Option<(String, i32, i32)>,
 }
 
 fn rewrite_syscall_path_with_regs(
     pid: Pid,
     mut regs: UserPtRegs,
     mappings: &[(String, String)],
-) -> nix::Result<()> {
+) -> nix::Result<Option<PendingSysenterRestore>> {
     let syscall = regs.regs[8]; // x8
     let mut args = [0u64; 6];
     args.copy_from_slice(&regs.regs[0..6]);
 
     let path_addr = match syscall as i64 {
         nix::libc::SYS_openat => Some(args[1] as usize),
+        nix::libc::SYS_openat2 => Some(args[1] as usize),
+        n if syscall_is_fstatat(n) => Some(args[1] as usize),
+        nix::libc::SYS_faccessat => Some(args[1] as usize),
+        nix::libc::SYS_faccessat2 => Some(args[1] as usize),
+        nix::libc::SYS_readlinkat => Some(args[1] as usize),
+        nix::libc::SYS_mkdirat => Some(args[1] as usize),
+        nix::libc::SYS_unlinkat => Some(args[1] as usize),
         nix::libc::SYS_execve => Some(args[0] as usize),
         nix::libc::SYS_execveat => Some(args[1] as usize),
         nix::libc::SYS_statx => Some(args[1] as usize),
+        nix::libc::SYS_chdir => Some(args[0] as usize),
         _ => None,
     };
 
     let Some(addr_raw) = path_addr else {
-        return Ok(());
+        return Ok(None);
     };
 
-    let (addr, path_bytes) = match read_cstring_candidates(pid, addr_raw) {
+    let (_addr, path_bytes) = match read_cstring_candidates(pid, addr_raw) {
         Ok(v) => v,
         Err(e) => {
             let _ = e;
-            return Ok(());
+            return Ok(None);
         }
     };
     let path = String::from_utf8_lossy(&path_bytes);
     let Some(mapped) = apply_path_mappings(&path, mappings) else {
-        return Ok(());
+        return Ok(None);
     };
+    let mapped_is_relative = !mapped.starts_with('/');
+    let path_was_absolute = path.starts_with('/');
 
     if requires_existing_path(syscall, &args) && !mapped_path_exists(pid, &mapped) {
-        return Ok(());
+        return Ok(None);
     }
 
     let mut mapped_bytes = mapped.as_bytes().to_vec();
     mapped_bytes.push(0);
-    if mapped_bytes.len() > path_bytes.len() + 1 {
-        return Ok(());
+    let original_sp = regs.sp;
+    let new_ptr = alloc_tracee_stack_data(pid, &mut regs, &mapped_bytes)?;
+
+    // `openat*` ignores dirfd for absolute paths. Once rewritten to a relative
+    // path, preserve intended semantics by forcing dirfd=AT_FDCWD.
+    if path_was_absolute && mapped_is_relative {
+        let sys = syscall as i64;
+        if (matches!(
+            sys,
+            nix::libc::SYS_openat
+                | nix::libc::SYS_openat2
+                | nix::libc::SYS_execveat
+                | nix::libc::SYS_faccessat
+                | nix::libc::SYS_faccessat2
+                | nix::libc::SYS_readlinkat
+                | nix::libc::SYS_mkdirat
+                | nix::libc::SYS_unlinkat
+                | nix::libc::SYS_statx
+        ) || syscall_is_fstatat(sys))
+            && (regs.regs[0] as i64) != nix::libc::AT_FDCWD as i64
+        {
+            regs.regs[0] = nix::libc::AT_FDCWD as i64 as u64;
+        }
     }
 
-    let mut padded = vec![0u8; path_bytes.len() + 1];
-    padded[..mapped_bytes.len()].copy_from_slice(&mapped_bytes);
-    write_bytes(pid, addr, &padded)?;
+    match syscall as i64 {
+        nix::libc::SYS_execve | nix::libc::SYS_chdir => regs.regs[0] = new_ptr as u64,
+        n if syscall_is_fstatat(n) => regs.regs[1] = new_ptr as u64,
+        nix::libc::SYS_openat
+        | nix::libc::SYS_openat2
+        | nix::libc::SYS_faccessat
+        | nix::libc::SYS_faccessat2
+        | nix::libc::SYS_readlinkat
+        | nix::libc::SYS_mkdirat
+        | nix::libc::SYS_unlinkat
+        | nix::libc::SYS_execveat
+        | nix::libc::SYS_statx => regs.regs[1] = new_ptr as u64,
+        _ => return Ok(None),
+    }
+    write_regs(pid, &regs)?;
 
-    // If we turned an absolute path into a cwd-relative path for *at() syscalls, force the dirfd
-    // to AT_FDCWD to preserve the original "dirfd ignored for absolute paths" semantics.
-    //
-    // This avoids surprising behavior if the tracee uses openat/statx/execveat with an absolute
-    // path and a dirfd other than AT_FDCWD.
-    let made_relative = path.starts_with('/') && !mapped.starts_with('/');
-    if made_relative {
-        match syscall as i64 {
-            nix::libc::SYS_openat | nix::libc::SYS_execveat | nix::libc::SYS_statx => {
-                regs.regs[0] = (-100i64) as u64; // AT_FDCWD
-                write_regs(pid, &regs)?;
-            }
+    let sys = syscall as i64;
+    let access_emu = if matches!(sys, nix::libc::SYS_faccessat | nix::libc::SYS_faccessat2) {
+        Some((mapped.clone(), args[2] as i32, args[3] as i32))
+    } else {
+        None
+    };
+    if matches!(sys, nix::libc::SYS_execve | nix::libc::SYS_execveat) {
+        return Ok(Some(PendingSysenterRestore {
+            original_sp,
+            syscall: sys,
+            access_emu,
+        }));
+    }
+    Ok(Some(PendingSysenterRestore {
+        original_sp,
+        syscall: sys,
+        access_emu,
+    }))
+}
+
+fn alloc_tracee_stack_data(pid: Pid, regs: &mut UserPtRegs, data: &[u8]) -> nix::Result<usize> {
+    let aligned = (data.len() + 15) & !15;
+    if (aligned as u64) > regs.sp {
+        return Err(nix::Error::from(nix::errno::Errno::EFAULT));
+    }
+    let new_sp = regs.sp - aligned as u64;
+    write_bytes(pid, new_sp as usize, data)?;
+    if aligned > data.len() {
+        let zeros = vec![0u8; aligned - data.len()];
+        write_bytes(pid, new_sp as usize + data.len(), &zeros)?;
+    }
+    regs.sp = new_sp;
+    Ok(new_sp as usize)
+}
+
+fn ptrace_syscall_is_entry(pid: Pid, fallback: &mut HashMap<Pid, bool>) -> bool {
+    const PTRACE_GET_SYSCALL_INFO: nix::libc::c_int = 0x420e;
+    const PTRACE_SYSCALL_INFO_ENTRY: u8 = 1;
+    const PTRACE_SYSCALL_INFO_EXIT: u8 = 2;
+    const PTRACE_SYSCALL_INFO_SECCOMP: u8 = 3;
+    let mut buf = [0u8; 64];
+    let ret = unsafe {
+        nix::libc::ptrace(
+            PTRACE_GET_SYSCALL_INFO,
+            pid.as_raw(),
+            buf.len(),
+            buf.as_mut_ptr() as *mut nix::libc::c_void,
+        )
+    };
+    if ret > 0 {
+        match buf[0] {
+            PTRACE_SYSCALL_INFO_ENTRY | PTRACE_SYSCALL_INFO_SECCOMP => return true,
+            PTRACE_SYSCALL_INFO_EXIT => return false,
             _ => {}
         }
     }
-    Ok(())
+    let was_entry = fallback.get(&pid).copied().unwrap_or(false);
+    let is_entry = !was_entry;
+    fallback.insert(pid, is_entry);
+    is_entry
 }
 
 fn should_rewrite_from_pc(pid: Pid, pc: u64, rootfs_abs: &str) -> bool {
@@ -1490,14 +1634,41 @@ fn normalize_guest_prefix(path: &str) -> String {
 }
 
 fn requires_existing_path(syscall: u64, args: &[u64; 6]) -> bool {
-    match syscall as i64 {
-        nix::libc::SYS_execve | nix::libc::SYS_execveat | nix::libc::SYS_statx => true,
+    let sys = syscall as i64;
+    if matches!(sys, nix::libc::SYS_execve | nix::libc::SYS_execveat | nix::libc::SYS_statx) {
+        return true;
+    }
+    if syscall_is_fstatat(sys)
+        || matches!(
+            sys,
+            nix::libc::SYS_faccessat
+                | nix::libc::SYS_faccessat2
+                | nix::libc::SYS_readlinkat
+                | nix::libc::SYS_chdir
+        )
+    {
+        return true;
+    }
+    match sys {
         nix::libc::SYS_openat => {
             let flags = args[2] as i32;
             (flags & nix::fcntl::OFlag::O_CREAT.bits()) == 0
         }
+        nix::libc::SYS_openat2 => true,
         _ => false,
     }
+}
+
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+fn syscall_is_fstatat(syscall: i64) -> bool {
+    // `libc` for Android/aarch64 does not currently expose `SYS_newfstatat`,
+    // but the kernel ABI syscall number is stable.
+    syscall == 79
+}
+
+#[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
+fn syscall_is_fstatat(syscall: i64) -> bool {
+    syscall == nix::libc::SYS_newfstatat
 }
 
 fn mapped_path_exists(pid: Pid, mapped: &str) -> bool {
@@ -1508,6 +1679,33 @@ fn mapped_path_exists(pid: Pid, mapped: &str) -> bool {
         cwd.join(mapped).to_string_lossy().to_string()
     };
     fs::metadata(path).is_ok()
+}
+
+fn emulate_faccessat_result(pid: Pid, mapped: &str, mode: i32, flags: i32) -> i64 {
+    const AT_EACCESS_FALLBACK: i32 = 0x200;
+    let host_path = if mapped.starts_with('/') {
+        mapped.to_string()
+    } else {
+        let cwd = fs::read_link(format!("/proc/{}/cwd", pid)).unwrap_or_default();
+        cwd.join(mapped).to_string_lossy().to_string()
+    };
+    let Ok(c_path) = CString::new(host_path) else {
+        return -(nix::libc::EINVAL as i64);
+    };
+    let try_faccess = |f: i32| unsafe { nix::libc::faccessat(nix::libc::AT_FDCWD, c_path.as_ptr(), mode, f) };
+    let rc = try_faccess(flags);
+    if rc == 0 {
+        return 0;
+    }
+    let mut err = nix::errno::Errno::last_raw() as i64;
+    if err == nix::libc::EINVAL as i64 && (flags & AT_EACCESS_FALLBACK) != 0 {
+        let rc2 = try_faccess(flags & !AT_EACCESS_FALLBACK);
+        if rc2 == 0 {
+            return 0;
+        }
+        err = nix::errno::Errno::last_raw() as i64;
+    }
+    -err
 }
 
 fn path_matches_prefix(path: &str, prefix: &str) -> bool {
