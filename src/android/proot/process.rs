@@ -344,4 +344,33 @@ fn run_guest(program: &str, args: &[&str]) -> i32 {
         let code = run_guest("/usr/bin/pacman", &["-Syu", "--help"]);
         assert_eq!(code, 0, "pacman -Syu --help failed (exit code {code})");
     }
+
+    #[test]
+    fn command_install_smoke_runs_package_targets() {
+        let cfg = LocalConfig::default();
+        assert!(
+            cfg.command.install.contains("pacman"),
+            "default install command should reference pacman"
+        );
+
+        // Mirror command_check style: each query can succeed or fail depending on local state,
+        // but should execute cleanly under rootless_chroot.
+        let packages = [
+            "lxqt",
+            "xorg-xwayland",
+            "lxqt-wayland-session",
+            "labwc",
+            "breeze-icons",
+            "onboard",
+        ];
+        for pkg in packages {
+            let code = run_guest("/usr/bin/pacman", &["-Si", pkg]);
+            assert!(
+                code == 0 || code == 1,
+                "unexpected exit code from pacman -Si {}: {}",
+                pkg,
+                code
+            );
+        }
+    }
 }

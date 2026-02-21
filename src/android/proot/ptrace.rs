@@ -34,10 +34,10 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
     // - On Android/Termux we typically don't have privileges for real `chroot` or mounts.
     // - So we keep the host filesystem as-is and "lie" to the tracee by rewriting path
     //   arguments at the syscall boundary.
-    let mappings = build_path_mappings(&args.rootfs, &args.binds);
     let rootfs_abs =
         fs::canonicalize(&args.rootfs).unwrap_or_else(|_| Path::new(&args.rootfs).to_path_buf());
     let rootfs_abs_s = rootfs_abs.to_string_lossy().to_string();
+    let mappings = build_path_mappings(&rootfs_abs_s, &args.binds);
 
     // Build the command:
     // - Use external loader-shim for dynamically-linked guest ELFs.
@@ -150,7 +150,8 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                                 if let Some((mapped_path, mode, flags)) = r.access_emu.as_ref() {
                                     let ret = regs_exit.regs[0] as i64;
                                     if ret == -(nix::libc::ENETDOWN as i64)
-                                        || (r.syscall == nix::libc::SYS_faccessat2
+                                        || ((r.syscall == nix::libc::SYS_faccessat
+                                            || r.syscall == nix::libc::SYS_faccessat2)
                                             && ret == -(nix::libc::EINVAL as i64))
                                     {
                                         let fixed = emulate_faccessat_result(
@@ -769,10 +770,6 @@ fn rewrite_syscall_path_with_regs(
     let mapped_is_relative = !mapped.starts_with('/');
     let path_was_absolute = path.starts_with('/');
 
-    if requires_existing_path(syscall, &args) && !mapped_path_exists(pid, &mapped) {
-        return Ok(None);
-    }
-
     let mut mapped_bytes = mapped.as_bytes().to_vec();
     mapped_bytes.push(0);
     let original_sp = regs.sp;
@@ -985,9 +982,8 @@ fn write_regs(pid: Pid, regs: &UserPtRegs) -> nix::Result<()> {
 }
 
 fn build_path_mappings(rootfs: &str, binds: &[(String, String)]) -> Vec<(String, String)> {
-    let _ = rootfs;
     let mut mappings = Vec::with_capacity(binds.len() + 1);
-    mappings.push(("/".to_string(), ".".to_string()));
+    mappings.push(("/".to_string(), normalize_host_root(rootfs)));
     for (host_path, guest_path) in binds {
         mappings.push((
             normalize_guest_prefix(guest_path),
@@ -1243,32 +1239,6 @@ fn normalize_guest_prefix(path: &str) -> String {
     }
 }
 
-fn requires_existing_path(syscall: u64, args: &[u64; 6]) -> bool {
-    let sys = syscall as i64;
-    if matches!(sys, nix::libc::SYS_execve | nix::libc::SYS_execveat | nix::libc::SYS_statx) {
-        return true;
-    }
-    if syscall_is_fstatat(sys)
-        || matches!(
-            sys,
-            nix::libc::SYS_faccessat
-                | nix::libc::SYS_faccessat2
-                | nix::libc::SYS_readlinkat
-                | nix::libc::SYS_chdir
-        )
-    {
-        return true;
-    }
-    match sys {
-        nix::libc::SYS_openat => {
-            let flags = args[2] as i32;
-            (flags & nix::fcntl::OFlag::O_CREAT.bits()) == 0
-        }
-        nix::libc::SYS_openat2 => true,
-        _ => false,
-    }
-}
-
 #[cfg(all(target_os = "android", target_arch = "aarch64"))]
 fn syscall_is_fstatat(syscall: i64) -> bool {
     // `libc` for Android/aarch64 does not currently expose `SYS_newfstatat`,
@@ -1279,16 +1249,6 @@ fn syscall_is_fstatat(syscall: i64) -> bool {
 #[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
 fn syscall_is_fstatat(syscall: i64) -> bool {
     syscall == nix::libc::SYS_newfstatat
-}
-
-fn mapped_path_exists(pid: Pid, mapped: &str) -> bool {
-    let path = if mapped.starts_with('/') {
-        mapped.to_string()
-    } else {
-        let cwd = fs::read_link(format!("/proc/{}/cwd", pid)).unwrap_or_default();
-        cwd.join(mapped).to_string_lossy().to_string()
-    };
-    fs::metadata(path).is_ok()
 }
 
 fn emulate_faccessat_result(pid: Pid, mapped: &str, mode: i32, flags: i32) -> i64 {
@@ -1308,12 +1268,19 @@ fn emulate_faccessat_result(pid: Pid, mapped: &str, mode: i32, flags: i32) -> i6
         return 0;
     }
     let mut err = nix::errno::Errno::last_raw() as i64;
-    if err == nix::libc::EINVAL as i64 && (flags & AT_EACCESS_FALLBACK) != 0 {
+    if err == nix::libc::EINVAL as i64 {
         let rc2 = try_faccess(flags & !AT_EACCESS_FALLBACK);
         if rc2 == 0 {
             return 0;
         }
         err = nix::errno::Errno::last_raw() as i64;
+        if err == nix::libc::EINVAL as i64 && (flags & !AT_EACCESS_FALLBACK) != 0 {
+            let rc3 = try_faccess(0);
+            if rc3 == 0 {
+                return 0;
+            }
+            err = nix::errno::Errno::last_raw() as i64;
+        }
     }
     -err
 }
