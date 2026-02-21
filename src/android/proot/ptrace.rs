@@ -16,9 +16,8 @@ pub struct Args<'a> {
     pub command: Command,
     pub rootfs: String,
     pub binds: Vec<(String, String)>, // host_path:guest_path
-    // Path to the external loader-shim binary. If set, dynamically-linked
-    // guest ELFs will be executed via this shim (as the tracee).
-    pub shim_exe: Option<OsString>,
+    // Path to the external loader-shim binary.
+    pub shim_exe: OsString,
     pub log: Option<Box<dyn FnMut(String) + 'a>>,
 }
 
@@ -40,21 +39,11 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
     let rootfs_abs_s = rootfs_abs.to_string_lossy().to_string();
 
     // Build the command:
-    // - If the guest program is dynamically linked and we have a loader-shim, execute the shim.
-    // - Otherwise, exec the guest program directly by remapping it into rootfs (relative path).
-    //
-    // Why a loader-shim at all:
-    // - Android's `linker64` cannot load glibc-linked binaries correctly.
-    // - The shim starts as an Android-friendly PIE, then maps and jumps into the guest interpreter
-    //   (`ld-linux-...`) itself, without keeping host `linker64` runtime around.
-    let shim_exe = args
-        .shim_exe
-        .clone()
-        .or_else(|| std::env::var_os("PTRACE_PLAYGROUND_SHIM"));
-
+    // - Use external loader-shim for dynamically-linked guest ELFs.
+    // - Otherwise execute directly (legacy behavior used by tests like `can_ls_root`).
+    let shim_exe = args.shim_exe.clone();
     let mut command = args.command;
-    if let Some(prepared) =
-        maybe_wrap_with_external_loader_shim(&command, &args.rootfs, shim_exe.as_ref())
+    if let Some(prepared) = maybe_wrap_with_external_loader_shim(&command, &args.rootfs, &shim_exe)
     {
         command = prepared;
     } else {
@@ -86,15 +75,7 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
 
     // Wait for the initial exec stop and enable syscall-stops.
     wait::waitpid(pid, None).unwrap();
-    // Debug: show which loaders are mapped at exec-start.
-    if let Ok(maps) = fs::read_to_string(format!("/proc/{}/maps", pid)) {
-        for line in maps
-            .lines()
-            .filter(|l| l.contains("ld-linux") || l.contains("linker64"))
-        {
-            eprintln!("exec-start maps: {line}");
-        }
-    }
+    // Debug-only startup maps dump.
     ptrace::setoptions(pid, ptrace::Options::PTRACE_O_TRACESYSGOOD).unwrap();
     ptrace::syscall(pid, None).unwrap();
 
@@ -104,10 +85,6 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
     let mut carry_err = String::new();
     let mut in_syscall = false;
     let do_rewrite = true;
-    let mut guest_syscalls_logged: u64 = 0;
-    // Debugging aid: after a specific syscall (e.g. glibc ld.so setup), switch into a short
-    // single-step window to capture the real faulting PC/registers before Android's sigchain
-    // machinery runs.
     let mut step_remaining: Option<u32> = None;
     // Mitigation: glibc ld-linux writes TPIDR_EL0 early. On Android, linker64 assumes TPIDR_EL0
     // points to bionic TLS and can crash in its signal handler if the guest changes it.
@@ -150,20 +127,11 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                     let is_guest = should_rewrite_from_pc(pid, regs.pc, &rootfs_abs_s);
 
                     if do_rewrite && !in_syscall && is_guest {
-                        if guest_syscalls_logged < 50 {
-                            eprintln!(
-                                "guest-syscall[{guest_syscalls_logged}] pc=0x{:x} nr={}",
-                                regs.pc, regs.regs[8]
-                            );
-                            guest_syscalls_logged += 1;
-                        }
                         if let Err(e) = rewrite_syscall_path_with_regs(pid, regs, &mappings) {
                             eprintln!("rewrite error: {e}");
                         }
                     }
 
-                    // Debug: after set_robust_list returns in the guest loader, single-step a
-                    // little to catch the real faulting instruction/register state.
                     if in_syscall
                         && is_guest
                         && (regs.regs[8] as i64) == nix::libc::SYS_set_robust_list
@@ -174,8 +142,14 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
 
                 in_syscall = !in_syscall;
 
-                if let Some(_) = step_remaining {
-                    ptrace::step(pid, None).unwrap();
+                if let Some(rem) = step_remaining {
+                    if rem <= 1 {
+                        step_remaining = None;
+                        ptrace::syscall(pid, None).unwrap();
+                    } else {
+                        step_remaining = Some(rem - 1);
+                        ptrace::step(pid, None).unwrap();
+                    }
                 } else {
                     ptrace::syscall(pid, None).unwrap();
                 }
@@ -184,31 +158,8 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                 drain_stdout(&mut stdout, &mut buf, &mut carry, &mut args.log);
                 drain_stdout(&mut stderr, &mut buf, &mut carry_err, &mut args.log);
 
-                if sig == nix::sys::signal::Signal::SIGSYS {
-                    if let Ok(regs) = read_regs(pid) {
-                        eprintln!(
-                            "tracee stopped on SIGSYS pc=0x{:x} nr={} x0=0x{:x} x1=0x{:x} x2=0x{:x} x3=0x{:x}",
-                            regs.pc, regs.regs[8], regs.regs[0], regs.regs[1], regs.regs[2], regs.regs[3]
-                        );
-                    }
-                    // Decode siginfo for SIGSYS (seccomp trap) if available.
-                    if let Some((signo, errno, code, call_addr, syscall, arch)) =
-                        sigsys_siginfo(pid)
-                    {
-                        eprintln!(
-                            "sigsys: signo={signo} errno={errno} code={code} call_addr=0x{call_addr:x} syscall={syscall} arch=0x{arch:x}"
-                        );
-                    }
-                }
-
-                if let Some(rem) = step_remaining {
-                    if sig == nix::sys::signal::Signal::SIGTRAP {
-                        if let Ok(regs) = read_regs(pid) {
-                            eprintln!(
-                                "singlestep pc=0x{:x} sp=0x{:x} x0=0x{:x} x1=0x{:x} x2=0x{:x}",
-                                regs.pc, regs.sp, regs.regs[0], regs.regs[1], regs.regs[2]
-                            );
-                        }
+                if step_remaining.is_some() && sig == nix::sys::signal::Signal::SIGTRAP {
+                    if let Some(rem) = step_remaining {
                         if rem <= 1 {
                             step_remaining = None;
                             ptrace::syscall(pid, None).unwrap();
@@ -216,10 +167,8 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                             step_remaining = Some(rem - 1);
                             ptrace::step(pid, None).unwrap();
                         }
-                        continue;
                     }
-                    // If we got a different signal while stepping (notably SIGSEGV), fall
-                    // through to the signal handler below so we can dump diagnostics.
+                    continue;
                 }
 
                 if sig == nix::sys::signal::Signal::SIGSEGV {
@@ -654,14 +603,12 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                     }
                     carry_err.clear();
                 }
-                eprintln!("tracee exited with code={code}");
                 exit_code = code;
                 break;
             }
             Ok(wait::WaitStatus::Signaled(_, sig, _)) => {
                 drain_stdout(&mut stdout, &mut buf, &mut carry, &mut args.log);
                 drain_stdout(&mut stderr, &mut buf, &mut carry_err, &mut args.log);
-                eprintln!("tracee signaled: {:?}", sig);
                 exit_code = 128 + (sig as i32);
                 break;
             }
@@ -677,7 +624,6 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
     }
 
     // The end
-    println!("Finished!");
     exit_code
 }
 
@@ -713,6 +659,11 @@ fn drain_stdout<'a>(
                 carry.push_str(&String::from_utf8_lossy(&buf[..n]));
                 while let Some(pos) = carry.find('\n') {
                     let line = carry[..pos].trim_end_matches('\r');
+                    let suppress_loader_log = line.starts_with("loader_shim:");
+                    if suppress_loader_log {
+                        carry.drain(..=pos);
+                        continue;
+                    }
                     if let Some(log) = log.as_mut() {
                         log(line.to_string());
                     } else {
@@ -761,7 +712,7 @@ fn rewrite_syscall_path_with_regs(
     let (addr, path_bytes) = match read_cstring_candidates(pid, addr_raw) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("read_cstring failed syscall={syscall} addr_raw=0x{addr_raw:x}: {e}");
+            let _ = e;
             return Ok(());
         }
     };
@@ -957,7 +908,7 @@ fn remap_command_program_in_rootfs(
 fn maybe_wrap_with_external_loader_shim(
     command: &Command,
     rootfs: &str,
-    shim_exe: Option<&OsString>,
+    shim_exe: &OsString,
 ) -> Option<Command> {
     let guest_program = command.get_program().to_string_lossy().to_string();
     if guest_program.is_empty() {
@@ -975,24 +926,15 @@ fn maybe_wrap_with_external_loader_shim(
         return None;
     }
     // Wrap only dynamically-linked ELFs.
-    let _interp_guest = elf_interp_path(&host_program)?;
+    let _ = elf_interp_path(&host_program)?;
 
-    // Why we require an *external* shim binary here:
-    // - The shim needs a custom startup model (no_std + custom `_start`) so it can survive
-    //   unmapping linker64 and then switching to a glibc-like TLS.
-    // - The tracer itself is a normal Rust std binary; mixing those concerns in one process
-    //   would keep host runtime assumptions alive right when the guest ld.so takes over.
-    let shim = if let Some(shim) = shim_exe {
-        // Ensure the shim path is absolute so it isn't affected by current_dir(rootfs).
-        let p = Path::new(std::ffi::OsStr::from_bytes(shim.as_bytes()));
-        let abs = fs::canonicalize(p).unwrap_or_else(|_| {
-            let cwd = std::env::current_dir().unwrap_or_default();
-            cwd.join(p)
-        });
-        abs.into_os_string()
-    } else {
-        return None;
-    };
+    // Ensure the shim path is absolute so it isn't affected by current_dir(rootfs).
+    let p = Path::new(std::ffi::OsStr::from_bytes(shim_exe.as_bytes()));
+    let abs = fs::canonicalize(p).unwrap_or_else(|_| {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        cwd.join(p)
+    });
+    let shim = abs.into_os_string();
 
     // Invoke loader_shim as: loader_shim <guest-program> [args...]
     // The tracer will rewrite the shim's path syscalls so the guest absolute path resolves inside rootfs.
@@ -2563,6 +2505,12 @@ mod tests {
     fn can_ls_root() {
         // Use the repo itself as a fake "rootfs": guest absolute "/src" should map to "./src".
         let rootfs = env!("CARGO_MANIFEST_DIR").to_string();
+        let shim = shim_path();
+        assert!(
+            shim.exists(),
+            "missing loader shim at {} (build and copy it into assets first)",
+            shim.display()
+        );
 
         let out = Arc::new(Mutex::new(String::new()));
         let out2 = Arc::clone(&out);
@@ -2574,7 +2522,7 @@ mod tests {
             command: cmd,
             rootfs,
             binds: vec![],
-            shim_exe: None,
+            shim_exe: shim.into_os_string(),
             log: Some(Box::new(move |s| {
                 let mut g = out2.lock().unwrap();
                 g.push_str(&s);
@@ -2621,7 +2569,7 @@ mod tests {
             command: cmd,
             rootfs: rootfs_dir.to_string_lossy().to_string(),
             binds: vec![],
-            shim_exe: Some(shim.into_os_string()),
+            shim_exe: shim.into_os_string(),
             log: Some(Box::new(move |s| {
                 let mut g = out2.lock().unwrap();
                 g.push_str(&s);

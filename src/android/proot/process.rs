@@ -128,24 +128,21 @@ impl ArchProcess {
         //
         // For unit tests, prefer the checked-in shim under `assets/` so `cargo test` works
         // without requiring a prior build step.
-        let shim_exe = std::env::var_os("PTRACE_PLAYGROUND_SHIM")
-            .or_else(|| {
-                if cfg!(test) {
-                    let p = std::path::Path::new("assets/libs/arm64-v8a/librootless_chroot_loader.so");
-                    if p.exists() {
-                        return Some(p.as_os_str().to_os_string());
-                    }
-                }
-                None
-            })
-            .or_else(|| {
-                let p = context.native_library_dir.join("librootless_chroot_loader.so");
-                if p.exists() {
-                    Some(p.into_os_string())
-                } else {
-                    None
-                }
-            });
+        let shim_exe = if cfg!(test) {
+            let p = std::path::Path::new("assets/libs/arm64-v8a/librootless_chroot_loader.so");
+            if p.exists() {
+                p.as_os_str().to_os_string()
+            } else {
+                panic!("missing loader shim at {}", p.display())
+            }
+        } else {
+            let p = context.native_library_dir.join("librootless_chroot_loader.so");
+            if p.exists() {
+                p.into_os_string()
+            } else {
+                panic!("missing loader shim at {}", p.display())
+            }
+        };
 
         let log = self.log.map(|l| Box::new(move |s: String| l(s)) as Box<dyn FnMut(String)>);
 
@@ -286,15 +283,13 @@ fn run_guest(program: &str, args: &[&str]) -> i32 {
     for a in args {
         cmd.arg(a);
     }
-    cmd.env("PTRACE_PLAYGROUND_FAKE_ROOT", "1");
-
-        ptrace::rootless_chroot(ptrace::Args {
-            command: cmd,
-            rootfs: rootfs.clone(),
-            binds: default_binds(&rootfs),
-            shim_exe: Some(shim),
-            log: None,
-        })
+    ptrace::rootless_chroot(ptrace::Args {
+        command: cmd,
+        rootfs: rootfs.clone(),
+        binds: default_binds(&rootfs),
+        shim_exe: shim,
+        log: None,
+    })
     }
 
     #[test]
