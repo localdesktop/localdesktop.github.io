@@ -683,25 +683,6 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
     exit_code
 }
 
-fn run_untraced<'a>(mut command: Command, log: &mut Option<Box<dyn FnMut(String) + 'a>>) {
-    command.stdout(Stdio::piped());
-    let mut child = command.spawn().unwrap();
-    let mut stdout = child.stdout.take().unwrap();
-    let mut buf = [0u8; 4096];
-    let mut carry = String::new();
-    loop {
-        drain_stdout(&mut stdout, &mut buf, &mut carry, log);
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                drain_stdout(&mut stdout, &mut buf, &mut carry, log);
-                break;
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
-            Err(_) => break,
-        }
-    }
-}
-
 fn drain_stdout<'a>(
     stdout: &mut impl Read,
     buf: &mut [u8],
@@ -959,15 +940,6 @@ struct UserPtRegs {
     pstate: u64,
 }
 
-fn read_syscall_from_regs(pid: Pid) -> nix::Result<(u64, [u64; 6])> {
-    let regs = read_regs(pid)?;
-
-    let syscall = regs.regs[8]; // x8
-    let mut args = [0u64; 6];
-    args.copy_from_slice(&regs.regs[0..6]);
-    Ok((syscall, args))
-}
-
 fn read_regs(pid: Pid) -> nix::Result<UserPtRegs> {
     let mut regs: UserPtRegs = unsafe { mem::zeroed() };
     let mut iov = nix::libc::iovec {
@@ -1093,27 +1065,8 @@ fn is_elf(path: &Path) -> bool {
     bytes.len() >= 4 && bytes[0] == 0x7f && bytes[1] == b'E' && bytes[2] == b'L' && bytes[3] == b'F'
 }
 
-#[derive(Clone, Copy)]
-struct ElfSegment {
-    offset: u64,
-    vaddr: u64,
-    filesz: u64,
-    memsz: u64,
-    flags: u32,
-}
-
-#[derive(Clone)]
-struct ElfImage {
-    entry: u64,
-    phoff: u64,
-    phentsize: u16,
-    phnum: u16,
-    phdr_vaddr: Option<u64>,
-    interp: Option<String>,
-    segments: Vec<ElfSegment>,
-}
-
-fn parse_elf(path: &Path) -> Option<ElfImage> {
+fn elf_interp_path(path: &Path) -> Option<String> {
+    // Minimal ELF64 little-endian parser for PT_INTERP.
     let mut file = fs::File::open(path).ok()?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
@@ -1124,59 +1077,30 @@ fn parse_elf(path: &Path) -> Option<ElfImage> {
         return None;
     }
 
-    let entry = read_u64(&bytes, 24)?;
     let phoff = read_u64(&bytes, 32)?;
     let phentsize = read_u16(&bytes, 54)?;
     let phnum = read_u16(&bytes, 56)?;
 
-    let mut interp = None;
-    let mut segments = Vec::new();
-    let mut phdr_vaddr = None;
     for i in 0..phnum as usize {
         let base = phoff as usize + i * phentsize as usize;
         if base + 56 > bytes.len() {
             return None;
         }
         let p_type = read_u32(&bytes, base)?;
-        let p_flags = read_u32(&bytes, base + 4)?;
-        let p_offset = read_u64(&bytes, base + 8)?;
-        let p_vaddr = read_u64(&bytes, base + 16)?;
-        let p_filesz = read_u64(&bytes, base + 32)?;
-        let p_memsz = read_u64(&bytes, base + 40)?;
         if p_type == 3 {
+            let p_offset = read_u64(&bytes, base + 8)?;
+            let p_filesz = read_u64(&bytes, base + 32)?;
             let start = p_offset as usize;
             let end = start + p_filesz as usize;
             if end <= bytes.len() {
                 let raw = &bytes[start..end];
                 let nul = raw.iter().position(|b| *b == 0).unwrap_or(raw.len());
-                interp = Some(String::from_utf8_lossy(&raw[..nul]).to_string());
+                return Some(String::from_utf8_lossy(&raw[..nul]).to_string());
             }
-        } else if p_type == 6 {
-            phdr_vaddr = Some(p_vaddr);
-        } else if p_type == 1 {
-            segments.push(ElfSegment {
-                offset: p_offset,
-                vaddr: p_vaddr,
-                filesz: p_filesz,
-                memsz: p_memsz,
-                flags: p_flags,
-            });
+            return None;
         }
     }
-
-    Some(ElfImage {
-        entry,
-        phoff,
-        phentsize,
-        phnum,
-        phdr_vaddr,
-        interp,
-        segments,
-    })
-}
-
-fn elf_interp_path(path: &Path) -> Option<String> {
-    parse_elf(path)?.interp
+    None
 }
 
 fn read_u16(bytes: &[u8], at: usize) -> Option<u16> {
@@ -1203,320 +1127,6 @@ fn read_u64(bytes: &[u8], at: usize) -> Option<u64> {
         *bytes.get(at + 6)?,
         *bytes.get(at + 7)?,
     ]))
-}
-
-fn page_size() -> u64 {
-    4096
-}
-
-fn align_down(v: u64, a: u64) -> u64 {
-    v & !(a - 1)
-}
-
-fn align_up(v: u64, a: u64) -> u64 {
-    (v + (a - 1)) & !(a - 1)
-}
-
-fn prot_from_flags(flags: u32) -> i32 {
-    let mut prot = 0;
-    if flags & 0x4 != 0 {
-        prot |= nix::libc::PROT_READ;
-    }
-    if flags & 0x2 != 0 {
-        prot |= nix::libc::PROT_WRITE;
-    }
-    if flags & 0x1 != 0 {
-        prot |= nix::libc::PROT_EXEC;
-    }
-    prot
-}
-
-unsafe fn map_elf(path: &Path, img: &ElfImage) -> Option<(u64, u64)> {
-    let ps = page_size();
-    let mut min = u64::MAX;
-    let mut max = 0u64;
-    for seg in &img.segments {
-        min = min.min(align_down(seg.vaddr, ps));
-        max = max.max(align_up(seg.vaddr + seg.memsz, ps));
-    }
-    if min == u64::MAX || max <= min {
-        return None;
-    }
-    let span = max - min;
-    let reserve = nix::libc::mmap(
-        std::ptr::null_mut(),
-        span as usize,
-        nix::libc::PROT_NONE,
-        nix::libc::MAP_PRIVATE | nix::libc::MAP_ANONYMOUS,
-        -1,
-        0,
-    );
-    if reserve == nix::libc::MAP_FAILED {
-        return None;
-    }
-    let base = reserve as u64 - min;
-
-    let cpath = CString::new(path.as_os_str().as_bytes()).ok()?;
-    let fd = nix::libc::open(cpath.as_ptr(), nix::libc::O_RDONLY);
-    if fd < 0 {
-        return None;
-    }
-    for seg in &img.segments {
-        let seg_page = align_down(seg.vaddr, ps);
-        let off_page = align_down(seg.offset, ps);
-        let page_delta = seg.vaddr - seg_page;
-        let map_addr = (base + seg_page) as *mut nix::libc::c_void;
-        let file_len = align_up(page_delta + seg.filesz, ps);
-        if file_len > 0 {
-            let mapped = nix::libc::mmap(
-                map_addr,
-                file_len as usize,
-                prot_from_flags(seg.flags),
-                nix::libc::MAP_PRIVATE | nix::libc::MAP_FIXED,
-                fd,
-                off_page as nix::libc::off_t,
-            );
-            if mapped == nix::libc::MAP_FAILED {
-                nix::libc::close(fd);
-                return None;
-            }
-        }
-        let mem_len = align_up(page_delta + seg.memsz, ps);
-        if mem_len > file_len {
-            let anon_addr = (base + seg_page + file_len) as *mut nix::libc::c_void;
-            let anon_len = mem_len - file_len;
-            let mapped = nix::libc::mmap(
-                anon_addr,
-                anon_len as usize,
-                prot_from_flags(seg.flags),
-                nix::libc::MAP_PRIVATE | nix::libc::MAP_FIXED | nix::libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            );
-            if mapped == nix::libc::MAP_FAILED {
-                nix::libc::close(fd);
-                return None;
-            }
-        }
-    }
-    nix::libc::close(fd);
-    Some((base, base + img.entry))
-}
-
-#[cfg(target_arch = "aarch64")]
-unsafe fn jump_to(entry: u64, sp: u64) -> ! {
-    use core::arch::asm;
-    asm!(
-        "mov sp, {stack}",
-        // Match the expectations of ld.so entry: x0 = rtld_fini (0), x1 = stack pointer.
-        "mov x0, #0",
-        "mov x1, sp",
-        "mov x2, #0",
-        "br {entry}",
-        stack = in(reg) sp,
-        entry = in(reg) entry,
-        options(noreturn)
-    );
-}
-
-const AT_NULL: u64 = 0;
-const AT_PHDR: u64 = 3;
-const AT_PHENT: u64 = 4;
-const AT_PHNUM: u64 = 5;
-const AT_PAGESZ: u64 = 6;
-const AT_BASE: u64 = 7;
-const AT_FLAGS: u64 = 8;
-const AT_ENTRY: u64 = 9;
-const AT_UID: u64 = 11;
-const AT_EUID: u64 = 12;
-const AT_GID: u64 = 13;
-const AT_EGID: u64 = 14;
-const AT_PLATFORM: u64 = 15;
-const AT_HWCAP: u64 = 16;
-const AT_CLKTCK: u64 = 17;
-const AT_SECURE: u64 = 23;
-const AT_RANDOM: u64 = 25;
-const AT_EXECFN: u64 = 31;
-const AT_SYSINFO_EHDR: u64 = 33;
-const AT_BASE_PLATFORM: u64 = 24;
-
-unsafe fn run_loader_shim(target: &[u8], interp: &[u8], target_args: &[OsString]) -> Option<()> {
-    let target_path = Path::new(std::ffi::OsStr::from_bytes(target));
-    let interp_path = Path::new(std::ffi::OsStr::from_bytes(interp));
-    let target_img = parse_elf(target_path)?;
-    let interp_img = parse_elf(interp_path)?;
-
-    let (target_base, _target_entry) = map_elf(target_path, &target_img)?;
-    let (interp_base, interp_entry) = map_elf(interp_path, &interp_img)?;
-
-    let stack_len = 8 * 1024 * 1024usize;
-    let stack = nix::libc::mmap(
-        std::ptr::null_mut(),
-        stack_len,
-        nix::libc::PROT_READ | nix::libc::PROT_WRITE,
-        nix::libc::MAP_PRIVATE | nix::libc::MAP_ANONYMOUS,
-        -1,
-        0,
-    );
-    if stack == nix::libc::MAP_FAILED {
-        return None;
-    }
-    let mut sp = (stack as u64 + stack_len as u64) & !0xf;
-
-    let mut arg_cstr = Vec::new();
-    // argv[0] should be the guest path if possible; we only have host path here.
-    arg_cstr.push(CString::new(target).ok()?);
-    for a in target_args {
-        arg_cstr.push(CString::new(a.as_os_str().as_bytes()).ok()?);
-    }
-    let env_pairs: Vec<OsString> = std::env::vars_os()
-        .map(|(k, v)| {
-            let mut s = OsString::from(k);
-            s.push("=");
-            s.push(v);
-            s
-        })
-        .collect();
-    let mut env_cstr = Vec::new();
-    for e in env_pairs {
-        env_cstr.push(CString::new(e.as_os_str().as_bytes()).ok()?);
-    }
-
-    let mut string_ptrs: Vec<u64> = Vec::new();
-    for s in arg_cstr.iter().rev() {
-        let raw = s.as_bytes_with_nul();
-        sp -= raw.len() as u64;
-        std::ptr::copy_nonoverlapping(raw.as_ptr(), sp as *mut u8, raw.len());
-        string_ptrs.push(sp);
-    }
-    string_ptrs.reverse();
-
-    let mut env_ptrs: Vec<u64> = Vec::new();
-    for s in env_cstr.iter().rev() {
-        let raw = s.as_bytes_with_nul();
-        sp -= raw.len() as u64;
-        std::ptr::copy_nonoverlapping(raw.as_ptr(), sp as *mut u8, raw.len());
-        env_ptrs.push(sp);
-    }
-    env_ptrs.reverse();
-
-    let push_u64 = |sp_ref: &mut u64, v: u64| {
-        *sp_ref -= 8;
-        // Avoid any alignment assumptions: write bytes.
-        let bs = v.to_ne_bytes();
-        std::ptr::copy_nonoverlapping(bs.as_ptr(), *sp_ref as *mut u8, 8);
-    };
-
-    // Start with current process auxv, but fix any pointer entries to point into our new stack.
-    let mut auxv = read_auxv().unwrap_or_default();
-    // Remove entries we'll definitely rewrite.
-    auxv.retain(|(k, _)| {
-        !matches!(
-            *k,
-            AT_PHDR | AT_PHENT | AT_PHNUM | AT_PAGESZ | AT_BASE | AT_ENTRY | AT_EXECFN | AT_RANDOM
-        )
-    });
-
-    // Copy platform strings to new stack if present.
-    let mut extra_aux_ptrs: Vec<(u64, u64)> = Vec::new();
-    for (k, v) in auxv.iter() {
-        if *k == AT_PLATFORM || *k == AT_BASE_PLATFORM {
-            if let Some(s) = read_cstr_ptr(*v) {
-                sp -= s.len() as u64;
-                std::ptr::copy_nonoverlapping(s.as_ptr(), sp as *mut u8, s.len());
-                extra_aux_ptrs.push((*k, sp));
-            }
-        }
-    }
-    auxv.retain(|(k, _)| *k != AT_PLATFORM && *k != AT_BASE_PLATFORM);
-    auxv.extend(extra_aux_ptrs);
-
-    // Provide fresh AT_RANDOM bytes.
-    let rand_len = 16usize;
-    sp -= rand_len as u64;
-    let rand_ptr = sp;
-    if !fill_random(rand_ptr as *mut u8, rand_len) {
-        // Fall back to zeros; not ideal but keeps loader alive.
-        std::ptr::write_bytes(rand_ptr as *mut u8, 0, rand_len);
-    }
-
-    let phdr_addr = target_base + target_img.phdr_vaddr.unwrap_or(target_img.phoff);
-    auxv.push((AT_PHDR, phdr_addr));
-    auxv.push((AT_PHENT, target_img.phentsize as u64));
-    auxv.push((AT_PHNUM, target_img.phnum as u64));
-    auxv.push((AT_PAGESZ, page_size()));
-    auxv.push((AT_BASE, interp_base));
-    auxv.push((AT_ENTRY, target_base + target_img.entry));
-    auxv.push((AT_EXECFN, string_ptrs[0]));
-    auxv.push((AT_RANDOM, rand_ptr));
-    auxv.push((AT_NULL, 0));
-
-    // Ensure sane alignment before pushing pointer-sized values.
-    sp &= !0xf;
-
-    let total_pushes = auxv.len() * 2 + 1 + env_ptrs.len() + 1 + string_ptrs.len() + 1; // + argc
-    if total_pushes % 2 == 1 {
-        // Ensure final SP is 16-byte aligned on aarch64 entry.
-        push_u64(&mut sp, 0);
-    }
-
-    for (k, v) in auxv.iter().rev() {
-        push_u64(&mut sp, *v);
-        push_u64(&mut sp, *k);
-    }
-    push_u64(&mut sp, 0);
-    for p in env_ptrs.iter().rev() {
-        push_u64(&mut sp, *p);
-    }
-    push_u64(&mut sp, 0);
-    for p in string_ptrs.iter().rev() {
-        push_u64(&mut sp, *p);
-    }
-    push_u64(&mut sp, string_ptrs.len() as u64);
-
-    #[cfg(target_arch = "aarch64")]
-    jump_to(interp_entry, sp);
-    #[allow(unreachable_code)]
-    Some(())
-}
-
-fn read_auxv() -> Option<Vec<(u64, u64)>> {
-    let bytes = fs::read("/proc/self/auxv").ok()?;
-    let mut out = Vec::new();
-    let mut i = 0usize;
-    while i + 16 <= bytes.len() {
-        let k = u64::from_ne_bytes(bytes[i..i + 8].try_into().ok()?);
-        let v = u64::from_ne_bytes(bytes[i + 8..i + 16].try_into().ok()?);
-        out.push((k, v));
-        i += 16;
-        if k == AT_NULL {
-            break;
-        }
-    }
-    Some(out)
-}
-
-fn read_cstr_ptr(ptr: u64) -> Option<Vec<u8>> {
-    if ptr == 0 {
-        return None;
-    }
-    let mut out = Vec::new();
-    for i in 0..256usize {
-        let b = unsafe { *((ptr as *const u8).add(i)) };
-        if b == 0 {
-            out.push(0);
-            return Some(out);
-        }
-        out.push(b);
-    }
-    None
-}
-
-fn fill_random(dst: *mut u8, len: usize) -> bool {
-    unsafe {
-        let got = nix::libc::getrandom(dst as *mut nix::libc::c_void, len, 0);
-        got == len as isize
-    }
 }
 
 fn rebuild_command(command: Command, new_program: OsString, prefix_args: &[OsString]) -> Command {
@@ -1929,34 +1539,6 @@ fn write_bytes(pid: Pid, addr: usize, data: &[u8]) -> nix::Result<()> {
     Ok(())
 }
 
-fn read_syscall_from_proc(pid: Pid) -> nix::Result<Option<(u64, [u64; 6])>> {
-    let path = format!("/proc/{}/syscall", pid);
-    let content = match fs::read_to_string(&path) {
-        Ok(content) => content,
-        Err(_) => return Ok(None),
-    };
-    let mut parts = content.split_whitespace();
-    let sysno = match parts.next().and_then(parse_num) {
-        Some(value) => value,
-        None => return Ok(None),
-    };
-    let mut args = [0u64; 6];
-    for slot in &mut args {
-        if let Some(value) = parts.next().and_then(parse_num) {
-            *slot = value;
-        }
-    }
-    Ok(Some((sysno, args)))
-}
-
-fn parse_num(value: &str) -> Option<u64> {
-    if let Some(hex) = value.strip_prefix("0x") {
-        u64::from_str_radix(hex, 16).ok()
-    } else {
-        value.parse::<u64>().ok()
-    }
-}
-
 fn mapping_contains_pc(line: &str, pc: u64) -> bool {
     let Some((range, _rest)) = line.split_once(' ') else {
         return false;
@@ -1994,52 +1576,6 @@ fn segv_code_name(code: i32) -> &'static str {
         9 => "SEGV_MTESERR",
         _ => "?",
     }
-}
-
-fn segv_siginfo(pid: Pid) -> Option<(i32, i32, i32, u64)> {
-    let mut si: nix::libc::siginfo_t = unsafe { mem::zeroed() };
-    let ret = unsafe {
-        nix::libc::ptrace(
-            nix::libc::PTRACE_GETSIGINFO,
-            pid.as_raw(),
-            0,
-            &mut si as *mut nix::libc::siginfo_t as *mut nix::libc::c_void,
-        )
-    };
-    if ret < 0 {
-        return None;
-    }
-    // Layout matches the kernel ABI on 64-bit: three i32 headers then a union at +16.
-    let base = (&si as *const nix::libc::siginfo_t).cast::<u8>();
-    let rd_i32 = |off: usize| -> i32 {
-        let p = unsafe { base.add(off).cast::<i32>() };
-        unsafe { core::ptr::read_unaligned(p) }
-    };
-    let signo = rd_i32(0);
-    let errno = rd_i32(4);
-    let code = rd_i32(8);
-    let addr_ptr = unsafe { base.add(16).cast::<u64>() };
-    let addr = unsafe { core::ptr::read_unaligned(addr_ptr) };
-    Some((signo, errno, code, addr))
-}
-
-fn segv_siginfo_from_ptr(pid: Pid, siginfo_ptr: usize) -> Option<(i32, i32, i32, u64)> {
-    if siginfo_ptr == 0 {
-        return None;
-    }
-    // Read the first 64 bytes which is enough for the fixed header and the first union word.
-    let bs = read_bytes_process_vm(pid, siginfo_ptr, 64).ok()?;
-    if bs.len() < 24 {
-        return None;
-    }
-    let rd_i32 = |off: usize| -> i32 { i32::from_ne_bytes(bs[off..off + 4].try_into().unwrap()) };
-    let signo = rd_i32(0);
-    let errno = rd_i32(4);
-    let code = rd_i32(8);
-    // Heuristic: on 64-bit Linux ABIs, the union starts at +16 and `si_addr` is the first word
-    // for SIGSEGV.
-    let addr = u64::from_ne_bytes(bs[16..24].try_into().unwrap());
-    Some((signo, errno, code, addr))
 }
 
 fn segv_siginfo_decoded(pid: Pid, maps_txt: &str) -> Option<(i32, i32, i32, u64)> {
@@ -2147,34 +1683,6 @@ fn segv_fault_addr(pid: Pid) -> Option<u64> {
     Some(unsafe { core::ptr::read_unaligned(addr_ptr) })
 }
 
-fn sigsys_siginfo(pid: Pid) -> Option<(i32, i32, i32, u64, i32, u32)> {
-    let mut si: nix::libc::siginfo_t = unsafe { mem::zeroed() };
-    let ret = unsafe {
-        nix::libc::ptrace(
-            nix::libc::PTRACE_GETSIGINFO,
-            pid.as_raw(),
-            0,
-            &mut si as *mut nix::libc::siginfo_t as *mut nix::libc::c_void,
-        )
-    };
-    if ret < 0 {
-        return None;
-    }
-    let base = (&si as *const nix::libc::siginfo_t).cast::<u8>();
-    let rd_i32 = |off: usize| -> i32 {
-        let p = unsafe { base.add(off).cast::<i32>() };
-        unsafe { core::ptr::read_unaligned(p) }
-    };
-    let signo = rd_i32(0);
-    let errno = rd_i32(4);
-    let code = rd_i32(8);
-    // For SIGSYS: union begins at +16. Layout (kernel): call_addr (void*), syscall (int), arch (unsigned int).
-    let call_addr = unsafe { core::ptr::read_unaligned(base.add(16).cast::<u64>()) };
-    let syscall = unsafe { core::ptr::read_unaligned(base.add(24).cast::<i32>()) };
-    let arch = unsafe { core::ptr::read_unaligned(base.add(28).cast::<u32>()) };
-    Some((signo, errno, code, call_addr, syscall, arch))
-}
-
 #[cfg(target_arch = "aarch64")]
 fn decode_aarch64_ucontext_prefix(bs: &[u8]) -> Option<(u64, u64, u64, u64, [u64; 31])> {
     // Based on Linux aarch64 ucontext_t + sigcontext layout:
@@ -2215,29 +1723,6 @@ fn decode_aarch64_ucontext_prefix(bs: &[u8]) -> Option<(u64, u64, u64, u64, [u64
 #[cfg(not(target_arch = "aarch64"))]
 fn decode_aarch64_ucontext_prefix(_bs: &[u8]) -> Option<(u64, u64, u64, u64, [u64; 31])> {
     None
-}
-
-fn segv_fault_addr_from_siginfo_ptr(pid: Pid, siginfo_ptr: usize) -> Option<u64> {
-    if siginfo_ptr == 0 {
-        return None;
-    }
-    let mut si: nix::libc::siginfo_t = unsafe { mem::zeroed() };
-    let bs =
-        read_bytes_process_vm(pid, siginfo_ptr, mem::size_of::<nix::libc::siginfo_t>()).ok()?;
-    if bs.len() != mem::size_of::<nix::libc::siginfo_t>() {
-        return None;
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            bs.as_ptr(),
-            (&mut si as *mut nix::libc::siginfo_t).cast::<u8>(),
-            bs.len(),
-        );
-    }
-    // Union starts at offset 16 on 64-bit Linux ABIs (si_addr for SIGSEGV).
-    let base = (&si as *const nix::libc::siginfo_t).cast::<u8>();
-    let addr_ptr = unsafe { base.add(16).cast::<u64>() };
-    Some(unsafe { core::ptr::read_unaligned(addr_ptr) })
 }
 
 #[derive(Clone)]
@@ -2523,78 +2008,10 @@ fn segv_fault_regs_from_stack_scan(
 }
 
 struct SigCtxAarch64Hit {
-    off: usize, // offset within the scanned blob where `sp` word begins
     fault_address: u64,
     regs: [u64; 31],
     sp: u64,
     pc: u64,
-    pstate: u64,
-}
-
-#[cfg(target_arch = "aarch64")]
-fn sigcontext_scan_pc_sp_from_blob(
-    bs: &[u8],
-    stack_range: Option<(u64, u64)>,
-    guest_text_range: Option<(u64, u64)>,
-) -> Option<SigCtxAarch64Hit> {
-    // Look for a `struct sigcontext` tail pattern: [sp][pc][pstate]
-    // without relying on `fault_address` being present/populated.
-    let Some((ss, se)) = stack_range else {
-        return None;
-    };
-    let Some((gs, ge)) = guest_text_range else {
-        return None;
-    };
-    if bs.len() < 24 {
-        return None;
-    }
-    for off in (0..bs.len().saturating_sub(24)).step_by(8) {
-        let sp = u64::from_ne_bytes(bs[off..off + 8].try_into().ok()?);
-        let pc = u64::from_ne_bytes(bs[off + 8..off + 16].try_into().ok()?);
-        let pstate = u64::from_ne_bytes(bs[off + 16..off + 24].try_into().ok()?);
-        if !(ss <= sp && sp < se) {
-            continue;
-        }
-        if !(gs <= pc && pc < ge) {
-            continue;
-        }
-        // PSTATE is usually 0x....1000 on user faults (mask a bit to be tolerant).
-        if (pstate & 0xfff) != 0x000 {
-            // Some kernels/userspace store pstate with lower bits not zero, so don't be too strict.
-        }
-        // Attempt to recover full sigcontext leading fields.
-        let mut regs = [0u64; 31];
-        let regs_start = off.checked_sub(31 * 8)?;
-        let fault_off = regs_start.checked_sub(8)?;
-        if fault_off + 8 <= bs.len() {
-            let fault_address = u64::from_ne_bytes(bs[fault_off..fault_off + 8].try_into().ok()?);
-            for i in 0..31 {
-                let roff = regs_start + i * 8;
-                if roff + 8 > bs.len() {
-                    return None;
-                }
-                regs[i] = u64::from_ne_bytes(bs[roff..roff + 8].try_into().ok()?);
-            }
-            return Some(SigCtxAarch64Hit {
-                off,
-                fault_address,
-                regs,
-                sp,
-                pc,
-                pstate,
-            });
-        }
-    }
-    None
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-fn sigcontext_scan_pc_sp_from_blob(
-    _bs: &[u8],
-    _stack_range: Option<(u64, u64)>,
-    _guest_text_range: Option<(u64, u64)>,
-) -> Option<SigCtxAarch64Hit> {
-    None
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -2622,7 +2039,7 @@ fn sigcontext_scan_all_hits_from_blob(
             Ok(a) => u64::from_ne_bytes(a),
             Err(_) => continue,
         };
-        let pstate = match <[u8; 8]>::try_from(&bs[off + 16..off + 24]) {
+        let _pstate = match <[u8; 8]>::try_from(&bs[off + 16..off + 24]) {
             Ok(a) => u64::from_ne_bytes(a),
             Err(_) => continue,
         };
@@ -2667,12 +2084,10 @@ fn sigcontext_scan_all_hits_from_blob(
             continue;
         }
         hits.push(SigCtxAarch64Hit {
-            off,
             fault_address,
             regs,
             sp,
             pc,
-            pstate,
         });
     }
     hits
