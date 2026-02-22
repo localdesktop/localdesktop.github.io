@@ -22,6 +22,7 @@ pub mod android {
     }
     pub mod utils {
         pub mod application_context;
+        pub mod external_debug_log;
         pub mod fullscreen_immersive;
         pub mod ndk;
         pub mod webview;

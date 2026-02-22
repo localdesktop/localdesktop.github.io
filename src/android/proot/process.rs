@@ -1,4 +1,5 @@
 use crate::android::utils::application_context::get_application_context;
+use crate::android::utils::external_debug_log::append_external_debug_log;
 use crate::core::{config, logging::PolarBearExpectation};
 use smithay::reexports::rustix::path::Arg;
 use std::io::BufRead;
@@ -98,8 +99,24 @@ impl ArchProcess {
     }
 
     pub fn is_supported() -> bool {
-        let check_command = "cat /proc/cpuinfo";
-        Self::setup_base_command()
+        append_external_debug_log("is_supported", "starting support check");
+        let context = get_application_context();
+        let libproot = context.native_library_dir.join("libproot.so");
+        let loader = context.native_library_dir.join("libproot_loader.so");
+        append_external_debug_log(
+            "is_supported",
+            &format!(
+                "native_library_dir={} libproot_exists={} loader_exists={}",
+                context.native_library_dir.display(),
+                libproot.exists(),
+                loader.exists()
+            ),
+        );
+
+        // Probe PRoot with a direct host binary instead of `sh -c ...`.
+        // Some devices/app contexts fail on `/system/bin/sh` under `-r /` even though
+        // the real app flow (running `/bin/sh` inside the Arch rootfs) can still work.
+        let output_result = Self::setup_base_command()
             .arg("-r")
             .arg("/")
             .arg("-L")
@@ -107,12 +124,45 @@ impl ArchProcess {
             .arg("--sysvipc")
             .arg("--kill-on-exit")
             .arg("--root-id")
-            .arg("sh")
-            .arg("-c")
-            .arg(check_command)
-            .output()
-            .map(|res| res.stderr.is_empty())
-            .unwrap_or(false)
+            .arg("/system/bin/true")
+            .output();
+
+        match output_result {
+            Ok(res) => {
+                let stdout = String::from_utf8_lossy(&res.stdout).replace('\n', "\\n");
+                let stderr = String::from_utf8_lossy(&res.stderr).replace('\n', "\\n");
+                let stderr_raw = String::from_utf8_lossy(&res.stderr);
+                let host_exec_enosys = !res.status.success()
+                    && stderr_raw.contains("proot error: execve(\"/system/bin/")
+                    && stderr_raw.contains("Function not implemented")
+                    && stderr_raw.contains("fatal error: see `libproot.so --help`");
+
+                let supported = if host_exec_enosys {
+                    append_external_debug_log(
+                        "is_supported",
+                        "host /system/bin exec under -r / failed with ENOSYS; treating probe as inconclusive and allowing setup",
+                    );
+                    true
+                } else {
+                    res.status.success()
+                };
+                append_external_debug_log(
+                    "is_supported",
+                    &format!(
+                        "status={:?} supported={} stdout=\"{}\" stderr=\"{}\"",
+                        res.status, supported, stdout, stderr
+                    ),
+                );
+                supported
+            }
+            Err(e) => {
+                append_external_debug_log(
+                    "is_supported",
+                    &format!("failed to run proot support check: {}", e),
+                );
+                false
+            }
+        }
     }
 
     /// Run the command inside Proot

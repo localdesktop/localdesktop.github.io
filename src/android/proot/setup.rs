@@ -7,6 +7,7 @@ use crate::{
             webview::{ErrorVariant, WebviewBackend},
         },
         utils::application_context::get_application_context,
+        utils::external_debug_log::append_external_debug_log,
         utils::ndk::run_in_jvm,
     },
     core::{
@@ -707,13 +708,17 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let (sender, receiver) = mpsc::channel();
     let progress = Arc::new(Mutex::new(0));
 
-    if ArchProcess::is_supported() {
+    let supported = ArchProcess::is_supported();
+    append_external_debug_log("setup", &format!("ArchProcess::is_supported() -> {}", supported));
+
+    if supported {
         sender
             .send(SetupMessage::Progress(
                 "✅ Your device is supported!".to_string(),
             ))
             .unwrap_or(());
     } else {
+        append_external_debug_log("setup", "returning Unsupported webview backend");
         return PolarBearBackend::WebView(WebviewBackend {
             socket_port: 0,
             progress,
