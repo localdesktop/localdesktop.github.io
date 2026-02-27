@@ -1,8 +1,8 @@
 use crate::android::utils::application_context::get_application_context;
 use crate::core::{config, logging::PolarBearExpectation};
-use smithay::reexports::rustix::path::Arg;
 use std::io::BufRead;
 use std::io::BufReader;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
 pub type Log = Box<dyn Fn(String)>;
@@ -14,14 +14,29 @@ pub struct ArchProcess {
 }
 
 impl ArchProcess {
+    fn command_display(process: &Command) -> String {
+        let program = process.get_program().to_string_lossy().to_string();
+        let args = process
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if args.is_empty() {
+            program
+        } else {
+            format!("{program} {args}")
+        }
+    }
+
     fn setup_base_command() -> Command {
         let context = get_application_context();
-        let proot_loader = context.native_library_dir.join("libproot_loader.so");
+        let proot_tmp_dir = context.cache_dir.join("proot-rs-tmp");
+        let _ = std::fs::create_dir_all(&proot_tmp_dir);
 
-        let mut process = Command::new(context.native_library_dir.join("libproot.so"));
+        let mut process = Command::new(context.native_library_dir.join("libproot-rs.so"));
         process
-            .env("PROOT_LOADER", proot_loader)
-            .env("PROOT_TMP_DIR", context.data_dir);
+            .env("TMPDIR", &proot_tmp_dir)
+            .env("TMP", &proot_tmp_dir);
         process
     }
 
@@ -29,38 +44,93 @@ impl ArchProcess {
         let context = get_application_context();
 
         process
-            .arg("-r")
+            .arg("--rootfs")
             .arg(config::ARCH_FS_ROOT)
-            .arg("-L")
-            .arg("--link2symlink")
-            .arg("--sysvipc")
-            .arg("--kill-on-exit")
-            .arg("--root-id")
-            .arg("--bind=/dev")
-            .arg("--bind=/proc")
-            .arg("--bind=/sys")
-            .arg(format!("--bind={}/tmp:/dev/shm", config::ARCH_FS_ROOT));
+            .arg("--bind")
+            .arg("/dev:/dev")
+            .arg("--bind")
+            .arg("/proc:/proc")
+            .arg("--bind")
+            .arg("/sys:/sys")
+            .arg("--bind")
+            .arg(format!("{}/tmp:/dev/shm", config::ARCH_FS_ROOT));
 
         if context.permission_all_files_access {
             process
-                .arg("--bind=/sdcard:/android")
-                .arg("--bind=/sdcard:/root/Android");
+                .arg("--bind")
+                .arg("/sdcard:/android")
+                .arg("--bind")
+                .arg("/sdcard:/root/Android");
         }
 
         process
-            .arg("--bind=/dev/urandom:/dev/random")
-            .arg("--bind=/proc/self/fd:/dev/fd")
-            .arg("--bind=/proc/self/fd/0:/dev/stdin")
-            .arg("--bind=/proc/self/fd/1:/dev/stdout")
-            .arg("--bind=/proc/self/fd/2:/dev/stderr")
-            .arg(format!("--bind={}/proc/.loadavg:/proc/loadavg", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.stat:/proc/stat", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.uptime:/proc/uptime", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.version:/proc/version", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.vmstat:/proc/vmstat", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/sys/.empty:/sys/fs/selinux", config::ARCH_FS_ROOT));
+            .arg("--bind")
+            .arg("/dev/urandom:/dev/random")
+            .arg("--bind")
+            .arg("/proc/self/fd:/dev/fd")
+            .arg("--bind")
+            .arg("/proc/self/fd/0:/dev/stdin")
+            .arg("--bind")
+            .arg("/proc/self/fd/1:/dev/stdout")
+            .arg("--bind")
+            .arg("/proc/self/fd/2:/dev/stderr");
+
+        let add_bind_if_exists = |proc: &mut Command, host: &str, guest: &str| {
+            if Path::new(host).exists() {
+                proc.arg("--bind").arg(format!("{host}:{guest}"));
+            } else {
+                log::warn!("Skipping bind because host path is missing: {}", host);
+            }
+        };
+
+        add_bind_if_exists(
+            &mut process,
+            &format!("{}/proc/.loadavg", config::ARCH_FS_ROOT),
+            "/proc/loadavg",
+        );
+        add_bind_if_exists(
+            &mut process,
+            &format!("{}/proc/.stat", config::ARCH_FS_ROOT),
+            "/proc/stat",
+        );
+        add_bind_if_exists(
+            &mut process,
+            &format!("{}/proc/.uptime", config::ARCH_FS_ROOT),
+            "/proc/uptime",
+        );
+        add_bind_if_exists(
+            &mut process,
+            &format!("{}/proc/.version", config::ARCH_FS_ROOT),
+            "/proc/version",
+        );
+        add_bind_if_exists(
+            &mut process,
+            &format!("{}/proc/.vmstat", config::ARCH_FS_ROOT),
+            "/proc/vmstat",
+        );
+        add_bind_if_exists(
+            &mut process,
+            &format!("{}/proc/.sysctl_entry_cap_last_cap", config::ARCH_FS_ROOT),
+            "/proc/sys/kernel/cap_last_cap",
+        );
+        add_bind_if_exists(
+            &mut process,
+            &format!(
+                "{}/proc/.sysctl_inotify_max_user_watches",
+                config::ARCH_FS_ROOT
+            ),
+            "/proc/sys/fs/inotify/max_user_watches",
+        );
+        add_bind_if_exists(
+            &mut process,
+            &format!("{}/sys/.empty", config::ARCH_FS_ROOT),
+            "/sys/fs/selinux",
+        );
+        process
+    }
+
+    fn with_command_separator(mut process: Command) -> Command {
+        process.arg("--");
         process
     }
 
@@ -98,27 +168,43 @@ impl ArchProcess {
     }
 
     pub fn is_supported() -> bool {
-        let check_command = "cat /proc/cpuinfo";
-        Self::setup_base_command()
-            .arg("-r")
+        let mut process = Self::setup_base_command();
+        process
+            .arg("--rootfs")
             .arg("/")
-            .arg("-L")
-            .arg("--link2symlink")
-            .arg("--sysvipc")
-            .arg("--kill-on-exit")
-            .arg("--root-id")
-            .arg("sh")
-            .arg("-c")
-            .arg(check_command)
-            .output()
-            .map(|res| res.stderr.is_empty())
-            .unwrap_or(false)
+            .arg("--")
+            .arg("/system/bin/true");
+
+        log::info!(
+            "Checking proot-rs support with command: {}",
+            Self::command_display(&process)
+        );
+        match process.output() {
+            Ok(res) => {
+                if res.status.success() {
+                    log::info!("proot-rs support check succeeded");
+                    true
+                } else {
+                    log::error!(
+                        "proot-rs support check failed: status={:?}, stderr={}",
+                        res.status.code(),
+                        String::from_utf8_lossy(&res.stderr)
+                    );
+                    false
+                }
+            }
+            Err(err) => {
+                log::error!("Failed to execute proot-rs support check: {err}");
+                false
+            }
+        }
     }
 
-    /// Run the command inside Proot
+    /// Run the command inside proot-rs
     pub fn spawn(mut self) -> Self {
         let mut process = Self::setup_base_command();
         process = Self::with_args(process);
+        process = Self::with_command_separator(process);
         process = Self::with_env_vars(process, &self.user);
         process = Self::with_user_shell(process, &self.user);
 
@@ -127,7 +213,11 @@ impl ArchProcess {
             .arg(&self.command)
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .spawn()
+            .spawn();
+
+        let command = Self::command_display(&process);
+        log::info!("Spawning command as {}: {}", self.user, command);
+        let child = child
             .pb_expect("Failed to run command");
 
         self.process.replace(child);
@@ -165,6 +255,7 @@ impl ArchProcess {
     pub fn exec_with_panic_on_error(command: &str) {
         let mut process = Self::setup_base_command();
         process = Self::with_args(process);
+        process = Self::with_command_separator(process);
         process = Self::with_env_vars(process, "root");
         process = Self::with_user_shell(process, "root");
 
@@ -176,9 +267,9 @@ impl ArchProcess {
             .output()
             .pb_expect("Failed to run command");
 
-        let error_output = String::from_utf8_lossy(&output.stderr);
-        if error_output.contains("fatal error: see `libproot.so --help`") {
-            panic!("PRoot error: {}", error_output);
+        if !output.status.success() {
+            let error_output = String::from_utf8_lossy(&output.stderr);
+            panic!("proot-rs error: {}", error_output);
         }
     }
 

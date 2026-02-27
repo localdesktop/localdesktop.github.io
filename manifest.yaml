@@ -3,6 +3,9 @@ android:
   assets:
     - assets/setup-progress.html
     - assets/unsupported.html
+    - path: assets/archlinux-fs.tar.xz
+      optional: true
+      alignment: 4
   runtime_libs:
     - assets/libs
   gradle: true
@@ -13,7 +16,7 @@ android:
       target_sdk_version: 33
     application:
       label: "Local Desktop"
-      extract_native_libs: true # Required for proot invocations
+      extract_native_libs: true # Required for runtime native libs (for example libxkbcommon)
       use_cleartext_traffic: true # Required for connecting to ws://127.0.0.1, see assets/setup-progress.html
       meta_data:
         - name: com.samsung.android.dex.launchwidth

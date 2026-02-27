@@ -7,12 +7,17 @@ Local Desktop helps you run a desktop Linux environment on your Android device.
 ## How it works
 
 1. An Arch Linux ARM64 filesystem is set up inside the app's internal storage.
-2. Proot mounts the filesystem and provides a chroot-like environment.
+2. `proot-rs` mounts the filesystem and provides a chroot-like environment.
 3. A minimal built-in Wayland compositor runs in Android NDK.
 4. Rootful Xwayland & a desktop environment launches inside the chroot and renders back to the Android native activity.
 
 ![POC](./assets/docs/proof-of-concept.png)
-_Proof of Concept: A Pixel Tablet running the XFCE desktop environment inside a Proot-based ARM64 Linux. No configuration is required; just install and go._
+_Proof of Concept: A Pixel Tablet running the XFCE desktop environment inside a `proot-rs`-based ARM64 Linux. No configuration is required; just install and go._
+
+## Current Samsung Status
+
+- On this Samsung Android environment, `proot-rs` prebuilt `v0.1.0` cannot execute target commands correctly in-app (permission/exec failures).
+- A newer `proot-rs` Android binary was attempted from source, but cross-build on this host failed due old toolchain/linking constraints.
 
 ## Getting Started
 

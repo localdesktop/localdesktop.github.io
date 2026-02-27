@@ -19,6 +19,7 @@ use jni::sys::_jobject;
 use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
+    ffi::CString,
     fs::{self, File},
     io::{Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
@@ -53,6 +54,78 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 /// Thus, it should return a finished status if the task is done, so that the setup process can move on to the next stage.
 /// Otherwise, it should return a `JoinHandle`, so that the setup process can wait for the task to finish, but not block the main thread so that the setup progress can be reported to the user.
 type StageOutput = Option<JoinHandle<()>>;
+
+fn seed_arch_fs_archive_from_assets(options: &SetupOptions) -> StageOutput {
+    let context = get_application_context();
+    let temp_file = context.data_dir.join("archlinux-fs.tar.xz");
+    let mpsc_sender = options.mpsc_sender.clone();
+    let android_app = options.android_app.clone();
+
+    if temp_file.exists() {
+        return None;
+    }
+
+    Some(thread::spawn(move || {
+        let asset_name = CString::new("archlinux-fs.tar.xz").expect("invalid asset name");
+        let asset_manager = android_app.asset_manager();
+        let mut asset = match asset_manager.open(&asset_name) {
+            Some(asset) => asset,
+            None => {
+                log::info!("Bundled Arch Linux FS archive not found in APK assets");
+                return;
+            }
+        };
+
+        mpsc_sender
+            .send(SetupMessage::Progress(
+                "Using bundled Arch Linux FS archive from APK...".to_string(),
+            ))
+            .unwrap_or(());
+
+        let mut out = match File::create(&temp_file) {
+            Ok(file) => file,
+            Err(e) => {
+                log::error!(
+                    "Failed to create archive cache file `{}`: {}",
+                    temp_file.display(),
+                    e
+                );
+                return;
+            }
+        };
+
+        let mut buffer = [0u8; 8192];
+        loop {
+            match asset.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if let Err(e) = out.write_all(&buffer[..n]) {
+                        log::error!(
+                            "Failed writing bundled archive `{}`: {}",
+                            temp_file.display(),
+                            e
+                        );
+                        let _ = fs::remove_file(&temp_file);
+                        return;
+                    }
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed reading bundled archive asset `archlinux-fs.tar.xz`: {}",
+                        e
+                    );
+                    let _ = fs::remove_file(&temp_file);
+                    return;
+                }
+            }
+        }
+
+        log::info!(
+            "Bundled Arch Linux FS archive copied to {}",
+            temp_file.display()
+        );
+    }))
+}
 
 fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     let context = get_application_context();
@@ -707,13 +780,16 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let (sender, receiver) = mpsc::channel();
     let progress = Arc::new(Mutex::new(0));
 
+    log::info!("Starting setup flow: probing proot-rs support");
     if ArchProcess::is_supported() {
+        log::info!("Device reported as supported by proot-rs");
         sender
             .send(SetupMessage::Progress(
                 "✅ Your device is supported!".to_string(),
             ))
             .unwrap_or(());
     } else {
+        log::error!("Device is unsupported: proot-rs support check failed");
         return PolarBearBackend::WebView(WebviewBackend {
             socket_port: 0,
             progress,
@@ -727,6 +803,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     };
 
     let stages: Vec<SetupStage> = vec![
+        Box::new(seed_arch_fs_archive_from_assets), // Step 0. Seed bundled Arch FS archive cache
         Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (extract)
         Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
         Box::new(install_dependencies),         // Step 3. Install dependencies
