@@ -2,13 +2,18 @@ use super::ptrace;
 use crate::android::utils::application_context::get_application_context;
 use crate::core::config;
 use std::{
+    ffi::OsString,
     fs,
     fs::File,
+    io::{BufRead, BufReader},
+    os::unix::{fs::symlink, process::ExitStatusExt},
     path::Path,
     process::{Command, Stdio},
+    sync::Arc,
+    thread,
 };
 
-pub type Log = Box<dyn Fn(String)>;
+pub type Log = Arc<dyn Fn(String) + Send + Sync>;
 
 pub struct ArchProcess {
     pub command: String,
@@ -20,6 +25,7 @@ impl ArchProcess {
     /// Runs the process inside the proot environment.
     /// Returns the raw exit code from the tracee (0 means success).
     pub fn run_code(self) -> i32 {
+        let Self { command, user, log } = self;
         // In unit tests we often have a rootfs checked into the repo at `./archfs`.
         // Prefer it automatically so `cargo test` can run locally without writing to
         // `/data/local/tmp`.
@@ -81,45 +87,21 @@ impl ArchProcess {
 
         ensure_archfs_ready(Path::new(&rootfs));
         ensure_resolv_conf(Path::new(&rootfs));
+        ensure_pacman_conf_compat(Path::new(&rootfs));
+        ensure_mtab_compat(Path::new(&rootfs));
+        ensure_mirrorlist_compat(Path::new(&rootfs));
         populate_core_db_from_local_mirror(Path::new(&rootfs));
 
-        let mut process = Command::new("/usr/bin/env");
-        process.arg("-i");
-
-        let user = self.user.unwrap_or("root".to_string());
-        let home = if user == "root" {
-            "HOME=/root".to_string()
-        } else {
-            format!("HOME=/home/{}", user)
-        };
-        process.arg(home);
-
-        process
-            .arg("LANG=C.UTF-8")
-            .arg("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:/system/bin:/system/xbin")
-            .arg("TMPDIR=/tmp")
-            .arg(format!("USER={}", user))
-            .arg(format!("LOGNAME={}", user));
-
-        if user == "root" {
-            process.arg("sh");
-        } else {
-            process
-                .arg("runuser")
-                .arg("-u")
-                .arg(&user)
-                .arg("--")
-                .arg("sh");
+        let user = user.unwrap_or("root".to_string());
+        let rootless_command = strip_stdbuf_wrapper(&command);
+        if rootless_command != command {
+            log::info!(
+                "rootless-chroot: stripped stdbuf wrapper for compatibility: {} -> {}",
+                &command,
+                &rootless_command
+            );
         }
-
-        process
-            .arg("-c")
-            .arg(&self.command)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        log::info!("Running command in arch rootless-chroot: {}", &self.command);
+        log::info!("Running command in arch rootless-chroot: {}", &rootless_command);
         log::info!("As user: {}", &user);
         log::info!("With binds: {:?}", &binds);
 
@@ -144,22 +126,224 @@ impl ArchProcess {
             }
         };
 
-        let log = self.log.map(|l| Box::new(move |s: String| l(s)) as Box<dyn FnMut(String)>);
+        let mode = arch_runner_mode();
+        if mode == ArchRunnerMode::Proot {
+            return run_with_proot(&command, &user, &rootfs, &binds, log.as_ref());
+        }
 
-        let code = ptrace::rootless_chroot(ptrace::Args {
-            command: process,
-            rootfs,
-            binds,
+        let rootless_code = ptrace::rootless_chroot(ptrace::Args {
+            command: build_guest_shell_command(&rootless_command, &user),
+            rootfs: rootfs.clone(),
+            binds: binds.clone(),
+            emulate_root_identity: user == "root",
+            emulate_sigsys: true,
             shim_exe,
-            log,
+            log: rootless_log_sink(log.as_ref()),
         });
-        code
+
+        match mode {
+            ArchRunnerMode::Rootless => rootless_code,
+            ArchRunnerMode::Proot => unreachable!("handled above"),
+            ArchRunnerMode::Auto if rootless_code == 139 => {
+                log::warn!(
+                    "rootless-chroot exited 139 (SIGSEGV) for command; retrying with proot: {}",
+                    &command
+                );
+                run_with_proot(&command, &user, &rootfs, &binds, log.as_ref())
+            }
+            ArchRunnerMode::Auto => rootless_code,
+        }
     }
 
     /// Runs the process inside the proot environment.
     /// Returns true if the process exited with code 0, false otherwise.
     pub fn run(self) -> bool {
         self.run_code() == 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArchRunnerMode {
+    Auto,
+    Rootless,
+    Proot,
+}
+
+fn arch_runner_mode() -> ArchRunnerMode {
+    match std::env::var("LOCALDESKTOP_ARCH_RUNNER")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "rootless" | "rootless-chroot" => ArchRunnerMode::Rootless,
+        "proot" => ArchRunnerMode::Proot,
+        _ => ArchRunnerMode::Auto,
+    }
+}
+
+fn rootless_log_sink(log: Option<&Log>) -> Option<Box<dyn FnMut(String)>> {
+    log.cloned()
+        .map(|cb| {
+            Box::new(move |s: String| {
+                log::info!("{s}");
+                cb(s);
+            }) as Box<dyn FnMut(String)>
+        })
+}
+
+fn build_guest_shell_command(command: &str, user: &str) -> Command {
+    let mut process = if user == "root" {
+        Command::new("/bin/sh")
+    } else {
+        let mut p = Command::new("/usr/bin/runuser");
+        p.arg("-u").arg(user).arg("--").arg("sh");
+        p
+    };
+    process.env_clear();
+
+    if user == "root" {
+        process.env("HOME", "/root");
+    } else {
+        process.env("HOME", format!("/home/{}", user));
+    }
+
+    process
+        .env("LANG", "C.UTF-8")
+        .env(
+            "PATH",
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:/system/bin:/system/xbin",
+        )
+        .env("TMPDIR", "/tmp")
+        .env("USER", user)
+        .env("LOGNAME", user);
+
+    process
+        .arg("-c")
+        .arg(command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    process
+}
+
+fn run_with_proot(
+    command: &str,
+    user: &str,
+    rootfs: &str,
+    binds: &[(String, String)],
+    log: Option<&Log>,
+) -> i32 {
+    let context = get_application_context();
+    let proot_exe = context.native_library_dir.join("libproot.so");
+    let proot_loader = context.native_library_dir.join("libproot_loader.so");
+    let proot_tmp_dir = context.cache_dir.join("proot-tmp");
+    let _ = fs::create_dir_all(&proot_tmp_dir);
+
+    let proot_command = strip_stdbuf_wrapper(command);
+    if proot_command != command {
+        log::info!(
+            "proot fallback: stripped stdbuf wrapper for compatibility: {} -> {}",
+            command,
+            proot_command
+        );
+    }
+
+    log::info!("Running command in arch proot: {}", proot_command);
+    log::info!("As user (proot): {}", user);
+    log::info!("With binds (proot): {:?}", binds);
+
+    let mut proot = Command::new(&proot_exe);
+    proot
+        .env("PROOT_LOADER", &proot_loader)
+        .env("PROOT_TMP_DIR", &proot_tmp_dir)
+        .arg("-0")
+        .arg("-r")
+        .arg(rootfs)
+        .arg("-w")
+        .arg("/");
+
+    for (host, guest) in binds {
+        proot.arg("-b");
+        if host == guest {
+            proot.arg(host);
+        } else {
+            let mut bind = OsString::from(host);
+            bind.push(":");
+            bind.push(guest);
+            proot.arg(bind);
+        }
+    }
+
+    let guest_cmd = build_guest_shell_command(proot_command, user);
+    proot.arg("/usr/bin/env");
+    proot.args(guest_cmd.get_args());
+    proot.stdin(Stdio::null());
+    run_host_command_streaming(proot, log)
+}
+
+fn strip_stdbuf_wrapper(command: &str) -> &str {
+    command.strip_prefix("stdbuf -oL ").unwrap_or(command)
+}
+
+fn run_host_command_streaming(mut command: Command, log: Option<&Log>) -> i32 {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .unwrap_or_else(|e| panic!("failed to spawn process {:?}: {e}", command));
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let log_cb = log.cloned();
+
+    let t_out = stdout.map(|pipe| {
+        let log_cb = log_cb.clone();
+        thread::spawn(move || stream_lines(pipe, log_cb))
+    });
+    let t_err = stderr.map(|pipe| thread::spawn(move || stream_lines(pipe, log_cb)));
+
+    let status = child.wait().expect("failed waiting for child process");
+    if let Some(t) = t_out {
+        let _ = t.join();
+    }
+    if let Some(t) = t_err {
+        let _ = t.join();
+    }
+
+    if let Some(code) = status.code() {
+        code
+    } else if let Some(sig) = status.signal() {
+        128 + sig
+    } else {
+        1
+    }
+}
+
+fn stream_lines<R: std::io::Read>(reader: R, log: Option<Log>) {
+    let mut reader = BufReader::new(reader);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                let msg = String::from_utf8_lossy(&line)
+                    .trim_end_matches(['\r', '\n'])
+                    .to_string();
+                if msg.is_empty() {
+                    continue;
+                }
+                if let Some(cb) = &log {
+                    cb(msg);
+                } else {
+                    log::info!("{}", msg);
+                }
+            }
+            Err(e) => {
+                log::warn!("failed reading child output: {e}");
+                break;
+            }
+        }
     }
 }
 
@@ -188,6 +372,101 @@ fn ensure_resolv_conf(rootfs_dir: &Path) {
     if !resolv.exists() {
         fs::write(&resolv, "nameserver 1.1.1.1\nnameserver 8.8.8.8\n").unwrap();
     }
+}
+
+fn ensure_pacman_conf_compat(rootfs_dir: &Path) {
+    let path = rootfs_dir.join("etc/pacman.conf");
+    let Ok(content) = fs::read_to_string(&path) else {
+        return;
+    };
+    let mut changed = false;
+    let mut out = String::with_capacity(content.len() + 32);
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("DownloadUser") {
+            if !trimmed.starts_with('#') {
+                out.push_str("# ");
+                out.push_str(line);
+                out.push('\n');
+                changed = true;
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if changed {
+        let _ = fs::write(&path, out);
+    }
+}
+
+fn ensure_mtab_compat(rootfs_dir: &Path) {
+    let etc = rootfs_dir.join("etc");
+    let _ = fs::create_dir_all(&etc);
+    let mtab = etc.join("mtab");
+    if let Ok(meta) = fs::symlink_metadata(&mtab) {
+        if meta.file_type().is_symlink() {
+            if let Ok(target) = fs::read_link(&mtab) {
+                if target == Path::new("/proc/mounts") {
+                    return;
+                }
+            }
+        }
+        let _ = fs::remove_file(&mtab);
+    }
+    let _ = symlink("/proc/mounts", &mtab);
+}
+
+fn ensure_mirrorlist_compat(rootfs_dir: &Path) {
+    let path = rootfs_dir.join("etc/pacman.d/mirrorlist");
+    let _ = fs::create_dir_all(rootfs_dir.join("etc/pacman.d"));
+    let content = fs::read_to_string(&path).unwrap_or_default();
+    let preferred = [
+        "Server = http://fl.us.mirror.archlinuxarm.org/$arch/$repo",
+        "Server = http://nj.us.mirror.archlinuxarm.org/$arch/$repo",
+        "Server = http://de3.mirror.archlinuxarm.org/$arch/$repo",
+        "Server = http://eu.mirror.archlinuxarm.org/$arch/$repo",
+        "Server = http://mirror.archlinuxarm.org/$arch/$repo",
+    ];
+    let marker = "# localdesktop: preferred ArchLinuxARM mirrors";
+    let has_server = content
+        .lines()
+        .any(|line| line.trim_start().starts_with("Server = "));
+    if content.trim().is_empty() || !has_server {
+        let mut fresh = String::new();
+        fresh.push_str(marker);
+        fresh.push('\n');
+        for line in preferred {
+            fresh.push_str(line);
+            fresh.push('\n');
+        }
+        let _ = fs::write(&path, fresh);
+        return;
+    }
+
+    let mut out = String::new();
+    if !content.contains(marker) {
+        out.push_str(marker);
+        out.push('\n');
+        for line in preferred {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+
+    for line in content.lines() {
+        if line.trim() == "Server = http://mirror.archlinuxarm.org/$arch/$repo" {
+            out.push_str("# ");
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    let _ = fs::write(&path, out);
 }
 
 fn populate_core_db_from_local_mirror(rootfs_dir: &Path) {
@@ -287,6 +566,8 @@ fn run_guest(program: &str, args: &[&str]) -> i32 {
         command: cmd,
         rootfs: rootfs.clone(),
         binds: default_binds(&rootfs),
+        emulate_root_identity: true,
+        emulate_sigsys: false,
         shim_exe: shim,
         log: None,
     })
@@ -307,7 +588,7 @@ fn run_guest(program: &str, args: &[&str]) -> i32 {
         // but it must not crash or fail to exec. This exercises reading `/etc/pacman.conf`
         // and included files like `/etc/pacman.d/mirrorlist`.
         let fragments = [
-            ["-Qg", "lxqt"].as_slice(),
+            ["-Q", "lxqt-session"].as_slice(),
             ["-Q", "xorg-xwayland"].as_slice(),
             ["-Q", "lxqt-wayland-session"].as_slice(),
             ["-Q", "labwc"].as_slice(),
@@ -356,7 +637,7 @@ fn run_guest(program: &str, args: &[&str]) -> i32 {
         // Mirror command_check style: each query can succeed or fail depending on local state,
         // but should execute cleanly under rootless_chroot.
         let packages = [
-            "lxqt",
+            "lxqt-session",
             "xorg-xwayland",
             "lxqt-wayland-session",
             "labwc",

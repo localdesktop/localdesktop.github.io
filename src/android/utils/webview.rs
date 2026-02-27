@@ -1,5 +1,3 @@
-use std::thread;
-
 use jni::objects::{JObject, JValue};
 use jni::sys::_jobject;
 use jni::JNIEnv;
@@ -7,18 +5,52 @@ use winit::platform::android::activity::AndroidApp;
 
 /// A function that can be passed into `run_in_jvm` to show a WebView popup.
 pub fn show_webview_popup(env: &mut JNIEnv, android_app: &AndroidApp, url: &str) {
+    fn log_and_clear_exception(env: &mut JNIEnv, context: &str) {
+        match env.exception_check() {
+            Ok(true) => {
+                log::error!("{context}: Java exception pending");
+                if let Err(e) = env.exception_describe() {
+                    log::error!("{context}: failed to describe Java exception: {:?}", e);
+                }
+                if let Err(e) = env.exception_clear() {
+                    log::error!("{context}: failed to clear Java exception: {:?}", e);
+                }
+            }
+            Ok(false) => {}
+            Err(e) => log::error!("{context}: failed to check Java exception: {:?}", e),
+        }
+    }
+
+    macro_rules! try_or_return {
+        ($expr:expr, $ctx:literal) => {
+            match $expr {
+                Ok(v) => v,
+                Err(e) => {
+                    log::error!("{}: {:?}", $ctx, e);
+                    log_and_clear_exception(env, $ctx);
+                    return;
+                }
+            }
+        };
+    }
+
     // Convert URL to JNI String
-    let jurl = env.new_string(url).expect("Failed to create JNI string");
+    let jurl = try_or_return!(env.new_string(url), "Failed to create JNI string");
 
     // Get NativeActivity context
     let activity_obj = unsafe { JObject::from_raw(android_app.activity_as_ptr() as *mut _jobject) };
 
     // Prepare a Looper for this thread
-    env.call_static_method("android/os/Looper", "prepare", "()V", &[])
-        .expect("Failed to prepare Looper");
+    try_or_return!(
+        env.call_static_method("android/os/Looper", "prepare", "()V", &[]),
+        "Failed to prepare Looper"
+    );
 
     // 1. Create WebView
-    let webview_class = env.find_class("android/webkit/WebView").unwrap();
+    let webview_class = try_or_return!(
+        env.find_class("android/webkit/WebView"),
+        "Failed to find android/webkit/WebView"
+    );
     let webview = match env.new_object(
         webview_class,
         "(Landroid/content/Context;)V",
@@ -27,54 +59,64 @@ pub fn show_webview_popup(env: &mut JNIEnv, android_app: &AndroidApp, url: &str)
         Ok(obj) => obj,
         Err(e) => {
             log::error!("Failed to create WebView object: {:?}", e);
-            if let Ok(java_exception) = env.exception_occurred() {
-                env.exception_describe().unwrap();
-                env.exception_clear().unwrap();
-            } else {
-                log::error!("No exception occurred, but WebView creation failed.");
-            }
-            panic!("Failed to create WebView object");
+            log_and_clear_exception(env, "Failed to create WebView object");
+            return;
         }
     };
 
     // Enable JavaScript
-    let settings = env
-        .call_method(
+    let settings = try_or_return!(
+        env.call_method(
             &webview,
             "getSettings",
             "()Landroid/webkit/WebSettings;",
             &[],
         )
-        .unwrap()
-        .l()
-        .unwrap();
-    env.call_method(settings, "setJavaScriptEnabled", "(Z)V", &[JValue::Bool(1)])
-        .unwrap();
+        .and_then(|v| v.l()),
+        "Failed to get WebView settings"
+    );
+    try_or_return!(
+        env.call_method(settings, "setJavaScriptEnabled", "(Z)V", &[JValue::Bool(1)]),
+        "Failed to enable JavaScript in WebView"
+    );
 
     // Set WebView Client to prevent external browser launch
-    let webview_client_class = env.find_class("android/webkit/WebViewClient").unwrap();
-    let webview_client = env.new_object(webview_client_class, "()V", &[]).unwrap();
-    env.call_method(
+    let webview_client_class = try_or_return!(
+        env.find_class("android/webkit/WebViewClient"),
+        "Failed to find android/webkit/WebViewClient"
+    );
+    let webview_client = try_or_return!(
+        env.new_object(webview_client_class, "()V", &[]),
+        "Failed to create WebViewClient"
+    );
+    try_or_return!(
+        env.call_method(
         &webview,
         "setWebViewClient",
         "(Landroid/webkit/WebViewClient;)V",
         &[(&webview_client).into()],
-    )
-    .unwrap();
+    ),
+        "Failed to set WebViewClient"
+    );
 
     // Load URL
-    env.call_method(
+    try_or_return!(
+        env.call_method(
         &webview,
         "loadUrl",
         "(Ljava/lang/String;)V",
         &[(&jurl).into()],
-    )
-    .unwrap();
+    ),
+        "Failed to load URL in WebView"
+    );
 
     // 2. Create PopupWindow
-    let popup_class = env.find_class("android/widget/PopupWindow").unwrap();
-    let popup = env
-        .new_object(
+    let popup_class = try_or_return!(
+        env.find_class("android/widget/PopupWindow"),
+        "Failed to find android/widget/PopupWindow"
+    );
+    let popup = try_or_return!(
+        env.new_object(
             popup_class,
             "(Landroid/view/View;II)V",
             &[
@@ -82,11 +124,13 @@ pub fn show_webview_popup(env: &mut JNIEnv, android_app: &AndroidApp, url: &str)
                 JValue::Int(-1),   // MATCH_PARENT width
                 JValue::Int(-1),   // MATCH_PARENT height
             ],
-        )
-        .unwrap();
+        ),
+        "Failed to create PopupWindow"
+    );
 
     // 3. Show PopupWindow
-    env.call_method(
+    try_or_return!(
+        env.call_method(
         popup,
         "showAtLocation",
         "(Landroid/view/View;III)V",
@@ -96,20 +140,29 @@ pub fn show_webview_popup(env: &mut JNIEnv, android_app: &AndroidApp, url: &str)
             JValue::Int(0),    // X Position
             JValue::Int(0),    // Y Position
         ],
-    )
-    .unwrap();
+    ),
+        "Failed to show PopupWindow"
+    );
 
     // Start the Looper
-    env.call_static_method("android/os/Looper", "loop", "()V", &[])
-        .expect("Failed to start Looper");
+    if let Err(e) = env.call_static_method("android/os/Looper", "loop", "()V", &[]) {
+        log::error!("Failed to start Looper: {:?}", e);
+        log_and_clear_exception(env, "Failed to start Looper");
+        return;
+    }
 
     // Quit the Looper when done
-    let looper_class = env.find_class("android/os/Looper").unwrap();
-    let looper = env
-        .call_static_method(looper_class, "myLooper", "()Landroid/os/Looper;", &[])
-        .unwrap()
-        .l()
-        .unwrap();
-    env.call_method(&looper, "quit", "()V", &[])
-        .expect("Failed to quit Looper");
+    let looper_class = try_or_return!(
+        env.find_class("android/os/Looper"),
+        "Failed to find android/os/Looper"
+    );
+    let looper = try_or_return!(
+        env.call_static_method(looper_class, "myLooper", "()Landroid/os/Looper;", &[])
+            .and_then(|v| v.l()),
+        "Failed to get current Looper"
+    );
+    if let Err(e) = env.call_method(&looper, "quit", "()V", &[]) {
+        log::error!("Failed to quit Looper: {:?}", e);
+        log_and_clear_exception(env, "Failed to quit Looper");
+    }
 }

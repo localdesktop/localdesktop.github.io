@@ -235,6 +235,28 @@ unsafe fn write_tpidr_el0(v: u64) {
     asm!("msr TPIDR_EL0, {v}", v = in(reg) v, options(nostack, preserves_flags));
 }
 
+#[inline(always)]
+unsafe fn shim_rt_sigreturn_runtime_addr() -> u64 {
+    let p: usize;
+    asm!(
+        "adr {out}, shim_rt_sigreturn",
+        out = out(reg) p,
+        options(nostack, preserves_flags)
+    );
+    p as u64
+}
+
+#[inline(always)]
+unsafe fn shim_sigsys_handler_runtime_addr() -> u64 {
+    let p: usize;
+    asm!(
+        "adr {out}, shim_sigsys_handler",
+        out = out(reg) p,
+        options(nostack, preserves_flags)
+    );
+    p as u64
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct KernelSigSet {
@@ -255,8 +277,8 @@ struct KernelSigAction {
 struct SigContext {
     fault_address: u64,
     regs: [u64; 31],
-    sp: u64,
     pc: u64,
+    sp: u64,
     pstate: u64,
     __reserved: [u8; 4096],
 }
@@ -275,6 +297,7 @@ struct UContext {
 struct KernelStackT {
     ss_sp: u64,
     ss_flags: i32,
+    _pad: i32,
     ss_size: u64,
 }
 
@@ -317,6 +340,7 @@ unsafe fn sys_disable_sigaltstack_and_handlers() {
     let ss = KernelStackT {
         ss_sp: 0,
         ss_flags: SS_DISABLE,
+        _pad: 0,
         ss_size: 0,
     };
     let r1 = syscall2(SYS_SIGALTSTACK, (&ss as *const KernelStackT) as usize, 0);
@@ -396,6 +420,121 @@ struct SigInfoHeader {
     _pad: i32,
 }
 
+#[repr(C)]
+struct SigInfoSigSys {
+    hdr: SigInfoHeader,
+    call_addr: u64,
+    syscall: i32,
+    arch: u32,
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn shim_sigsys_handler(_sig: i32, info: *mut u8, uctx: *mut UContext) {
+    if uctx.is_null() {
+        return;
+    }
+    let uc = &mut *uctx;
+    let mut sysno: i32 = uc.uc_mcontext.regs[8] as i32;
+    let mut call_addr: u64 = 0;
+    if !info.is_null() {
+        let sigsys = &*(info as *const SigInfoSigSys);
+        sysno = sigsys.syscall;
+        call_addr = sigsys.call_addr;
+    }
+    if SHIM_DEBUG_LOGS {
+        write_hex("loader_shim: SIGSYS sysno=", sysno as Word);
+        write_hex("loader_shim: SIGSYS pc=", uc.uc_mcontext.pc as Word);
+        write_hex("loader_shim: SIGSYS sp=", uc.uc_mcontext.sp as Word);
+        write_hex("loader_shim: SIGSYS call_addr=", call_addr as Word);
+    }
+    let mut resume_pc = uc.uc_mcontext.pc;
+    let mut resume_pc_from_call_addr = false;
+    if call_addr != 0 {
+        let p = call_addr as *const u32;
+        let insn = if !p.is_null() {
+            core::ptr::read_unaligned(p)
+        } else {
+            0
+        };
+        if insn == 0xd4000001 {
+            // si_call_addr points at the trapping `svc #0`; resume at the next instruction.
+            resume_pc = call_addr.wrapping_add(4);
+            resume_pc_from_call_addr = true;
+        } else if call_addr >= 4 {
+            let p_prev = (call_addr - 4) as *const u32;
+            let prev = if !p_prev.is_null() {
+                core::ptr::read_unaligned(p_prev)
+            } else {
+                0
+            };
+            if prev == 0xd4000001 {
+                // Some kernels may report the post-svc address in `si_call_addr`.
+                resume_pc = call_addr;
+                resume_pc_from_call_addr = true;
+            }
+        }
+        if SHIM_DEBUG_LOGS {
+            write_hex("loader_shim: SIGSYS call_addr_resume_pc=", resume_pc as Word);
+        }
+    }
+    let should_advance_pc = if resume_pc_from_call_addr {
+        false
+    } else {
+        let pc = uc.uc_mcontext.pc as *const u32;
+        let insn = if !pc.is_null() {
+            // Best-effort decode of the faulting instruction. If the PC is already past the
+            // `svc #0`, advancing again skips a real instruction and corrupts guest startup.
+            core::ptr::read_unaligned(pc)
+        } else {
+            0
+        };
+        let is_svc_0 = insn == 0xd4000001;
+        if SHIM_DEBUG_LOGS {
+            write_hex("loader_shim: SIGSYS insn=", insn as Word);
+        }
+        is_svc_0
+    };
+
+    // Emulate (skip) selected syscalls.
+    // On aarch64, return value is in x0.
+    if sysno == 99 {
+        uc.uc_mcontext.regs[0] = 0;
+        uc.uc_mcontext.pc = resume_pc;
+        if should_advance_pc {
+            uc.uc_mcontext.pc = uc.uc_mcontext.pc.wrapping_add(4);
+        }
+        return;
+    }
+    if sysno == 439 {
+        // faccessat2: Android seccomp commonly traps this. Many userspace libraries use it
+        // as a best-effort capability/permission probe. Match proot: return ENOSYS so callers
+        // can fall back to older syscalls.
+        write_str("loader_shim: emu faccessat2 -> ENOSYS\n");
+        uc.uc_mcontext.regs[0] = (!38u64).wrapping_add(1); // -ENOSYS
+        uc.uc_mcontext.pc = resume_pc;
+        if should_advance_pc {
+            uc.uc_mcontext.pc = uc.uc_mcontext.pc.wrapping_add(4);
+        }
+        return;
+    }
+    if sysno == 293 {
+        // Match PRoot-style behavior for unsupported rseq: let glibc disable it.
+        uc.uc_mcontext.regs[0] = (!38u64).wrapping_add(1); // -ENOSYS
+        uc.uc_mcontext.pc = resume_pc;
+        if should_advance_pc {
+            uc.uc_mcontext.pc = uc.uc_mcontext.pc.wrapping_add(4);
+        }
+        return;
+    }
+
+    // Default: pretend ENOSYS.
+    uc.uc_mcontext.regs[0] = (!38u64).wrapping_add(1); // -ENOSYS
+    uc.uc_mcontext.pc = resume_pc;
+    if should_advance_pc {
+        uc.uc_mcontext.pc = uc.uc_mcontext.pc.wrapping_add(4);
+    }
+}
+
 unsafe fn install_sigsys_emulation_handler() {
     // Install a SIGSYS handler with our own restorer so we can survive SECCOMP_RET_TRAP after
     // unmapping Android's linker64.
@@ -405,46 +544,30 @@ unsafe fn install_sigsys_emulation_handler() {
     // - Normally bionic/linker64 provides the signal return machinery.
     // - After we unmap linker64, SIGSYS must still be handled because glibc ld.so may probe
     //   syscalls (e.g. set_robust_list, rseq). We emulate the minimum needed for bring-up.
-    unsafe extern "C" fn sigsys_handler(_sig: i32, info: *mut u8, uctx: *mut UContext) {
-        if uctx.is_null() {
-            return;
-        }
-        let uc = &mut *uctx;
-        // Prefer the syscall number from the trapped register state (x8) rather than relying on
-        // `siginfo_t` layout details (which are easy to get subtly wrong across ABIs).
-        let sysno: i32 = uc.uc_mcontext.regs[8] as i32;
-
-        // Emulate (skip) selected syscalls.
-        // On aarch64, return value is in x0.
-        if sysno == 99 {
-            // set_robust_list: pretend success.
-            uc.uc_mcontext.regs[0] = 0;
-            uc.uc_mcontext.pc = uc.uc_mcontext.pc.wrapping_add(4);
-            return;
-        }
-        if sysno == 439 {
-            // faccessat2: Android seccomp commonly traps this. Many userspace libraries use it
-            // as a best-effort capability/permission probe. For our rootless environment, treat
-            // it as success rather than aborting on ENOSYS.
-            write_str("loader_shim: emu faccessat2\n");
-            uc.uc_mcontext.regs[0] = 0;
-            uc.uc_mcontext.pc = uc.uc_mcontext.pc.wrapping_add(4);
-            return;
-        }
-
-        // Default: pretend ENOSYS.
-        uc.uc_mcontext.regs[0] = (!38u64).wrapping_add(1); // -ENOSYS
-        uc.uc_mcontext.pc = uc.uc_mcontext.pc.wrapping_add(4);
-    }
-
     unsafe extern "C" {
         fn shim_rt_sigreturn();
     }
 
+    let sigsys_handler_ptr = shim_sigsys_handler_runtime_addr();
+    let shim_rt_sigreturn_ptr = shim_rt_sigreturn_runtime_addr();
+    write_hex("loader_shim: shim_sigsys_handler(runtime)=", sigsys_handler_ptr as Word);
+    write_hex(
+        "loader_shim: shim_sigsys_handler(linktime)=",
+        shim_sigsys_handler as usize as Word,
+    );
+    write_hex(
+        "loader_shim: shim_rt_sigreturn(runtime)=",
+        shim_rt_sigreturn_ptr as Word,
+    );
+    write_hex(
+        "loader_shim: shim_rt_sigreturn(linktime)=",
+        shim_rt_sigreturn as usize as Word,
+    );
+
     let act = KernelSigAction {
-        sa_handler: sigsys_handler as usize as u64,
+        sa_handler: sigsys_handler_ptr,
         sa_flags: SA_SIGINFO | SA_RESTORER,
-        sa_restorer: shim_rt_sigreturn as usize as u64,
+        sa_restorer: shim_rt_sigreturn_ptr,
         sa_mask: KernelSigSet { sig: [0] },
     };
     let r = syscall4(
@@ -997,6 +1120,7 @@ pub unsafe extern "C" fn rust_start(sp: *mut Word) -> ! {
     write_str("loader_shim: start\n");
     // Preserve the original kernel-provided stack pointer.
     let orig_sp = sp as usize;
+    let mut sp = sp;
 
     // argv[1] is the target path (the tracer invokes: loader_shim <target> [args...]).
     let argc = *sp as usize;
@@ -1093,8 +1217,9 @@ pub unsafe extern "C" fn rust_start(sp: *mut Word) -> ! {
     // - So we first install our own signal return plumbing and unmap linker64, then set TPIDR_EL0
     //   to a guest-compatible region right before entering glibc ld.so.
 
-    // Build a new stack that looks like a normal execve() of the target.
-    // This avoids subtle loader expectations around AT_RANDOM/AT_PLATFORM being located on the stack.
+    // Rewrite the original kernel-provided stack in place so it looks like a direct execve() of
+    // the target (remove the loader shim argv prefix and patch auxv). This matches proot's
+    // approach more closely and preserves the kernel's exact stack alignment/placement.
     const MAX_ARGV: usize = 128;
     const MAX_ENVP: usize = 512;
     const MAX_AUX: usize = 256;
@@ -1119,11 +1244,15 @@ pub unsafe extern "C" fn rust_start(sp: *mut Word) -> ! {
         }
     }
 
-    // Collect auxv pairs.
+    // Locate and bounds-check auxv on the original stack.
     let mut auxp = envp.add(envc + 1) as *mut Word;
-    let mut aux_keys = [0 as Word; MAX_AUX];
-    let mut aux_vals = [0 as Word; MAX_AUX];
     let mut auxc = 0usize;
+    let mut at_random_bytes = [0u8; 16];
+    let mut have_at_random = false;
+    let mut at_platform_bytes = [0u8; 64];
+    let mut at_platform_len = 0usize;
+    let mut at_base_platform_bytes = [0u8; 64];
+    let mut at_base_platform_len = 0usize;
     loop {
         if auxc >= MAX_AUX {
             write_str("loader_shim: auxv too large\n");
@@ -1131,145 +1260,101 @@ pub unsafe extern "C" fn rust_start(sp: *mut Word) -> ! {
         }
         let k = auxp.read_unaligned();
         let v = auxp.add(1).read_unaligned();
-        aux_keys[auxc] = k;
-        aux_vals[auxc] = v;
-        auxc += 1;
+        if k == AT_RANDOM && v != 0 {
+            core::ptr::copy_nonoverlapping(
+                v as usize as *const u8,
+                at_random_bytes.as_mut_ptr(),
+                at_random_bytes.len(),
+            );
+            have_at_random = true;
+        } else if (k == AT_PLATFORM || k == AT_BASE_PLATFORM) && v != 0 {
+            let src = v as usize as *const u8;
+            let mut len = 0usize;
+            while len < at_platform_bytes.len() && *src.add(len) != 0 {
+                len += 1;
+            }
+            if len < at_platform_bytes.len() {
+                let copy_len = len + 1; // include trailing NUL
+                if k == AT_PLATFORM {
+                    core::ptr::copy_nonoverlapping(src, at_platform_bytes.as_mut_ptr(), copy_len);
+                    at_platform_len = copy_len;
+                } else {
+                    core::ptr::copy_nonoverlapping(
+                        src,
+                        at_base_platform_bytes.as_mut_ptr(),
+                        copy_len,
+                    );
+                    at_base_platform_len = copy_len;
+                }
+            }
+        }
         auxp = auxp.add(2);
+        auxc += 1;
         if k == AT_NULL {
             break;
         }
     }
-
-    // Allocate a new stack region.
-    let stack_len = 8 * 1024 * 1024usize;
-    let stack = sys_mmap(0, stack_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if stack < 0 {
-        write_str("loader_shim: mmap stack failed\n");
-        sys_exit(127);
+    // Rewrite argc and argv[] in place.
+    (sp as *mut Word).write_unaligned(new_argc as Word);
+    for i in 0..new_argc {
+        let p = *argv.add(i + target_idx);
+        (argv.add(i) as *mut *const u8).write_unaligned(p);
     }
-    let mut sp2 = ((stack as usize) + stack_len) & !0xf;
+    (argv.add(new_argc) as *mut *const u8).write_unaligned(core::ptr::null());
 
-    // Copy argv/env strings onto the new stack (from high to low addresses).
-    let mut new_argv_ptrs = [core::ptr::null::<u8>(); MAX_ARGV];
-    for i in (0..new_argc).rev() {
-        let src = *argv.add(i + target_idx);
-        // Copy cstring including NUL.
-        let mut len = 0usize;
-        while len < 4096 && *src.add(len) != 0 {
-            len += 1;
-        }
-        len += 1; // NUL
-        sp2 -= len;
-        let dst = sp2 as *mut u8;
-        core::ptr::copy_nonoverlapping(src, dst, len);
-        new_argv_ptrs[i] = dst;
-    }
-
-    let mut new_env_ptrs = [core::ptr::null::<u8>(); MAX_ENVP];
-    for i in (0..envc).rev() {
-        let src = *envp.add(i);
-        let mut len = 0usize;
-        while len < 8192 && *src.add(len) != 0 {
-            len += 1;
-        }
-        len += 1;
-        sp2 -= len;
-        let dst = sp2 as *mut u8;
-        core::ptr::copy_nonoverlapping(src, dst, len);
-        new_env_ptrs[i] = dst;
-    }
-
-    // Copy and repoint selected auxv pointer payloads onto the new stack.
-    for i in 0..auxc {
-        match aux_keys[i] {
-            AT_PLATFORM | AT_BASE_PLATFORM => {
-                let src = aux_vals[i] as *const u8;
-                if !src.is_null() {
-                    let mut len = 0usize;
-                    while len < 256 && *src.add(len) != 0 {
-                        len += 1;
-                    }
-                    len += 1;
-                    sp2 -= len;
-                    let dst = sp2 as *mut u8;
-                    core::ptr::copy_nonoverlapping(src, dst, len);
-                    aux_vals[i] = dst as Word;
-                }
-            }
-            AT_RANDOM => {
-                let src = aux_vals[i] as *const u8;
-                if !src.is_null() {
-                    let len = 16usize;
-                    sp2 -= len;
-                    let dst = sp2 as *mut u8;
-                    core::ptr::copy_nonoverlapping(src, dst, len);
-                    aux_vals[i] = dst as Word;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Ensure 16-byte alignment before pushing pointers.
-    sp2 &= !0xf;
-
-    // Compute how many Words we'll push and add a padding word if needed so final SP is 16-aligned.
-    let aux_words = auxc * 2;
-    let total_words = 1 + (new_argc + 1) + (envc + 1) + aux_words;
-    if (total_words & 1) != 0 {
-        sp2 -= core::mem::size_of::<Word>();
-        (sp2 as *mut Word).write_unaligned(0);
-    }
-
-    let mut push = |val: Word| {
-        sp2 -= core::mem::size_of::<Word>();
-        (sp2 as *mut Word).write_unaligned(val);
-    };
+    // Compact the envp+auxv tail down so it immediately follows the shortened argv[] NULL.
+    let tail_src = envp as *mut Word;
+    let tail_dst = argv.add(new_argc + 1) as *mut Word;
+    let tail_words =
+        (auxp as usize).wrapping_sub(tail_src as usize) / core::mem::size_of::<Word>();
+    core::ptr::copy(tail_src, tail_dst, tail_words);
 
     // Patch these auxv values to match our in-memory mappings.
     let phdr = tbias + tinfo.phdr_vaddr;
     let entry = tbias + tinfo.entry;
+    let execfn_ptr = *argv.add(0) as Word;
+    let mut auxp2 = (argv.add(new_argc + 1 + envc + 1)) as *mut Word;
+    // Keep AT_RANDOM / AT_PLATFORM / AT_BASE_PLATFORM pointers as provided by the kernel stack.
+    // PRoot's loader does not rewrite these, and AT_RANDOM directly feeds glibc stack canaries.
+    // Repointing them to a copied page can subtly diverge from expected startup state.
+    let at_random_ptr = if have_at_random { 1 as Word } else { 0 as Word };
+    let at_platform_ptr = if at_platform_len != 0 { 1 as Word } else { 0 as Word };
+    let at_base_platform_ptr = if at_base_platform_len != 0 { 1 as Word } else { 0 as Word };
 
     write_hex("loader_shim: patch_AT_PHDR=", phdr as Word);
-    write_hex("loader_shim: patch_AT_BASE=", istart as Word);
+    write_hex("loader_shim: patch_AT_BASE=", ibias as Word);
     write_hex("loader_shim: patch_AT_ENTRY=", entry as Word);
-    write_hex("loader_shim: patch_AT_EXECFN_PTR=", new_argv_ptrs[0] as Word);
+    write_hex("loader_shim: patch_AT_EXECFN_PTR=", execfn_ptr);
     write_hex("loader_shim: interp_entry_addr=", ientry as Word);
-
-    // Push auxv (reverse order).
-    for i in (0..auxc).rev() {
-        let k = aux_keys[i];
-        let mut v = aux_vals[i];
+    loop {
+        let k = auxp2.read_unaligned();
+        let mut v = auxp2.add(1).read_unaligned();
         match k {
             AT_PHDR => v = phdr as Word,
             AT_PHENT => v = tinfo.phentsize as Word,
             AT_PHNUM => v = tinfo.phnum as Word,
             AT_PAGESZ => v = page_size() as Word,
-            AT_BASE => v = istart as Word,
+            AT_BASE => v = ibias as Word,
             AT_ENTRY => v = entry as Word,
-            AT_EXECFN => v = new_argv_ptrs[0] as Word,
+            AT_EXECFN => v = execfn_ptr,
+            AT_RANDOM if at_random_ptr != 0 => {}
+            AT_PLATFORM if at_platform_ptr != 0 => {}
+            AT_BASE_PLATFORM if at_base_platform_ptr != 0 => {}
             _ => {}
         }
-        push(v);
-        push(k);
+        auxp2.add(1).write_unaligned(v);
+        auxp2 = auxp2.add(2);
+        if k == AT_NULL {
+            break;
+        }
     }
 
-    // envp NULL terminator + envp pointers.
-    push(0);
-    for i in (0..envc).rev() {
-        push(new_env_ptrs[i] as Word);
-    }
-
-    // argv NULL terminator + argv pointers.
-    push(0);
-    for i in (0..new_argc).rev() {
-        push(new_argv_ptrs[i] as Word);
-    }
-
-    // argc
-    push(new_argc as Word);
+    // Keep the kernel-provided initial stack layout (matches PRoot). A temporary header-relocation
+    // experiment helped diagnostics but diverges from the startup state glibc expects.
 
     write_str("loader_shim: jumping\n");
+    write_hex("loader_shim: final_sp=", sp as Word);
+    write_hex("loader_shim: final_sp_mod16=", (sp as usize & 0xf) as Word);
     // Ordering here is deliberate:
     // 1) Neutralize Android's signal stack/handlers (avoid sigchain surprises).
     // 2) Reset signal handlers so nothing points into linker64.
@@ -1277,7 +1362,15 @@ pub unsafe extern "C" fn rust_start(sp: *mut Word) -> ! {
     // 4) Unmap linker64 so host runtime can't accidentally run after we switch to guest TLS.
     sys_disable_sigaltstack_and_handlers();
     reset_all_signal_handlers_to_default();
-    install_sigsys_emulation_handler();
+    // Prefer ptrace-side seccomp/SIGSYS emulation on Android rootless path. Shim-side SIGSYS
+    // handling is a fallback, but some kernels expose an unreliable ucontext PC for seccomp SIGSYS
+    // (observed at non-`svc` instructions), which can corrupt guest startup if the shim handles it.
+    // Keep the code available, but disable installation by default.
+    // Prefer ptrace-side SIGSYS emulation when enabled in the tracer; keep shim-side support
+    // available for fallback experiments.
+    // Prefer ptrace-side SIGSYS emulation when enabled in the tracer; keep shim-side support
+    // available for fallback experiments.
+    // install_sigsys_emulation_handler();
     unmap_android_linker64();
 
     // Install a glibc-compatible "thread pointer" region for the guest loader.
@@ -1287,22 +1380,27 @@ pub unsafe extern "C" fn rust_start(sp: *mut Word) -> ! {
     // This is inherently risky on Android (host code expects bionic TLS), which is why we
     // aggressively remove host loader influence above. At this point we want "as little Android
     // runtime as possible" and "as much Linux/glibc illusion as needed" to let ld.so initialize.
-    let fake_tls_len = 0x20000usize;
-    let fake_tls = sys_mmap(0, fake_tls_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if fake_tls >= 0 {
-        let base = fake_tls as usize;
-        let tp_new = (base + 0x10000) as u64;
-        let dtv = (base + 0x1000) as usize;
-        (dtv as *mut u64).write_volatile(0); // generation
-        for i in 1..128usize {
-            ((dtv as *mut u64).add(i * 2)).write_volatile(!0u64);
-            ((dtv as *mut u64).add(i * 2 + 1)).write_volatile(0);
-        }
-        (tp_new as *mut u64).write_volatile(dtv as u64);
-        write_hex("loader_shim: TPIDR_EL0_guest=", tp_new as Word);
-        write_tpidr_el0(tp_new);
+    // Install a dedicated guest TLS scratch region for glibc ld.so. The repeated stack-smashing
+    // aborts during early startup strongly suggest glibc is touching stack-guard/TLS state via
+    // Android's bionic TPIDR_EL0 layout. Give it a much larger private region and place TP in the
+    // middle so both negative and positive offsets are safe until glibc installs its real TCB.
+    let guest_tls_len = 8 * 1024 * 1024usize;
+    let guest_tls = sys_mmap(
+        0,
+        guest_tls_len,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0,
+    );
+    if guest_tls > 0 {
+        let guest_tp = ((guest_tls as usize) + guest_tls_len / 2) & !0xfusize;
+        write_hex("loader_shim: guest_tls_base=", guest_tls as Word);
+        write_hex("loader_shim: guest_tls_len=", guest_tls_len as Word);
+        write_hex("loader_shim: setting TPIDR_EL0=", guest_tp as Word);
+        write_tpidr_el0(guest_tp as u64);
     } else {
-        write_hex("loader_shim: fake_tls mmap failed ret=", fake_tls as Word);
+        write_str("loader_shim: guest TLS mmap failed, keeping host TPIDR_EL0\n");
     }
 
     asm!(
@@ -1311,7 +1409,7 @@ pub unsafe extern "C" fn rust_start(sp: *mut Word) -> ! {
         // (proot-rs only clears x0; relying on x1/x2 values is not ABI-stable.)
         "mov x0, #0",
         "br {entry}",
-        stack = in(reg) sp2,
+        stack = in(reg) sp as usize,
         entry = in(reg) ientry as usize,
         options(noreturn)
     );

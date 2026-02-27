@@ -3,13 +3,15 @@ use nix::sys::ptrace::AddressType;
 use nix::sys::{ptrace, wait};
 use nix::unistd::Pid;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::{CString, OsString},
     io::Read,
     os::unix::ffi::OsStrExt,
     os::unix::process::CommandExt,
     path::Path,
+    ptr,
     process::{Command, Stdio},
+    time::{Duration, Instant},
 };
 use std::{fs, mem};
 
@@ -17,6 +19,8 @@ pub struct Args<'a> {
     pub command: Command,
     pub rootfs: String,
     pub binds: Vec<(String, String)>, // host_path:guest_path
+    pub emulate_root_identity: bool,
+    pub emulate_sigsys: bool,
     // Path to the external loader-shim binary.
     pub shim_exe: OsString,
     pub log: Option<Box<dyn FnMut(String) + 'a>>,
@@ -24,6 +28,13 @@ pub struct Args<'a> {
 
 pub fn rootless_chroot<'a>(args: Args<'a>) -> i32 {
     rootless_chroot_ptrace(args)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WaitMode {
+    AnyWall,
+    Any,
+    KnownTids,
 }
 
 fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
@@ -43,6 +54,13 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
     // - Use external loader-shim for dynamically-linked guest ELFs.
     // - Otherwise execute directly (legacy behavior used by tests like `can_ls_root`).
     let shim_exe = args.shim_exe.clone();
+    let shim_exe_abs = {
+        let p = Path::new(std::ffi::OsStr::from_bytes(shim_exe.as_bytes()));
+        fs::canonicalize(p).unwrap_or_else(|_| {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            cwd.join(p)
+        })
+    };
     let mut command = args.command;
     if let Some(prepared) = maybe_wrap_with_external_loader_shim(&command, &args.rootfs, &shim_exe)
     {
@@ -50,7 +68,22 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
     } else {
         command = remap_command_program_in_rootfs(command, &args.rootfs, &mappings);
     }
+    // PRoot explicitly sanitizes LD_* variables when handing execution to a guest loader.
+    // On Android app processes, host loader-related LD_* variables can leak into guest glibc and
+    // destabilize ld-linux startup under our loader-shim path.
+    let mut removed_ld_env = 0usize;
+    for (k, _) in std::env::vars_os() {
+        if let Some(name) = k.to_str() {
+            if name.starts_with("LD_") {
+                command.env_remove(name);
+                removed_ld_env += 1;
+            }
+        }
+    }
     command.env_remove("LD_PRELOAD");
+    if removed_ld_env != 0 {
+        eprintln!("rootless spawn: removed {removed_ld_env} host LD_* env vars");
+    }
     command.current_dir(&args.rootfs);
 
     // Pipe stdout/stderr to Rust
@@ -92,40 +125,168 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
     let mut carry_err = String::new();
     let mut in_syscall_fallback: HashMap<Pid, bool> = HashMap::new();
     let mut pending_sp_restore: HashMap<Pid, PendingSysenterRestore> = HashMap::new();
+    let mut pending_identity_emulation: HashMap<Pid, PendingIdentityEmulation> = HashMap::new();
+    let mut pending_syscall_result_emulation: HashMap<Pid, PendingSyscallResultEmulation> =
+        HashMap::new();
+    let mut pending_sigsys_access_emu: HashMap<Pid, (String, i32, i32)> = HashMap::new();
+    let mut force_next_syscall_entry_after_sigsys: HashSet<Pid> = HashSet::new();
+    let mut traced_tids: HashSet<Pid> = HashSet::from([pid]);
+    let mut pending_clone_stops: HashSet<Pid> = HashSet::new();
+    let tracer_tid = current_tid();
+    let mut wait_mode = WaitMode::KnownTids;
+    let mut last_rescue = Instant::now();
+    let emulate_sigsys =
+        args.emulate_sigsys || std::env::var_os("POLAR_BEAR_PTRACE_EMULATE_SIGSYS").is_some();
     let do_rewrite = true;
     let mut step_remaining: Option<u32> = None;
-    // Mitigation: glibc ld-linux writes TPIDR_EL0 early. On Android, linker64 assumes TPIDR_EL0
-    // points to bionic TLS and can crash in its signal handler if the guest changes it.
-    // We patch the guest ld-linux's `msr TPIDR_EL0, x0` instructions to NOP once it's mapped.
-    // With loader_shim unmapping linker64 and installing its own signal/restorer plumbing,
-    // we want glibc's ld-linux to manage TPIDR_EL0 normally (don't patch out the MSR).
-    let mut patched_guest_tpidr_msr = true;
+    // Mitigation: glibc ld-linux writes TPIDR_EL0 early. On Android, linker64 can still crash in
+    // signal handling paths when the guest mutates TPIDR_EL0 on some devices, so patch the guest
+    // ld-linux `msr TPIDR_EL0, x0` instructions to NOP once the guest loader is mapped.
+    // Broadly NOP-ing guest ld-linux TPIDR_EL0 writes was a bring-up workaround, but it prevents
+    // glibc from installing the real guest TCB/TLS and crashes later in libc init (`__ctype_init`).
+    // Keep it available only as an opt-in debug escape hatch.
+    let patch_guest_tpidr_msr = std::env::var_os("LOCALDESKTOP_PATCH_GUEST_TPIDR_MSR").is_some();
+    let mut patched_guest_tpidr_msr = !patch_guest_tpidr_msr;
     let mut exit_code: i32 = 1;
     loop {
-        match wait::waitpid(Pid::from_raw(-1), Some(wait::WaitPidFlag::__WALL)) {
+        let wait_result = match wait_mode {
+            WaitMode::AnyWall => match waitpid_raw(
+                Pid::from_raw(-1),
+                wait::WaitPidFlag::__WALL.bits(),
+            ) {
+                Err(nix::errno::Errno::EINVAL) => {
+                    wait_mode = WaitMode::KnownTids;
+                    eprintln!(
+                        "waitpid(__WALL) returned EINVAL; switching to traced-TID polling"
+                    );
+                    wait_for_known_tracee_event(&traced_tids)
+                }
+                other => other,
+            },
+            WaitMode::Any => waitpid_raw(Pid::from_raw(-1), 0),
+            WaitMode::KnownTids => wait_for_known_tracee_event(&traced_tids),
+        };
+        let wait_result = match wait_result {
+            Err(nix::errno::Errno::EINVAL) if wait_mode == WaitMode::Any => {
+                wait_mode = WaitMode::KnownTids;
+                eprintln!("waitpid(-1) returned EINVAL; switching to traced-TID polling");
+                wait_for_known_tracee_event(&traced_tids)
+            }
+            other => other,
+        };
+        match wait_result {
             Ok(wait::WaitStatus::PtraceSyscall(tracee)) => {
+                traced_tids.insert(tracee);
+                maybe_periodic_rescue(
+                    wait_mode,
+                    &mut last_rescue,
+                    &mut traced_tids,
+                    tracer_tid,
+                    trace_opts,
+                    &mut pending_clone_stops,
+                );
                 drain_stdout(&mut stdout, &mut buf, &mut carry, &mut args.log);
                 drain_stdout(&mut stderr, &mut buf, &mut carry_err, &mut args.log);
 
-                let is_entry = ptrace_syscall_is_entry(tracee, &mut in_syscall_fallback);
+                let is_entry = ptrace_syscall_is_entry(
+                    tracee,
+                    &mut in_syscall_fallback,
+                    &mut force_next_syscall_entry_after_sigsys,
+                );
                 if let Ok(regs) = read_regs(tracee) {
+                    if is_entry {
+                        let current_sys = regs.regs[8] as i64;
+                        let pending_mismatch = pending_sp_restore
+                            .get(&tracee)
+                            .map(|p| p.syscall)
+                            .filter(|sys| *sys != current_sys);
+                        if let Some(pending_sys) = pending_mismatch {
+                                if let Some(pending) = pending_sp_restore.remove(&tracee) {
+                                    let stack_adjusted = !pending.stack_write_restores.is_empty();
+                                    if stack_adjusted {
+                                        restore_tracee_stack_writes(tracee, &pending.stack_write_restores);
+                                    }
+                                    if stack_adjusted {
+                                        if let Ok(mut regs_fix) = read_regs(tracee) {
+                                            if regs_fix.sp < pending.original_sp {
+                                        eprintln!(
+                                            "restored stale pending syscall stack on next sysenter: tid={} pending_sys={} current_sys={} sp=0x{:x} -> 0x{:x}",
+                                            tracee,
+                                            pending_sys,
+                                            current_sys,
+                                            regs_fix.sp,
+                                            pending.original_sp
+                                        );
+                                        regs_fix.sp = pending.original_sp;
+                                        let _ = write_regs(tracee, &regs_fix);
+                                    }
+                                }
+                                    }
+                                }
+                                pending_syscall_result_emulation.remove(&tracee);
+                        }
+                    }
+                    if is_entry {
+                        let sys = regs.regs[8] as i64;
+                        if sys == nix::libc::SYS_set_robust_list || sys == 293 {
+                            eprintln!(
+                                "syscall-entry observe: tid={} sys={} pc=0x{:x} sp=0x{:x} x0=0x{:x} x1=0x{:x} x2=0x{:x}",
+                                tracee,
+                                sys,
+                                regs.pc,
+                                regs.sp,
+                                regs.regs[0],
+                                regs.regs[1],
+                                regs.regs[2]
+                            );
+                        }
+                    }
+                    if args.emulate_root_identity {
+                        if is_entry {
+                            if let Some(pending) = capture_pending_identity_emulation(&regs) {
+                                pending_identity_emulation.insert(tracee, pending);
+                            }
+                        } else {
+                            apply_root_identity_emulation(
+                                tracee,
+                                &mut pending_identity_emulation,
+                            );
+                        }
+                    }
+
                     if !patched_guest_tpidr_msr {
                         if let Ok(maps_txt) =
                             fs::read_to_string(format!("/proc/{}/maps", tracee))
                         {
                             if let Some(line) = maps_txt.lines().find(|l| {
-                                l.contains("archfs/usr/lib/ld-linux-aarch64.so.1")
+                                l.contains(&rootfs_abs_s)
+                                    && l.contains("/usr/lib/ld-linux-aarch64.so.1")
                                     && l.contains("r-xp")
                             }) {
-                                if let Some((start, _end)) = parse_map_range(line) {
+                                if let Some((start, end)) = parse_map_range(line) {
                                     let nop = 0xd503201fu32.to_le_bytes(); // AArch64 NOP
-                                                                           // Offsets observed in this rootfs build via `llvm-objdump -d`.
-                                    for off in [0x16ed0u64, 0x19da0u64] {
-                                        let addr = start + off;
-                                        let _ = write_bytes(tracee, addr as usize, &nop);
+                                    let text_len = end.saturating_sub(start) as usize;
+                                    let text =
+                                        read_bytes_process_vm_best_effort(tracee, start as usize, text_len);
+                                    let mut patched_offsets: Vec<u64> = Vec::new();
+                                    for off in (0..text.len().saturating_sub(4)).step_by(4) {
+                                        let word = u32::from_le_bytes([
+                                            text[off],
+                                            text[off + 1],
+                                            text[off + 2],
+                                            text[off + 3],
+                                        ]);
+                                        // AArch64: `msr TPIDR_EL0, xN` encodes as 0xd51bd040 | Rt.
+                                        if (word & !0x1f) == 0xd51bd040 {
+                                            let addr = start + off as u64;
+                                            if write_bytes(tracee, addr as usize, &nop).is_ok() {
+                                                patched_offsets.push(off as u64);
+                                            }
+                                        }
                                     }
                                     eprintln!(
-                                        "patched guest ld-linux: disabled TPIDR_EL0 writes (base=0x{start:x})"
+                                        "patched guest ld-linux: disabled TPIDR_EL0 writes at offsets {:?} (base=0x{start:x})",
+                                        patched_offsets
                                     );
                                     patched_guest_tpidr_msr = true;
                                 }
@@ -134,9 +295,20 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                     }
 
                     let is_guest = should_rewrite_from_pc(tracee, regs.pc, &rootfs_abs_s);
+                    if !is_entry && is_guest {
+                        log_pacman_fs_failure(tracee, &regs, &mappings);
+                    }
 
                     if do_rewrite && is_entry && is_guest {
-                        match rewrite_syscall_path_with_regs(tracee, regs, &mappings) {
+                        // Prefer shim-side SIGSYS emulation when available; ptrace-side syscall
+                        // preemption remains disabled by default because Android seccomp also
+                        // traps many placeholder syscalls on some devices.
+                        match rewrite_syscall_path_with_regs(
+                            tracee,
+                            regs,
+                            &mappings,
+                            Some(&shim_exe_abs),
+                        ) {
                             Ok(Some(r)) => {
                                 pending_sp_restore.insert(tracee, r);
                             }
@@ -147,6 +319,9 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                     if !is_entry {
                         if let Some(r) = pending_sp_restore.remove(&tracee) {
                             if let Ok(mut regs_exit) = read_regs(tracee) {
+                                if let Some(emu) = pending_syscall_result_emulation.remove(&tracee) {
+                                    regs_exit.regs[0] = emu.retval as u64;
+                                }
                                 if let Some((mapped_path, mode, flags)) = r.access_emu.as_ref() {
                                     let ret = regs_exit.regs[0] as i64;
                                     if ret == -(nix::libc::ENETDOWN as i64)
@@ -163,13 +338,81 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                                         regs_exit.regs[0] = fixed as u64;
                                     }
                                 }
-                                regs_exit.sp = r.original_sp;
+                                let is_exec = matches!(
+                                    r.syscall,
+                                    x if x == nix::libc::SYS_execve || x == nix::libc::SYS_execveat
+                                );
+                                if args.emulate_root_identity {
+                                    let ret = regs_exit.regs[0] as i64;
+                                    if fake_root_should_force_perm_success(r.syscall, ret) {
+                                        eprintln!(
+                                            "fake-root perm override: tid={} sys={} ret={} -> 0",
+                                            tracee, r.syscall, ret
+                                        );
+                                        regs_exit.regs[0] = 0;
+                                    }
+                                }
+                                let ret = regs_exit.regs[0] as i64;
+                                if let Some(debug_path) = r.debug_path.as_deref() {
+                                    if debug_path.contains("/var/lib/pacman") {
+                                        eprintln!(
+                                            "pacman rewritten syscall-exit: tid={} sys={} ret={} path={}",
+                                            tracee, r.syscall, ret, debug_path
+                                        );
+                                    }
+                                }
+                                if args.emulate_root_identity && ret == 0 && syscall_is_fstatat(r.syscall) {
+                                    patch_tracee_stat_uid_gid_root(tracee, r.original_args[2]);
+                                }
+                                let stack_adjusted = !r.stack_write_restores.is_empty();
+                                if !is_exec || ret < 0 {
+                                    restore_tracee_stack_writes(tracee, &r.stack_write_restores);
+                                }
+                                regs_exit.regs[1..6].copy_from_slice(&r.original_args[1..6]);
+                                regs_exit.regs[8] = r.original_x8;
+                                if (!is_exec || ret < 0) && stack_adjusted {
+                                    regs_exit.sp = r.original_sp;
+                                }
                                 let _ = write_regs(tracee, &regs_exit);
+                            }
+                        }
+                        if pending_sp_restore.get(&tracee).is_none() {
+                            if let Some(emu) = pending_syscall_result_emulation.remove(&tracee) {
+                                if let Ok(mut regs_exit) = read_regs(tracee) {
+                                    regs_exit.regs[0] = emu.retval as u64;
+                                    let _ = write_regs(tracee, &regs_exit);
+                                }
+                            }
+                            if args.emulate_root_identity {
+                                if let Ok(mut regs_exit) = read_regs(tracee) {
+                                    let ret = regs_exit.regs[0] as i64;
+                                    let sys = regs_exit.regs[8] as i64;
+                                    let mut changed = false;
+                                    if fake_root_should_force_perm_success(sys, ret) {
+                                        eprintln!(
+                                            "fake-root perm override (no pending rewrite): tid={} sys={} ret={} -> 0",
+                                            tracee, sys, ret
+                                        );
+                                        regs_exit.regs[0] = 0;
+                                        changed = true;
+                                    }
+                                    if ret == 0 {
+                                        if sys == nix::libc::SYS_fstat {
+                                            patch_tracee_stat_uid_gid_root(tracee, regs_exit.regs[1]);
+                                        } else if syscall_is_fstatat(sys) {
+                                            patch_tracee_stat_uid_gid_root(tracee, regs_exit.regs[2]);
+                                        }
+                                    }
+                                    if changed {
+                                        let _ = write_regs(tracee, &regs_exit);
+                                    }
+                                }
                             }
                         }
                     }
 
-                    if !is_entry
+                    if false
+                        && !is_entry
                         && is_guest
                         && (regs.regs[8] as i64) == nix::libc::SYS_set_robust_list
                     {
@@ -190,8 +433,24 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                 }
             }
             Ok(wait::WaitStatus::Stopped(tracee, sig)) => {
+                traced_tids.insert(tracee);
                 drain_stdout(&mut stdout, &mut buf, &mut carry, &mut args.log);
                 drain_stdout(&mut stderr, &mut buf, &mut carry_err, &mut args.log);
+
+                if pending_clone_stops.remove(&tracee) {
+                    if let Err(e) = ptrace::setoptions(tracee, trace_opts) {
+                        eprintln!("setoptions(new tracee {tracee}) failed: {e}");
+                    }
+                    let _ = ptrace::syscall(tracee, None);
+                    continue;
+                }
+
+                if sig == nix::sys::signal::Signal::SIGSTOP {
+                    // Suppress ptrace-internal clone/group-stop stops; forwarding SIGSTOP back to the
+                    // guest can leave worker threads permanently stopped and stall pacman sync.
+                    let _ = ptrace::syscall(tracee, None);
+                    continue;
+                }
 
                 if step_remaining.is_some() && sig == nix::sys::signal::Signal::SIGTRAP {
                     if let Some(rem) = step_remaining {
@@ -206,7 +465,317 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                     continue;
                 }
 
+                if sig == nix::sys::signal::Signal::SIGTRAP {
+                    // Most plain SIGTRAP stops here are ptrace-internal (clone/exec/seccomp-adjacent)
+                    // bookkeeping stops, not guest-intended signals. Forwarding them can strand guest
+                    // worker threads in a stopped state; suppress and continue tracing.
+                    let _ = ptrace::syscall(tracee, None);
+                    continue;
+                }
+
+                if sig == nix::sys::signal::Signal::SIGSYS {
+                    if let Some(p) = pending_sp_restore.get(&tracee) {
+                        if let Ok(r) = read_regs(tracee) {
+                            eprintln!(
+                                "SIGSYS with pending rewrite: tid={} pending_sys={} current_sys={} sp=0x{:x} pending_sp=0x{:x}",
+                                tracee,
+                                p.syscall,
+                                r.regs[8] as i64,
+                                r.sp,
+                                p.original_sp
+                            );
+                        }
+                    }
+                    if let Some(pending) = pending_sp_restore.remove(&tracee) {
+                    let current_sysno = read_regs(tracee).ok().map(|r| r.regs[8] as i64);
+                    let pending_is_exec = matches!(
+                        pending.syscall,
+                        x if x == nix::libc::SYS_execve || x == nix::libc::SYS_execveat
+                    );
+                    if pending.syscall == nix::libc::SYS_faccessat2 {
+                        if let Some(v) = pending.access_emu.clone() {
+                            pending_sigsys_access_emu.insert(tracee, v);
+                        }
+                    }
+                    let stack_adjusted = !pending.stack_write_restores.is_empty();
+                    if let Some(cur) = current_sysno {
+                        if cur != pending.syscall {
+                            if let Ok(mut regs_sig) = read_regs(tracee) {
+                                if stack_adjusted {
+                                    restore_tracee_stack_writes(tracee, &pending.stack_write_restores);
+                                }
+                                if stack_adjusted && regs_sig.sp < pending.original_sp {
+                                    eprintln!(
+                                        "restored stale pending syscall stack on SIGSYS mismatch: tid={} pending_sys={} current_sys={} sp=0x{:x} -> 0x{:x}",
+                                        tracee,
+                                        pending.syscall,
+                                        cur,
+                                        regs_sig.sp,
+                                        pending.original_sp
+                                    );
+                                    regs_sig.sp = pending.original_sp;
+                                    let _ = write_regs(tracee, &regs_sig);
+                                }
+                            }
+                            let _ = pending_syscall_result_emulation.remove(&tracee);
+                            eprintln!(
+                                "dropping stale pending stack restore on SIGSYS: tid={} pending_sys={} current_sys={}",
+                                tracee, pending.syscall, cur
+                            );
+                        } else
+                    if pending_is_exec {
+                        // Successful execve/execveat does not produce a normal syscall-exit stop.
+                        // If the new image takes an early signal stop (e.g. seccomp SIGSYS in
+                        // guest ld-linux), restoring the pre-exec synthetic argv/path stack bytes
+                        // corrupts the new process image's stack/register state.
+                        let _ = pending_syscall_result_emulation.remove(&tracee);
+                        eprintln!(
+                            "dropping pending exec stack restore on signal-stop {:?}: tid={} sys={}",
+                            sig, tracee, pending.syscall
+                        );
+                    } else {
+                    // A signal-stop can interrupt a rewritten syscall before we see the matching
+                    // syscall-exit stop (e.g. seccomp SIGSYS). If we keep the synthetic path bytes
+                    // on the tracee stack, repeated interruptions drift SP and eventually corrupt
+                    // returns. Restore SP before forwarding the signal.
+                        if let Ok(mut regs_sig) = read_regs(tracee) {
+                            if stack_adjusted {
+                                restore_tracee_stack_writes(tracee, &pending.stack_write_restores);
+                            }
+                            regs_sig.regs[1..6].copy_from_slice(&pending.original_args[1..6]);
+                            regs_sig.regs[8] = pending.original_x8;
+                            if stack_adjusted && regs_sig.sp != pending.original_sp {
+                                eprintln!(
+                                    "restored pending syscall stack on signal-stop {:?}: tid={} sp=0x{:x} -> 0x{:x} (sys={})",
+                                    sig,
+                                    tracee,
+                                    regs_sig.sp,
+                                    pending.original_sp,
+                                    pending.syscall
+                                );
+                                regs_sig.sp = pending.original_sp;
+                            }
+                            let _ = write_regs(tracee, &regs_sig);
+                        }
+                        let _ = pending_syscall_result_emulation.remove(&tracee);
+                    }
+                    } else if pending_is_exec {
+                        let _ = pending_syscall_result_emulation.remove(&tracee);
+                    } else {
+                        let _ = pending_syscall_result_emulation.remove(&tracee);
+                    }
+                    }
+                }
+
+                if sig == nix::sys::signal::Signal::SIGSYS {
+                    in_syscall_fallback.remove(&tracee);
+                    if !emulate_sigsys {
+                        let _ = ptrace::syscall(tracee, Some(sig));
+                        continue;
+                    }
+                    if let Ok(stop_regs) = read_regs(tracee) {
+                        let sigsys_info = read_siginfo_raw(tracee);
+                        let sigsys_decoded = sigsys_siginfo_decoded(&sigsys_info);
+                        let mut sysno = stop_regs.regs[8] as i64;
+                        if let Some((_, _, _, si_sysno, _, _)) = sigsys_decoded {
+                            if si_sysno >= 0 {
+                                sysno = si_sysno as i64;
+                            }
+                        }
+                        let mut advance_pc = true;
+                        let mut resume_pc = stop_regs.pc;
+                        let mut used_call_addr = false;
+                        if let Some((_signo, _errno, _code, _sys, call_addr, _arch)) = sigsys_decoded
+                        {
+                            if call_addr != 0 {
+                                if let Ok(code) = read_bytes_process_vm(tracee, call_addr as usize, 4) {
+                                    if code.len() == 4 {
+                                        let insn = u32::from_le_bytes([code[0], code[1], code[2], code[3]]);
+                                        if insn == 0xd4000001 {
+                                            resume_pc = call_addr.wrapping_add(4);
+                                            advance_pc = false;
+                                            used_call_addr = true;
+                                        }
+                                    }
+                                }
+                                if !used_call_addr && call_addr >= 4 {
+                                    if let Ok(code_prev) = read_bytes_process_vm(
+                                        tracee,
+                                        call_addr.wrapping_sub(4) as usize,
+                                        4,
+                                    ) {
+                                        if code_prev.len() == 4 {
+                                            let prev = u32::from_le_bytes([
+                                                code_prev[0],
+                                                code_prev[1],
+                                                code_prev[2],
+                                                code_prev[3],
+                                            ]);
+                                            if prev == 0xd4000001 {
+                                                // Some kernels expose the post-svc address.
+                                                resume_pc = call_addr;
+                                                advance_pc = false;
+                                                used_call_addr = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !used_call_addr {
+                        if let Ok(code) = read_bytes_process_vm(tracee, stop_regs.pc as usize, 4) {
+                            if code.len() == 4 {
+                                let insn =
+                                    u32::from_le_bytes([code[0], code[1], code[2], code[3]]);
+                                // AArch64 `svc #0` used by our shim/guest syscall stubs.
+                                if insn != 0xd4000001 {
+                                    advance_pc = false;
+                                }
+                            }
+                        }
+                        }
+                        let mut regs = stop_regs;
+                        let restored_sigsys_frame =
+                            try_restore_sigsys_interrupted_regs_from_stack(tracee, stop_regs, &mut regs);
+                        regs.pc = resume_pc;
+                        let mut emulated = false;
+                        eprintln!(
+                            "SIGSYS stop: sysno={} pc=0x{:x} sp=0x{:x} x0=0x{:x} x1=0x{:x} x2=0x{:x} x8=0x{:x} advance_pc={} restored_frame={} call_addr={} used_call_addr={} -> resume pc=0x{:x} sp=0x{:x}",
+                            sysno,
+                            stop_regs.pc,
+                            stop_regs.sp,
+                            stop_regs.regs[0],
+                            stop_regs.regs[1],
+                            stop_regs.regs[2],
+                            stop_regs.regs[8],
+                            advance_pc
+                            ,
+                            restored_sigsys_frame,
+                            sigsys_decoded
+                                .map(|(_, _, _, _, call_addr, _)| format!("0x{call_addr:x}"))
+                                .unwrap_or_else(|| "?".to_string()),
+                            used_call_addr,
+                            regs.pc,
+                            regs.sp
+                        );
+                        // Match proot's behavior for seccomp-trap SIGSYS handling: emulate/suppress
+                        // the signal and resume, but do not try to "undo" a guessed rt_sigframe on
+                        // the guest stack. The exact stop semantics vary across Android kernels.
+                        match sysno {
+                            99 => {
+                                // Android app seccomp can trap `set_robust_list` even though the
+                                // guest glibc expects a Linux kernel that supports it. Returning
+                                // ENOSYS was tolerated in some bring-up paths but still leaves
+                                // newer glibc/pacman startups unstable. Emulate success here.
+                                regs.regs[0] = 0;
+                                if advance_pc {
+                                    regs.pc = regs.pc.wrapping_add(4);
+                                }
+                                eprintln!(
+                                    "emulated SIGSYS set_robust_list as success: pc=0x{:x} sp=0x{:x} advance_pc={}",
+                                    regs.pc, regs.sp, advance_pc
+                                );
+                                emulated = true;
+                            }
+                            439 => {
+                                // Android kernels frequently seccomp-trap `faccessat2`. Use the
+                                // already rewritten host path (when available) to emulate the access
+                                // check directly; otherwise fall back to ENOSYS for libc compatibility.
+                                let mode = regs.regs[2] as i32;
+                                let flags = regs.regs[3] as i32;
+                                let mut mapped_and_mode: Option<(String, i32, i32)> =
+                                    pending_sigsys_access_emu
+                                        .remove(&tracee)
+                                        .map(|(mapped, mode0, flags0)| (mapped, mode0, flags0));
+                                if mapped_and_mode.is_none() {
+                                    let addr_raw = regs.regs[1] as usize;
+                                    if let Ok((_addr, path_bytes)) =
+                                        read_cstring_candidates_any(tracee, addr_raw)
+                                    {
+                                        let path = String::from_utf8_lossy(&path_bytes).to_string();
+                                        let dirfd = regs.regs[0] as i64;
+                                        let mapped = apply_path_mappings(&path, &mappings).or_else(|| {
+                                            if path.starts_with('/') {
+                                                None
+                                            } else {
+                                                resolve_effective_path_for_tracee(tracee, Some(dirfd), &path)
+                                                    .and_then(|resolved| apply_path_mappings(&resolved, &mappings))
+                                            }
+                                        });
+                                        if let Some(mapped) = mapped {
+                                            mapped_and_mode = Some((mapped, mode, flags));
+                                        }
+                                    }
+                                }
+                                if let Some((mapped_path, mode, flags)) = mapped_and_mode {
+                                    let emu = emulate_faccessat_result(
+                                        tracee,
+                                        &mapped_path,
+                                        mode,
+                                        flags,
+                                    );
+                                    regs.regs[0] = emu as u64;
+                                    eprintln!(
+                                        "emulated SIGSYS faccessat2 via host faccessat: path={} mode={} flags=0x{:x} ret={}",
+                                        mapped_path,
+                                        mode,
+                                        flags,
+                                        emu
+                                    );
+                                } else {
+                                    regs.regs[0] = (-(nix::libc::ENOSYS as i64)) as u64;
+                                    eprintln!(
+                                        "emulated SIGSYS faccessat2 as ENOSYS (no mapped path): pc=0x{:x} sp=0x{:x} advance_pc={}",
+                                        regs.pc, regs.sp, advance_pc
+                                    );
+                                }
+                                if advance_pc {
+                                    regs.pc = regs.pc.wrapping_add(4);
+                                }
+                                emulated = true;
+                            }
+                            293 => {
+                                // Match proot: report unsupported and let glibc disable rseq.
+                                regs.regs[0] = (-(nix::libc::ENOSYS as i64)) as u64;
+                                if advance_pc {
+                                    regs.pc = regs.pc.wrapping_add(4);
+                                }
+                                eprintln!(
+                                    "emulated SIGSYS rseq as ENOSYS: pc=0x{:x} sp=0x{:x} advance_pc={}",
+                                    regs.pc, regs.sp, advance_pc
+                                );
+                                emulated = true;
+                            }
+                            _ => {
+                                // Default seccomp trap behavior for unsupported Linux syscalls:
+                                // make it look like the syscall is unavailable.
+                                regs.regs[0] = (-(nix::libc::ENOSYS as i64)) as u64;
+                                if advance_pc {
+                                    regs.pc = regs.pc.wrapping_add(4);
+                                }
+                                eprintln!(
+                                    "emulated SIGSYS as ENOSYS: sysno={} pc=0x{:x} sp=0x{:x} advance_pc={}",
+                                    sysno, regs.pc, regs.sp, advance_pc
+                                );
+                                emulated = true;
+                            }
+                        }
+                        if emulated {
+                            let _ = write_regs(tracee, &regs);
+                            force_next_syscall_entry_after_sigsys.insert(tracee);
+                            let _ = ptrace::syscall(tracee, None);
+                            continue;
+                        }
+                    }
+                }
+
                 if sig == nix::sys::signal::Signal::SIGSEGV {
+                    if let Some(p) = pending_sp_restore.get(&tracee) {
+                        eprintln!(
+                            "fatal SIGSEGV with pending rewrite: tid={} pending_sys={} pending_sp=0x{:x}",
+                            tracee, p.syscall, p.original_sp
+                        );
+                    }
                     if let Ok(regs) = read_regs(tracee) {
                         let maps_txt = fs::read_to_string(format!("/proc/{}/maps", tracee))
                             .unwrap_or_else(|_| String::new());
@@ -607,18 +1176,43 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                     } else {
                         eprintln!("tracee stopped on SIGSEGV (failed reading regs)");
                     }
-                    // Don't try to "let Android handle it" while we're debugging; it tends to
-                    // jump into linker64/sigchain and obscures the real fault site.
-                    let _ = ptrace::kill(tracee);
-                    let _ = wait::waitpid(tracee, None);
-                    exit_code = 128 + (nix::sys::signal::Signal::SIGSEGV as i32);
-                    break;
+                    // Default behavior: log diagnostics, then forward SIGSEGV so guest handlers
+                    // (loader shim / sigchain) can run. Keep the old kill-on-segv behavior as an
+                    // opt-in debugging mode.
+                    if std::env::var_os("POLAR_BEAR_PTRACE_KILL_ON_SEGV").is_some() {
+                        let _ = ptrace::kill(tracee);
+                        let _ = wait::waitpid(tracee, None);
+                        exit_code = 128 + (nix::sys::signal::Signal::SIGSEGV as i32);
+                        break;
+                    }
+                    let _ = ptrace::syscall(tracee, Some(sig));
+                    continue;
+                }
+                if matches!(
+                    sig,
+                    nix::sys::signal::Signal::SIGBUS
+                        | nix::sys::signal::Signal::SIGILL
+                        | nix::sys::signal::Signal::SIGABRT
+                ) {
+                    if let Some(p) = pending_sp_restore.get(&tracee) {
+                        eprintln!(
+                            "fatal {:?} with pending rewrite: tid={} pending_sys={} pending_sp=0x{:x}",
+                            sig, tracee, p.syscall, p.original_sp
+                        );
+                    }
+                    log_non_segv_signal_diagnostics(tracee, sig);
                 }
                 let _ = ptrace::syscall(tracee, Some(sig));
             }
             Ok(wait::WaitStatus::Exited(tracee, code)) => {
+                traced_tids.remove(&tracee);
                 in_syscall_fallback.remove(&tracee);
                 pending_sp_restore.remove(&tracee);
+                pending_identity_emulation.remove(&tracee);
+                pending_syscall_result_emulation.remove(&tracee);
+                pending_sigsys_access_emu.remove(&tracee);
+                force_next_syscall_entry_after_sigsys.remove(&tracee);
+                pending_clone_stops.remove(&tracee);
                 if tracee != pid {
                     continue;
                 }
@@ -647,29 +1241,121 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                 break;
             }
             Ok(wait::WaitStatus::Signaled(tracee, sig, _)) => {
+                traced_tids.remove(&tracee);
                 in_syscall_fallback.remove(&tracee);
                 pending_sp_restore.remove(&tracee);
+                pending_identity_emulation.remove(&tracee);
+                pending_syscall_result_emulation.remove(&tracee);
+                pending_sigsys_access_emu.remove(&tracee);
+                force_next_syscall_entry_after_sigsys.remove(&tracee);
+                pending_clone_stops.remove(&tracee);
                 if tracee != pid {
                     continue;
                 }
                 drain_stdout(&mut stdout, &mut buf, &mut carry, &mut args.log);
                 drain_stdout(&mut stderr, &mut buf, &mut carry_err, &mut args.log);
+                eprintln!("tracee exited by signal {:?} ({})", sig, sig as i32);
+                log_non_segv_signal_diagnostics(tracee, sig);
                 exit_code = 128 + (sig as i32);
                 break;
             }
-            Ok(wait::WaitStatus::PtraceEvent(tracee, _, _evt)) => {
-                if let Ok(new_raw) = ptrace::getevent(tracee) {
-                    let new_pid = Pid::from_raw(new_raw as i32);
-                    let _ = ptrace::setoptions(new_pid, trace_opts);
-                    let _ = ptrace::syscall(new_pid, None);
+            Ok(wait::WaitStatus::PtraceEvent(tracee, _, evt)) => {
+                traced_tids.insert(tracee);
+                maybe_periodic_rescue(
+                    wait_mode,
+                    &mut last_rescue,
+                    &mut traced_tids,
+                    tracer_tid,
+                    trace_opts,
+                    &mut pending_clone_stops,
+                );
+                match evt {
+                    x if x == nix::libc::PTRACE_EVENT_EXEC => {
+                        pending_sp_restore.remove(&tracee);
+                        pending_syscall_result_emulation.remove(&tracee);
+                        pending_sigsys_access_emu.remove(&tracee);
+                        in_syscall_fallback.remove(&tracee);
+                        force_next_syscall_entry_after_sigsys.remove(&tracee);
+                    }
+                    x if x == nix::libc::PTRACE_EVENT_CLONE
+                        || x == nix::libc::PTRACE_EVENT_FORK
+                        || x == nix::libc::PTRACE_EVENT_VFORK =>
+                    {
+                        match ptrace::getevent(tracee) {
+                            Ok(new_raw) if new_raw > 0 => {
+                                let new_pid = Pid::from_raw(new_raw as i32);
+                                traced_tids.insert(new_pid);
+                                pending_clone_stops.insert(new_pid);
+                                // Android's ptrace waits for CLONE_THREAD children are quirky on
+                                // some devices. Retry briefly here so we can resume the new tracee
+                                // immediately after the clone event, instead of relying on a later
+                                // child-stop wait that may never be reported.
+                                let mut resumed_now = false;
+                                let mut last_err: Option<nix::errno::Errno> = None;
+                                for _ in 0..64 {
+                                    match ptrace::setoptions(new_pid, trace_opts) {
+                                        Ok(()) => match ptrace::syscall(new_pid, None) {
+                                            Ok(()) => {
+                                                pending_clone_stops.remove(&new_pid);
+                                                resumed_now = true;
+                                                break;
+                                            }
+                                            Err(e) => {
+                                                last_err = Some(e);
+                                            }
+                                        },
+                                        Err(e) => {
+                                            last_err = Some(e);
+                                        }
+                                    }
+                                    std::thread::sleep(Duration::from_millis(1));
+                                }
+                                if !resumed_now {
+                                    if let Some(e) = last_err {
+                                        eprintln!("new tracee {new_pid} deferred after retries: {e}");
+                                    }
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => eprintln!("ptrace::getevent({tracee}) failed for clone event: {e}"),
+                        }
+                    }
+                    _ => {}
                 }
                 let _ = ptrace::syscall(tracee, None);
             }
             Ok(wait::WaitStatus::Continued(tracee)) => {
+                traced_tids.insert(tracee);
+                maybe_periodic_rescue(
+                    wait_mode,
+                    &mut last_rescue,
+                    &mut traced_tids,
+                    tracer_tid,
+                    trace_opts,
+                    &mut pending_clone_stops,
+                );
                 let _ = ptrace::syscall(tracee, None);
             }
-            Ok(wait::WaitStatus::StillAlive) => {}
+            Ok(wait::WaitStatus::StillAlive) => {
+                if wait_mode == WaitMode::KnownTids {
+                    rescue_stopped_tracees(
+                        &mut traced_tids,
+                        tracer_tid,
+                        trace_opts,
+                        &mut pending_clone_stops,
+                    );
+                    last_rescue = Instant::now();
+                }
+            }
             Ok(_) => {
+                maybe_periodic_rescue(
+                    wait_mode,
+                    &mut last_rescue,
+                    &mut traced_tids,
+                    tracer_tid,
+                    trace_opts,
+                    &mut pending_clone_stops,
+                );
                 let _ = ptrace::syscall(pid, None);
             }
             Err(e) => {
@@ -678,10 +1364,288 @@ fn rootless_chroot_ptrace<'a>(mut args: Args<'a>) -> i32 {
                 break;
             }
         }
+        if wait_mode == WaitMode::KnownTids {
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     // The end
     exit_code
+}
+
+fn rescue_stopped_tracees(
+    traced_tids: &mut HashSet<Pid>,
+    tracer_tid: Pid,
+    trace_opts: ptrace::Options,
+    pending_clone_stops: &mut HashSet<Pid>,
+) {
+    let mut candidates: Vec<Pid> = traced_tids.iter().copied().collect();
+    for discovered in scan_tracer_owned_tracees(tracer_tid) {
+        if traced_tids.insert(discovered) {
+            eprintln!("rescue: discovered traced pid {} via /proc scan", discovered);
+        }
+        candidates.push(discovered);
+    }
+    candidates.sort_by_key(|p| p.as_raw());
+    candidates.dedup_by_key(|p| p.as_raw());
+
+    for tracee in candidates {
+        if !thread_is_stopped(tracee) {
+            continue;
+        }
+        let _ = ptrace::setoptions(tracee, trace_opts);
+        if ptrace::syscall(tracee, None).is_ok() {
+            pending_clone_stops.remove(&tracee);
+        } else {
+            let err = nix::errno::Errno::last();
+            if matches!(err, nix::errno::Errno::ESRCH | nix::errno::Errno::ECHILD) {
+                traced_tids.remove(&tracee);
+            } else {
+                eprintln!("rescue: ptrace::syscall({tracee}) failed: {err}");
+            }
+        }
+    }
+}
+
+fn maybe_periodic_rescue(
+    wait_mode: WaitMode,
+    last_rescue: &mut Instant,
+    traced_tids: &mut HashSet<Pid>,
+    tracer_tid: Pid,
+    trace_opts: ptrace::Options,
+    pending_clone_stops: &mut HashSet<Pid>,
+) {
+    if wait_mode != WaitMode::KnownTids {
+        return;
+    }
+    let rescue_due = last_rescue.elapsed() >= Duration::from_millis(25);
+    if !rescue_due && pending_clone_stops.is_empty() {
+        return;
+    }
+    rescue_stopped_tracees(traced_tids, tracer_tid, trace_opts, pending_clone_stops);
+    *last_rescue = Instant::now();
+}
+
+fn current_tid() -> Pid {
+    let tid = unsafe { nix::libc::syscall(nix::libc::SYS_gettid as nix::libc::c_long) } as i32;
+    Pid::from_raw(tid)
+}
+
+fn scan_tracer_owned_tracees(tracer_tid: Pid) -> Vec<Pid> {
+    let mut out = Vec::new();
+    let Ok(proc_entries) = fs::read_dir("/proc") else {
+        return out;
+    };
+    for entry in proc_entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(pid_raw) = name.parse::<i32>() else {
+            continue;
+        };
+        let Ok(status) = fs::read_to_string(entry.path().join("status")) else {
+            continue;
+        };
+        let mut tracer = None;
+        for line in status.lines() {
+            if let Some(v) = line.strip_prefix("TracerPid:") {
+                tracer = v.trim().parse::<i32>().ok();
+                break;
+            }
+        }
+        if tracer == Some(tracer_tid.as_raw()) {
+            out.push(Pid::from_raw(pid_raw));
+        }
+    }
+    out
+}
+
+fn thread_is_stopped(tid: Pid) -> bool {
+    let Ok(status) = fs::read_to_string(format!("/proc/{}/status", tid)) else {
+        return false;
+    };
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("State:"))
+        .map(|s| {
+            let s = s.trim_start();
+            s.starts_with('t') || s.starts_with('T')
+        })
+        .unwrap_or(false)
+}
+
+fn wait_for_known_tracee_event(traced_tids: &HashSet<Pid>) -> nix::Result<wait::WaitStatus> {
+    const LINUX_WCLONE: i32 = 0x8000_0000u32 as i32;
+    let mut saw_alive = false;
+    let wnohang = wait::WaitPidFlag::WNOHANG.bits();
+    let wnohang_wall = wnohang | wait::WaitPidFlag::__WALL.bits();
+    let wnohang_wclone = wnohang | LINUX_WCLONE;
+    let waitid_base =
+        nix::libc::WNOHANG | nix::libc::WEXITED | nix::libc::WSTOPPED | nix::libc::WCONTINUED;
+    let waitid_wall = waitid_base | (wait::WaitPidFlag::__WALL.bits() as nix::libc::c_int);
+    let waitid_wclone = waitid_base | (LINUX_WCLONE as nix::libc::c_int);
+    // First prefer nonblocking wait4(-1, ...) for ptrace events; Android appears to report
+    // traced stops more reliably there than through waitid(P_ALL/P_PID) on some devices.
+    for status in [
+        waitpid_raw(Pid::from_raw(-1), wnohang_wall),
+        waitpid_raw(Pid::from_raw(-1), wnohang_wclone),
+        waitpid_raw(Pid::from_raw(-1), wnohang),
+    ] {
+        match status {
+            Ok(wait::WaitStatus::StillAlive) | Err(nix::errno::Errno::EINVAL) => {}
+            Ok(status) => return Ok(status),
+            Err(nix::errno::Errno::ECHILD) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    // Android kernels/userspace can be inconsistent for per-TID waits on traced clone threads.
+    // First poll globally (P_ALL) in nonblocking mode so we don't miss a ready tracee event.
+    for status in [
+        waitid_any_raw(waitid_wall),
+        waitid_any_raw(waitid_wclone),
+        waitid_any_raw(waitid_base),
+    ] {
+        match status {
+            Ok(wait::WaitStatus::StillAlive) | Err(nix::errno::Errno::EINVAL) => {}
+            Ok(status) => return Ok(status),
+            Err(nix::errno::Errno::ECHILD) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    for tracee in traced_tids.iter().copied() {
+        let status = match waitid_pid_raw(tracee, waitid_wall) {
+            Err(nix::errno::Errno::EINVAL) => match waitid_pid_raw(tracee, waitid_wclone) {
+                Err(nix::errno::Errno::EINVAL) => waitid_pid_raw(tracee, waitid_base),
+                other => other,
+            },
+            other => other,
+        };
+        let status = match status {
+            Ok(wait::WaitStatus::StillAlive) | Err(nix::errno::Errno::EINVAL) => {
+                match waitpid_raw(tracee, wnohang_wall) {
+                    Err(nix::errno::Errno::EINVAL) => match waitpid_raw(tracee, wnohang_wclone) {
+                        Err(nix::errno::Errno::EINVAL) => waitpid_raw(tracee, wnohang),
+                        other => other,
+                    },
+                    other => other,
+                }
+            }
+            other => other,
+        };
+        match status {
+            Ok(wait::WaitStatus::StillAlive) => {
+                saw_alive = true;
+            }
+            Ok(status) => return Ok(status),
+            Err(nix::errno::Errno::ECHILD) | Err(nix::errno::Errno::ESRCH) => {}
+            Err(e) => {
+                if e == nix::errno::Errno::EINVAL {
+                    eprintln!(
+                        "wait_for_known_tracee_event: wait4(tid={}, WNOHANG[/__WALL|__WCLONE]) -> EINVAL",
+                        tracee
+                    );
+                }
+                return Err(e);
+            }
+        }
+    }
+    if saw_alive {
+        Ok(wait::WaitStatus::StillAlive)
+    } else {
+        Err(nix::errno::Errno::ECHILD)
+    }
+}
+
+fn waitid_any_raw(options: nix::libc::c_int) -> nix::Result<wait::WaitStatus> {
+    let mut siginfo: nix::libc::siginfo_t = unsafe { mem::zeroed() };
+    let res = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_waitid as nix::libc::c_long,
+            nix::libc::P_ALL as nix::libc::c_int,
+            0 as nix::libc::id_t,
+            &mut siginfo as *mut nix::libc::siginfo_t,
+            options,
+            ptr::null_mut::<nix::libc::rusage>(),
+        )
+    };
+    if res < 0 {
+        return Err(nix::errno::Errno::last());
+    }
+    wait_status_from_siginfo(&siginfo)
+}
+
+fn waitpid_raw(pid: Pid, options: i32) -> nix::Result<wait::WaitStatus> {
+    let mut status: nix::libc::c_int = 0;
+    let res = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_wait4 as nix::libc::c_long,
+            pid.as_raw() as nix::libc::pid_t,
+            &mut status as *mut nix::libc::c_int,
+            options,
+            ptr::null_mut::<nix::libc::rusage>(),
+        )
+    };
+    if res == 0 {
+        return Ok(wait::WaitStatus::StillAlive);
+    }
+    if res < 0 {
+        return Err(nix::errno::Errno::last());
+    }
+    wait::WaitStatus::from_raw(Pid::from_raw(res as i32), status)
+}
+
+fn waitid_pid_raw(pid: Pid, options: nix::libc::c_int) -> nix::Result<wait::WaitStatus> {
+    let mut siginfo: nix::libc::siginfo_t = unsafe { mem::zeroed() };
+    let res = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_waitid as nix::libc::c_long,
+            nix::libc::P_PID as nix::libc::c_int,
+            pid.as_raw() as nix::libc::id_t,
+            &mut siginfo as *mut nix::libc::siginfo_t,
+            options,
+            ptr::null_mut::<nix::libc::rusage>(),
+        )
+    };
+    if res < 0 {
+        return Err(nix::errno::Errno::last());
+    }
+    wait_status_from_siginfo(&siginfo)
+}
+
+fn wait_status_from_siginfo(siginfo: &nix::libc::siginfo_t) -> nix::Result<wait::WaitStatus> {
+    let si_pid = unsafe { siginfo.si_pid() };
+    if si_pid == 0 {
+        return Ok(wait::WaitStatus::StillAlive);
+    }
+    let pid = Pid::from_raw(si_pid);
+    let si_status = unsafe { siginfo.si_status() };
+    match siginfo.si_code {
+        nix::libc::CLD_EXITED => Ok(wait::WaitStatus::Exited(pid, si_status)),
+        nix::libc::CLD_KILLED | nix::libc::CLD_DUMPED => Ok(wait::WaitStatus::Signaled(
+            pid,
+            nix::sys::signal::Signal::try_from(si_status)?,
+            siginfo.si_code == nix::libc::CLD_DUMPED,
+        )),
+        nix::libc::CLD_STOPPED => Ok(wait::WaitStatus::Stopped(
+            pid,
+            nix::sys::signal::Signal::try_from(si_status)?,
+        )),
+        nix::libc::CLD_CONTINUED => Ok(wait::WaitStatus::Continued(pid)),
+        nix::libc::CLD_TRAPPED => {
+            if si_status == (nix::libc::SIGTRAP | 0x80) {
+                Ok(wait::WaitStatus::PtraceSyscall(pid))
+            } else {
+                Ok(wait::WaitStatus::PtraceEvent(
+                    pid,
+                    nix::sys::signal::Signal::try_from(si_status & 0xff)?,
+                    (si_status >> 8) as nix::libc::c_int,
+                ))
+            }
+        }
+        _ => Err(nix::errno::Errno::EINVAL),
+    }
 }
 
 fn drain_stdout<'a>(
@@ -690,23 +1654,33 @@ fn drain_stdout<'a>(
     carry: &mut String,
     log: &mut Option<Box<dyn FnMut(String) + 'a>>,
 ) {
+    let emit = |msg: &str, log: &mut Option<Box<dyn FnMut(String) + 'a>>| {
+        if msg.is_empty() {
+            return;
+        }
+        let suppress_loader_log = false && msg.starts_with("loader_shim:");
+        if suppress_loader_log {
+            return;
+        }
+        if let Some(log) = log.as_mut() {
+            log(msg.to_string());
+        } else {
+            println!("{msg}");
+        }
+    };
     loop {
         match stdout.read(buf) {
-            Ok(0) => break, // EOF
+            Ok(0) => {
+                let tail = carry.trim_end_matches('\r').to_string();
+                emit(&tail, log);
+                carry.clear();
+                break;
+            } // EOF
             Ok(n) => {
                 carry.push_str(&String::from_utf8_lossy(&buf[..n]));
                 while let Some(pos) = carry.find('\n') {
                     let line = carry[..pos].trim_end_matches('\r');
-                    let suppress_loader_log = line.starts_with("loader_shim:");
-                    if suppress_loader_log {
-                        carry.drain(..=pos);
-                        continue;
-                    }
-                    if let Some(log) = log.as_mut() {
-                        log(line.to_string());
-                    } else {
-                        println!("{line}");
-                    }
+                    emit(line, log);
                     carry.drain(..=pos);
                 }
             }
@@ -721,20 +1695,303 @@ fn drain_stdout<'a>(
     }
 }
 
+fn log_non_segv_signal_diagnostics(tracee: Pid, sig: nix::sys::signal::Signal) {
+    let maps_txt =
+        fs::read_to_string(format!("/proc/{}/maps", tracee)).unwrap_or_else(|_| String::new());
+    let si_addr = segv_fault_addr(tracee);
+    if let Ok(regs) = read_regs(tracee) {
+        eprintln!(
+            "tracee stopped on {:?} pc=0x{:x} sp=0x{:x} si_addr={}",
+            sig,
+            regs.pc,
+            regs.sp,
+            si_addr
+                .map(|a| format!("0x{a:x}"))
+                .unwrap_or_else(|| "?".to_string())
+        );
+        if let Ok(code) = read_bytes_process_vm(tracee, regs.pc as usize, 32) {
+            eprintln!("pc bytes: {}", hex_bytes(&code));
+        }
+        if let Ok(stack) = read_bytes_process_vm(tracee, regs.sp as usize, 64) {
+            eprintln!("sp bytes: {}", hex_bytes(&stack));
+        }
+        if !maps_txt.is_empty() {
+            if let Some(line) = maps_txt.lines().find(|l| mapping_contains_pc(l, regs.pc as u64)) {
+                eprintln!("pc mapping: {line}");
+            }
+            if let Some(line) = maps_txt.lines().find(|l| mapping_contains_pc(l, regs.sp as u64)) {
+                eprintln!("sp mapping: {line}");
+            }
+        }
+    } else {
+        eprintln!("tracee stopped on {:?} (failed reading regs)", sig);
+    }
+    let siginfo = read_siginfo_raw(tracee);
+    if !siginfo.is_empty() {
+        let n = siginfo.len().min(64);
+        eprintln!("siginfo raw[0..{n}]: {}", hex_bytes(&siginfo[..n]));
+    }
+}
+
 struct PendingSysenterRestore {
     original_sp: u64,
+    original_args: [u64; 6],
+    original_x8: u64,
     syscall: i64,
     access_emu: Option<(String, i32, i32)>,
+    debug_path: Option<String>,
+    stack_write_restores: Vec<PendingStackWriteRestore>,
+}
+
+#[derive(Clone, Copy)]
+struct PendingSyscallResultEmulation {
+    retval: i64,
+}
+
+struct PendingStackWriteRestore {
+    addr: usize,
+    original_bytes: Vec<u8>,
+}
+
+struct TraceeStackScratch {
+    next: u64,
+    floor: u64,
+}
+
+#[derive(Clone, Copy)]
+enum PendingIdentityEmulation {
+    Getresuid { ruid: u64, euid: u64, suid: u64 },
+    Getresgid { rgid: u64, egid: u64, sgid: u64 },
+}
+
+fn capture_pending_identity_emulation(regs: &UserPtRegs) -> Option<PendingIdentityEmulation> {
+    let sys = regs.regs[8] as i64;
+    match sys {
+        x if x == nix::libc::SYS_getresuid => Some(PendingIdentityEmulation::Getresuid {
+            ruid: regs.regs[0],
+            euid: regs.regs[1],
+            suid: regs.regs[2],
+        }),
+        x if x == nix::libc::SYS_getresgid => Some(PendingIdentityEmulation::Getresgid {
+            rgid: regs.regs[0],
+            egid: regs.regs[1],
+            sgid: regs.regs[2],
+        }),
+        _ => None,
+    }
+}
+
+fn maybe_preempt_seccomp_trap_syscall(
+    tracee: Pid,
+    regs: &UserPtRegs,
+    pending_syscall_result_emulation: &mut HashMap<Pid, PendingSyscallResultEmulation>,
+) {
+    let sys = regs.regs[8] as i64;
+    const SYS_RSEQ_AARCH64: i64 = 293;
+    let retval = match sys {
+        x if x == nix::libc::SYS_set_robust_list => 0,
+        x if x == SYS_RSEQ_AARCH64 => -(nix::libc::ENOSYS as i64),
+        _ => return,
+    };
+
+    let mut patched = *regs;
+    patched.regs[8] = nix::libc::SYS_clock_gettime as i64 as u64;
+    patched.regs[0] = nix::libc::CLOCK_REALTIME as i64 as u64;
+    patched.regs[1] = 0; // NULL timespec => EFAULT if executed, no side effect
+    if write_regs(tracee, &patched).is_ok() {
+        pending_syscall_result_emulation
+            .insert(tracee, PendingSyscallResultEmulation { retval });
+    }
+}
+
+fn write_u32_if_nonnull(pid: Pid, addr: u64, value: u32) {
+    if addr == 0 {
+        return;
+    }
+    let _ = write_bytes(pid, addr as usize, &value.to_ne_bytes());
+}
+
+fn apply_root_identity_emulation(
+    tracee: Pid,
+    pending_identity_emulation: &mut HashMap<Pid, PendingIdentityEmulation>,
+) {
+    let Ok(mut regs) = read_regs(tracee) else {
+        pending_identity_emulation.remove(&tracee);
+        return;
+    };
+    let sys = regs.regs[8] as i64;
+    let mut changed = false;
+
+    match sys {
+        x if x == nix::libc::SYS_getuid
+            || x == nix::libc::SYS_geteuid
+            || x == nix::libc::SYS_getgid
+            || x == nix::libc::SYS_getegid =>
+        {
+            regs.regs[0] = 0;
+            changed = true;
+        }
+        x if x == nix::libc::SYS_setuid
+            || x == nix::libc::SYS_setgid
+            || x == nix::libc::SYS_setreuid
+            || x == nix::libc::SYS_setregid
+            || x == nix::libc::SYS_setresuid
+            || x == nix::libc::SYS_setresgid
+            || x == nix::libc::SYS_setfsuid
+            || x == nix::libc::SYS_setfsgid
+            || x == nix::libc::SYS_setgroups =>
+        {
+            regs.regs[0] = 0;
+            changed = true;
+        }
+        _ => {}
+    }
+
+    if let Some(pending) = pending_identity_emulation.remove(&tracee) {
+        match pending {
+            PendingIdentityEmulation::Getresuid { ruid, euid, suid } => {
+                write_u32_if_nonnull(tracee, ruid, 0);
+                write_u32_if_nonnull(tracee, euid, 0);
+                write_u32_if_nonnull(tracee, suid, 0);
+                regs.regs[0] = 0;
+                changed = true;
+            }
+            PendingIdentityEmulation::Getresgid { rgid, egid, sgid } => {
+                write_u32_if_nonnull(tracee, rgid, 0);
+                write_u32_if_nonnull(tracee, egid, 0);
+                write_u32_if_nonnull(tracee, sgid, 0);
+                regs.regs[0] = 0;
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        let _ = write_regs(tracee, &regs);
+    }
 }
 
 fn rewrite_syscall_path_with_regs(
     pid: Pid,
     mut regs: UserPtRegs,
     mappings: &[(String, String)],
+    shim_exe_abs: Option<&Path>,
 ) -> nix::Result<Option<PendingSysenterRestore>> {
     let syscall = regs.regs[8]; // x8
     let mut args = [0u64; 6];
     args.copy_from_slice(&regs.regs[0..6]);
+    let sys = syscall as i64;
+    let mut stack_write_restores: Vec<PendingStackWriteRestore> = Vec::new();
+    let mut scratch = init_tracee_stack_scratch(pid, regs.sp);
+
+    if matches!(
+        sys,
+        nix::libc::SYS_renameat | nix::libc::SYS_renameat2 | nix::libc::SYS_linkat
+    ) {
+        let original_sp = regs.sp;
+        let mut changed = false;
+        let mut debug_pairs: Vec<(String, String)> = Vec::new();
+        let mut debug_observed_rel: Vec<String> = Vec::new();
+        for (path_idx, dirfd_idx) in [(1usize, 0usize), (3usize, 2usize)] {
+            let addr_raw = args[path_idx] as usize;
+            if addr_raw == 0 {
+                continue;
+            }
+            let (_addr, path_bytes) = match read_cstring_candidates_any(pid, addr_raw) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let path = String::from_utf8_lossy(&path_bytes);
+            let path_was_absolute = path.starts_with('/');
+            let debug_is_pacman_path = path.contains("/var/lib/pacman");
+            let dirfd = regs.regs[dirfd_idx] as i64;
+            let resolved = if path_was_absolute {
+                None
+            } else {
+                resolve_effective_path_for_tracee(pid, Some(dirfd), &path)
+            };
+            if let Some(resolved_path) = resolved.as_deref() {
+                if resolved_path.contains("/var/lib/pacman/sync") {
+                    debug_observed_rel.push(format!(
+                        "idx={} dirfd={} raw={} resolved={}",
+                        path_idx, dirfd, path, resolved_path
+                    ));
+                }
+            }
+            let Some(mapped) = apply_path_mappings(&path, mappings).or_else(|| {
+                resolved
+                    .as_deref()
+                    .and_then(|resolved_path| apply_path_mappings(resolved_path, mappings))
+            }) else {
+                if debug_is_pacman_path {
+                    eprintln!(
+                        "pacman two-path no rewrite sys={} idx={} dirfd={} path={}",
+                        sys, path_idx, dirfd, path
+                    );
+                }
+                continue;
+            };
+            let mapped_is_relative = !mapped.starts_with('/');
+            let debug_path = resolved.as_deref().unwrap_or(&path);
+            if debug_path.contains("/var/lib/pacman/sync") {
+                debug_pairs.push((debug_path.to_string(), mapped.clone()));
+            }
+            if debug_is_pacman_path || mapped.contains("/var/lib/pacman") {
+                eprintln!(
+                    "pacman two-path rewrite sys={} idx={} dirfd={} {} -> {}",
+                    sys, path_idx, dirfd, debug_path, mapped
+                );
+            }
+
+            let mut mapped_bytes = mapped.as_bytes().to_vec();
+            mapped_bytes.push(0);
+            let new_ptr = alloc_tracee_scratch_data(
+                pid,
+                &mut regs,
+                &mapped_bytes,
+                &mut stack_write_restores,
+                &mut scratch,
+            )?;
+            regs.regs[path_idx] = new_ptr as u64;
+
+            if (!path_was_absolute || (path_was_absolute && mapped_is_relative))
+                && (regs.regs[dirfd_idx] as i64) != nix::libc::AT_FDCWD as i64
+                && mapped.starts_with('/')
+            {
+                // Resolved a relative `*at` path to an absolute host path, or converted an
+                // absolute guest path into a relative path: use AT_FDCWD to preserve meaning.
+                regs.regs[dirfd_idx] = nix::libc::AT_FDCWD as i64 as u64;
+            } else if path_was_absolute
+                && mapped_is_relative
+                && (regs.regs[dirfd_idx] as i64) != nix::libc::AT_FDCWD as i64
+            {
+                regs.regs[dirfd_idx] = nix::libc::AT_FDCWD as i64 as u64;
+            }
+            changed = true;
+        }
+        if !changed {
+            if !debug_observed_rel.is_empty() {
+                eprintln!("sync-db two-path observe sys={} {:?}", sys, debug_observed_rel);
+            }
+            return Ok(None);
+        }
+        if !debug_observed_rel.is_empty() {
+            eprintln!("sync-db two-path observe sys={} {:?}", sys, debug_observed_rel);
+        }
+        if !debug_pairs.is_empty() {
+            eprintln!("sync-db two-path rewrite sys={} {:?}", sys, debug_pairs);
+        }
+        write_regs(pid, &regs)?;
+        return Ok(Some(PendingSysenterRestore {
+            original_sp,
+            original_args: args,
+            original_x8: regs.regs[8],
+            syscall: sys,
+            access_emu: None,
+            debug_path: None,
+            stack_write_restores,
+        }));
+    }
 
     let path_addr = match syscall as i64 {
         nix::libc::SYS_openat => Some(args[1] as usize),
@@ -745,9 +2002,13 @@ fn rewrite_syscall_path_with_regs(
         nix::libc::SYS_readlinkat => Some(args[1] as usize),
         nix::libc::SYS_mkdirat => Some(args[1] as usize),
         nix::libc::SYS_unlinkat => Some(args[1] as usize),
+        nix::libc::SYS_fchmodat => Some(args[1] as usize),
+        nix::libc::SYS_fchownat => Some(args[1] as usize),
+        nix::libc::SYS_utimensat => Some(args[1] as usize),
         nix::libc::SYS_execve => Some(args[0] as usize),
         nix::libc::SYS_execveat => Some(args[1] as usize),
         nix::libc::SYS_statx => Some(args[1] as usize),
+        n if syscall_is_statfs(n) => Some(args[0] as usize),
         nix::libc::SYS_chdir => Some(args[0] as usize),
         _ => None,
     };
@@ -758,26 +2019,122 @@ fn rewrite_syscall_path_with_regs(
 
     let (_addr, path_bytes) = match read_cstring_candidates(pid, addr_raw) {
         Ok(v) => v,
-        Err(e) => {
-            let _ = e;
-            return Ok(None);
-        }
+        Err(_) => match read_cstring_candidates_any(pid, addr_raw) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = e;
+                return Ok(None);
+            }
+        },
     };
     let path = String::from_utf8_lossy(&path_bytes);
-    let Some(mapped) = apply_path_mappings(&path, mappings) else {
+    let path_was_absolute = path.starts_with('/');
+    let debug_is_pacman_path = path.contains("/var/lib/pacman");
+    let dirfd_for_relative = match sys {
+        n if syscall_is_fstatat(n) => Some(args[0] as i64),
+        nix::libc::SYS_openat
+        | nix::libc::SYS_openat2
+        | nix::libc::SYS_faccessat
+        | nix::libc::SYS_faccessat2
+        | nix::libc::SYS_readlinkat
+        | nix::libc::SYS_mkdirat
+        | nix::libc::SYS_unlinkat
+        | nix::libc::SYS_fchmodat
+        | nix::libc::SYS_fchownat
+        | nix::libc::SYS_utimensat
+        | nix::libc::SYS_execveat
+        | nix::libc::SYS_statx => Some(args[0] as i64),
+        _ => None,
+    };
+    let mut resolved_debug: Option<String> = None;
+    let mut used_relative_sync_fallback = false;
+    let mapped = if let Some(mapped) = apply_path_mappings(&path, mappings) {
+        mapped
+    } else if !path_was_absolute {
+        let Some(dirfd) = dirfd_for_relative else {
+            if debug_is_pacman_path {
+                eprintln!("pacman path relative no dirfd sys={} path={}", sys, path);
+            }
+            return Ok(None);
+        };
+        let Some(resolved) = resolve_effective_path_for_tracee(pid, Some(dirfd), &path) else {
+            if debug_is_pacman_path {
+                eprintln!(
+                    "pacman path resolve failed sys={} dirfd={} path={}",
+                    sys, dirfd, path
+                );
+            }
+            return Ok(None);
+        };
+        // Narrow fallback: only rewrite fd-relative one-path syscalls when they resolve into
+        // pacman DB paths. This covers both `sync/` and `local/` operations used by libalpm,
+        // while still avoiding generic loader-shim relative opens like `bin/sh`.
+        if !resolved.contains("/var/lib/pacman") {
+            if debug_is_pacman_path || resolved.contains("/var/lib/pacman") {
+                eprintln!(
+                    "pacman relative fallback skipped sys={} path={} resolved={}",
+                    sys, path, resolved
+                );
+            }
+            return Ok(None);
+        }
+        let Some(mapped) = apply_path_mappings(&resolved, mappings) else {
+            if debug_is_pacman_path {
+                eprintln!(
+                    "pacman relative fallback mapping failed sys={} resolved={}",
+                    sys, resolved
+                );
+            }
+            return Ok(None);
+        };
+        resolved_debug = Some(resolved);
+        used_relative_sync_fallback = true;
+        mapped
+    } else {
+        if debug_is_pacman_path {
+            eprintln!("pacman path no rewrite sys={} path={}", sys, path);
+        }
         return Ok(None);
     };
+    let debug_path = resolved_debug.as_deref().unwrap_or(&path);
+    if debug_path.contains("/var/lib/pacman/sync") {
+        eprintln!("sync-db path rewrite sys={} {} -> {}", sys, debug_path, mapped);
+    }
+    if debug_is_pacman_path || mapped.contains("/var/lib/pacman") {
+        eprintln!("pacman path rewrite sys={} {} -> {}", sys, debug_path, mapped);
+    }
+    if used_relative_sync_fallback {
+        eprintln!("sync-db path relative-fallback sys={} {}", sys, debug_path);
+    }
     let mapped_is_relative = !mapped.starts_with('/');
-    let path_was_absolute = path.starts_with('/');
+
+    if matches!(sys, nix::libc::SYS_execve | nix::libc::SYS_execveat) {
+        if let Some(shim) = shim_exe_abs {
+            if let Some(pending) =
+                rewrite_execve_to_loader_shim(pid, &mut regs, sys, &args, &path, &mapped, shim)?
+            {
+                write_regs(pid, &regs)?;
+                return Ok(Some(pending));
+            }
+        }
+    }
 
     let mut mapped_bytes = mapped.as_bytes().to_vec();
     mapped_bytes.push(0);
     let original_sp = regs.sp;
-    let new_ptr = alloc_tracee_stack_data(pid, &mut regs, &mapped_bytes)?;
+    let new_ptr = alloc_tracee_scratch_data(
+        pid,
+        &mut regs,
+        &mapped_bytes,
+        &mut stack_write_restores,
+        &mut scratch,
+    )?;
 
     // `openat*` ignores dirfd for absolute paths. Once rewritten to a relative
     // path, preserve intended semantics by forcing dirfd=AT_FDCWD.
-    if path_was_absolute && mapped_is_relative {
+    if (path_was_absolute && mapped_is_relative)
+        || (used_relative_sync_fallback && mapped.starts_with('/'))
+    {
         let sys = syscall as i64;
         if (matches!(
             sys,
@@ -789,6 +2146,9 @@ fn rewrite_syscall_path_with_regs(
                 | nix::libc::SYS_readlinkat
                 | nix::libc::SYS_mkdirat
                 | nix::libc::SYS_unlinkat
+                | nix::libc::SYS_fchmodat
+                | nix::libc::SYS_fchownat
+                | nix::libc::SYS_utimensat
                 | nix::libc::SYS_statx
         ) || syscall_is_fstatat(sys))
             && (regs.regs[0] as i64) != nix::libc::AT_FDCWD as i64
@@ -798,7 +2158,9 @@ fn rewrite_syscall_path_with_regs(
     }
 
     match syscall as i64 {
-        nix::libc::SYS_execve | nix::libc::SYS_chdir => regs.regs[0] = new_ptr as u64,
+        n if n == nix::libc::SYS_execve || n == nix::libc::SYS_chdir || syscall_is_statfs(n) => {
+            regs.regs[0] = new_ptr as u64
+        }
         n if syscall_is_fstatat(n) => regs.regs[1] = new_ptr as u64,
         nix::libc::SYS_openat
         | nix::libc::SYS_openat2
@@ -807,13 +2169,15 @@ fn rewrite_syscall_path_with_regs(
         | nix::libc::SYS_readlinkat
         | nix::libc::SYS_mkdirat
         | nix::libc::SYS_unlinkat
+        | nix::libc::SYS_fchmodat
+        | nix::libc::SYS_fchownat
+        | nix::libc::SYS_utimensat
         | nix::libc::SYS_execveat
         | nix::libc::SYS_statx => regs.regs[1] = new_ptr as u64,
         _ => return Ok(None),
     }
     write_regs(pid, &regs)?;
 
-    let sys = syscall as i64;
     let access_emu = if matches!(sys, nix::libc::SYS_faccessat | nix::libc::SYS_faccessat2) {
         Some((mapped.clone(), args[2] as i32, args[3] as i32))
     } else {
@@ -822,23 +2186,41 @@ fn rewrite_syscall_path_with_regs(
     if matches!(sys, nix::libc::SYS_execve | nix::libc::SYS_execveat) {
         return Ok(Some(PendingSysenterRestore {
             original_sp,
+            original_args: args,
+            original_x8: regs.regs[8],
             syscall: sys,
             access_emu,
+            debug_path: Some(mapped.clone()),
+            stack_write_restores,
         }));
     }
     Ok(Some(PendingSysenterRestore {
         original_sp,
+        original_args: args,
+        original_x8: regs.regs[8],
         syscall: sys,
         access_emu,
+        debug_path: Some(mapped),
+        stack_write_restores,
     }))
 }
 
-fn alloc_tracee_stack_data(pid: Pid, regs: &mut UserPtRegs, data: &[u8]) -> nix::Result<usize> {
+fn alloc_tracee_stack_data(
+    pid: Pid,
+    regs: &mut UserPtRegs,
+    data: &[u8],
+    restores: &mut Vec<PendingStackWriteRestore>,
+) -> nix::Result<usize> {
     let aligned = (data.len() + 15) & !15;
     if (aligned as u64) > regs.sp {
         return Err(nix::Error::from(nix::errno::Errno::EFAULT));
     }
     let new_sp = regs.sp - aligned as u64;
+    let original_bytes = read_bytes_ptrace_exact(pid, new_sp as usize, aligned)?;
+    restores.push(PendingStackWriteRestore {
+        addr: new_sp as usize,
+        original_bytes,
+    });
     write_bytes(pid, new_sp as usize, data)?;
     if aligned > data.len() {
         let zeros = vec![0u8; aligned - data.len()];
@@ -848,11 +2230,273 @@ fn alloc_tracee_stack_data(pid: Pid, regs: &mut UserPtRegs, data: &[u8]) -> nix:
     Ok(new_sp as usize)
 }
 
-fn ptrace_syscall_is_entry(pid: Pid, fallback: &mut HashMap<Pid, bool>) -> bool {
+fn init_tracee_stack_scratch(pid: Pid, sp: u64) -> Option<TraceeStackScratch> {
+    let guard = 0x200u64;
+    let window = 0x20000u64;
+    if sp <= guard + 0x1000 {
+        return None;
+    }
+    Some(TraceeStackScratch {
+        next: sp - guard,
+        floor: sp.saturating_sub(window),
+    })
+}
+
+fn alloc_tracee_scratch_data(
+    pid: Pid,
+    regs: &mut UserPtRegs,
+    data: &[u8],
+    restores: &mut Vec<PendingStackWriteRestore>,
+    scratch: &mut Option<TraceeStackScratch>,
+) -> nix::Result<usize> {
+    let aligned = (data.len() + 15) & !15;
+    if let Some(arena) = scratch.as_mut() {
+        let aligned_u64 = aligned as u64;
+        if arena.next > arena.floor.saturating_add(aligned_u64) {
+            let addr = (arena.next - aligned_u64) & !15u64;
+            if addr >= arena.floor {
+                write_bytes(pid, addr as usize, data)?;
+                if aligned > data.len() {
+                    let zeros = vec![0u8; aligned - data.len()];
+                    write_bytes(pid, addr as usize + data.len(), &zeros)?;
+                }
+                arena.next = addr;
+                return Ok(addr as usize);
+            }
+        }
+    }
+    eprintln!(
+        "tracee scratch fallback to SP allocation: tid={} len={} aligned={} sp=0x{:x}",
+        pid,
+        data.len(),
+        aligned,
+        regs.sp
+    );
+    alloc_tracee_stack_data(pid, regs, data, restores)
+}
+
+fn restore_tracee_stack_writes(pid: Pid, restores: &[PendingStackWriteRestore]) {
+    for restore in restores.iter().rev() {
+        if let Err(e) = write_bytes(pid, restore.addr, &restore.original_bytes) {
+            eprintln!(
+                "failed restoring tracee stack scratch: tid={} addr=0x{:x} len={} err={e}",
+                pid,
+                restore.addr,
+                restore.original_bytes.len()
+            );
+        }
+    }
+}
+
+fn read_bytes_ptrace_exact(pid: Pid, addr: usize, len: usize) -> nix::Result<Vec<u8>> {
+    let word_size = mem::size_of::<nix::libc::c_long>();
+    let aligned_start = addr & !(word_size - 1);
+    let aligned_end = (addr + len + (word_size - 1)) & !(word_size - 1);
+    let mut out = Vec::with_capacity(aligned_end.saturating_sub(aligned_start));
+    let mut cur = aligned_start;
+    while cur < aligned_end {
+        let word = ptrace::read(pid, cur as AddressType)? as usize;
+        let bytes = word.to_ne_bytes();
+        out.extend_from_slice(&bytes[..word_size]);
+        cur += word_size;
+    }
+    let start_off = addr - aligned_start;
+    Ok(out[start_off..start_off + len].to_vec())
+}
+
+fn read_u64_process(pid: Pid, addr: usize) -> nix::Result<u64> {
+    let word_size = mem::size_of::<nix::libc::c_long>();
+    let word = ptrace::read(pid, addr as AddressType)? as usize;
+    let bytes = word.to_ne_bytes();
+    let mut full = [0u8; 8];
+    full[..word_size].copy_from_slice(&bytes[..word_size]);
+    Ok(u64::from_ne_bytes(full))
+}
+
+fn read_argv_ptrs(pid: Pid, argv_ptr: usize, max_args: usize) -> nix::Result<Vec<u64>> {
+    let mut out = Vec::new();
+    for i in 0..max_args {
+        let p = read_u64_process(pid, argv_ptr + i * 8)?;
+        if p == 0 {
+            break;
+        }
+        out.push(p);
+    }
+    Ok(out)
+}
+
+fn min_nonzero_u64(a: u64, b: u64) -> u64 {
+    match (a, b) {
+        (0, x) => x,
+        (x, 0) => x,
+        (x, y) => x.min(y),
+    }
+}
+
+fn rewrite_execve_to_loader_shim(
+    pid: Pid,
+    regs: &mut UserPtRegs,
+    sys: i64,
+    args: &[u64; 6],
+    guest_path: &str,
+    mapped_host_path: &str,
+    shim_exe_abs: &Path,
+) -> nix::Result<Option<PendingSysenterRestore>> {
+    let host_target = Path::new(mapped_host_path);
+    if !is_elf(host_target) || elf_interp_path(host_target).is_none() {
+        return Ok(None);
+    }
+
+    let shim_path = shim_exe_abs.to_string_lossy().to_string();
+    if shim_path.is_empty() {
+        return Ok(None);
+    }
+
+    let argv_ptr = match sys {
+        x if x == nix::libc::SYS_execve => args[1] as usize,
+        x if x == nix::libc::SYS_execveat => args[2] as usize,
+        _ => return Ok(None),
+    };
+    let envp_ptr = match sys {
+        x if x == nix::libc::SYS_execve => args[2] as usize,
+        x if x == nix::libc::SYS_execveat => args[3] as usize,
+        _ => 0,
+    };
+    if argv_ptr == 0 {
+        return Ok(None);
+    }
+
+    let original_sp = regs.sp;
+    let mut stack_write_restores: Vec<PendingStackWriteRestore> = Vec::new();
+    let mut scratch = init_tracee_stack_scratch(pid, regs.sp);
+    let arg_ptrs = read_argv_ptrs(pid, argv_ptr, 128).unwrap_or_default();
+    let env_ptrs = if envp_ptr != 0 {
+        read_argv_ptrs(pid, envp_ptr, 256).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    // Avoid clobbering the shell's original argv/envp area before the kernel copies it for execve.
+    let mut scratch_top = regs.sp;
+    scratch_top = min_nonzero_u64(scratch_top, argv_ptr as u64);
+    scratch_top = min_nonzero_u64(scratch_top, envp_ptr as u64);
+    for p in &arg_ptrs {
+        scratch_top = min_nonzero_u64(scratch_top, *p);
+    }
+    for p in &env_ptrs {
+        scratch_top = min_nonzero_u64(scratch_top, *p);
+    }
+    // Keep a large guard below the tracee's existing argv/envp area before placing our shim
+    // argv strings on the stack. Android app processes can have large environments, and a small
+    // gap here can corrupt env/argv data that the kernel is about to copy for execve.
+    const EXECVE_SHIM_STACK_GUARD: u64 = 0x4000;
+    if scratch_top > (EXECVE_SHIM_STACK_GUARD as u64) {
+        regs.sp = regs
+            .sp
+            .min(scratch_top.saturating_sub(EXECVE_SHIM_STACK_GUARD));
+    }
+
+    // Preserve original argv[1..] arguments. argv[0] becomes the shim path and argv[1] is the
+    // guest target path so the shim can load it.
+    let mut rest_arg_ptrs: Vec<u64> = Vec::new();
+    for p in arg_ptrs.into_iter().skip(1).rev() {
+        if p == 0 {
+            continue;
+        }
+        let bs = match read_cstring(pid, p as usize) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let mut c = bs;
+        c.push(0);
+        let newp = alloc_tracee_scratch_data(
+            pid,
+            regs,
+            &c,
+            &mut stack_write_restores,
+            &mut scratch,
+        )? as u64;
+        rest_arg_ptrs.push(newp);
+    }
+    rest_arg_ptrs.reverse();
+
+    let mut guest_target_c = guest_path.as_bytes().to_vec();
+    guest_target_c.push(0);
+    let guest_target_ptr = alloc_tracee_scratch_data(
+        pid,
+        regs,
+        &guest_target_c,
+        &mut stack_write_restores,
+        &mut scratch,
+    )? as u64;
+
+    let mut shim_c = shim_path.as_bytes().to_vec();
+    shim_c.push(0);
+    let shim_ptr =
+        alloc_tracee_scratch_data(pid, regs, &shim_c, &mut stack_write_restores, &mut scratch)?
+            as u64;
+
+    let mut argv_new: Vec<u64> = Vec::with_capacity(rest_arg_ptrs.len() + 3);
+    argv_new.push(shim_ptr);
+    argv_new.push(guest_target_ptr);
+    argv_new.extend(rest_arg_ptrs);
+    argv_new.push(0);
+    let mut argv_bytes = Vec::with_capacity(argv_new.len() * 8);
+    for p in argv_new {
+        argv_bytes.extend_from_slice(&p.to_ne_bytes());
+    }
+    let argv_new_ptr = alloc_tracee_scratch_data(
+        pid,
+        regs,
+        &argv_bytes,
+        &mut stack_write_restores,
+        &mut scratch,
+    )? as u64;
+
+    match sys {
+        x if x == nix::libc::SYS_execve => {
+            regs.regs[0] = shim_ptr;
+            regs.regs[1] = argv_new_ptr;
+        }
+        x if x == nix::libc::SYS_execveat => {
+            regs.regs[1] = shim_ptr;
+            regs.regs[2] = argv_new_ptr;
+            if (regs.regs[0] as i64) != nix::libc::AT_FDCWD as i64 {
+                regs.regs[0] = nix::libc::AT_FDCWD as i64 as u64;
+            }
+        }
+        _ => {}
+    }
+
+    eprintln!(
+        "wrapped nested exec via loader shim: guest={} host={} shim={} argv_ptr=0x{:x}",
+        guest_path, mapped_host_path, shim_path, argv_new_ptr
+    );
+    Ok(Some(PendingSysenterRestore {
+        original_sp,
+        original_args: *args,
+        original_x8: regs.regs[8],
+        syscall: sys,
+        access_emu: None,
+        debug_path: None,
+        stack_write_restores,
+    }))
+}
+
+fn ptrace_syscall_is_entry(
+    pid: Pid,
+    fallback: &mut HashMap<Pid, bool>,
+    force_entry_after_sigsys: &mut HashSet<Pid>,
+) -> bool {
     const PTRACE_GET_SYSCALL_INFO: nix::libc::c_int = 0x420e;
     const PTRACE_SYSCALL_INFO_ENTRY: u8 = 1;
     const PTRACE_SYSCALL_INFO_EXIT: u8 = 2;
     const PTRACE_SYSCALL_INFO_SECCOMP: u8 = 3;
+    if force_entry_after_sigsys.remove(&pid) {
+        fallback.insert(pid, true);
+        eprintln!("seccomp-phase reset: forcing next syscall-stop to sysenter for tid={pid}");
+        return true;
+    }
     let mut buf = [0u8; 64];
     let ret = unsafe {
         nix::libc::ptrace(
@@ -926,6 +2570,46 @@ fn read_cstring_candidates(pid: Pid, addr_raw: usize) -> nix::Result<(usize, Vec
         }
     }
     Err(last_err.unwrap_or_else(|| nix::Error::from(nix::errno::Errno::EIO)))
+}
+
+fn read_cstring_candidates_any(pid: Pid, addr_raw: usize) -> nix::Result<(usize, Vec<u8>)> {
+    let a = addr_raw as u64;
+    let cands: [u64; 6] = [
+        a,
+        a & 0x00ff_ffff_ffff_ffff,
+        a & 0x0000_ffff_ffff_ffff,
+        a & 0x0000_0fff_ffff_ffff,
+        a & 0x0000_00ff_ffff_ffff,
+        a & 0x0000_007f_ffff_ffff,
+    ];
+
+    let mut last_err: Option<nix::Error> = None;
+    for cand in cands {
+        if cand == 0 {
+            continue;
+        }
+        match read_cstring(pid, cand as usize) {
+            Ok(bs) => return Ok((cand as usize, bs)),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| nix::Error::from(nix::errno::Errno::EFAULT)))
+}
+
+fn resolve_effective_path_for_tracee(pid: Pid, dirfd: Option<i64>, path: &str) -> Option<String> {
+    if path.is_empty() || path.starts_with('/') {
+        return None;
+    }
+    let base = match dirfd {
+        Some(fd) if fd != nix::libc::AT_FDCWD as i64 => {
+            fs::read_link(format!("/proc/{}/fd/{}", pid, fd)).ok()?
+        }
+        _ => fs::read_link(format!("/proc/{}/cwd", pid)).ok()?,
+    };
+    if !base.is_absolute() {
+        return None;
+    }
+    Some(base.join(path).to_string_lossy().to_string())
 }
 
 #[repr(C)]
@@ -1251,6 +2935,17 @@ fn syscall_is_fstatat(syscall: i64) -> bool {
     syscall == nix::libc::SYS_newfstatat
 }
 
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+fn syscall_is_statfs(syscall: i64) -> bool {
+    // Android/aarch64 libc omits `SYS_statfs`, but the Linux kernel ABI keeps it at 43.
+    syscall == 43
+}
+
+#[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
+fn syscall_is_statfs(syscall: i64) -> bool {
+    syscall == nix::libc::SYS_statfs
+}
+
 fn emulate_faccessat_result(pid: Pid, mapped: &str, mode: i32, flags: i32) -> i64 {
     const AT_EACCESS_FALLBACK: i32 = 0x200;
     let host_path = if mapped.starts_with('/') {
@@ -1283,6 +2978,107 @@ fn emulate_faccessat_result(pid: Pid, mapped: &str, mode: i32, flags: i32) -> i6
         }
     }
     -err
+}
+
+fn fake_root_should_force_perm_success(sys: i64, ret: i64) -> bool {
+    if ret != -(nix::libc::EPERM as i64) && ret != -(nix::libc::EACCES as i64) {
+        return false;
+    }
+    // Mirror the practical subset used by proot fake_id0: permission failures from
+    // ownership/metadata syscalls should succeed for emulated root.
+    matches!(
+        sys,
+        5   // setxattr
+            | 6   // lsetxattr
+            | 7   // fsetxattr
+            | 33  // mknodat
+            | 52  // fchmod
+            | 53  // fchmodat
+            | 54  // fchownat
+            | 55  // fchown
+            | 88  // utimensat
+            | 91  // capset
+            | 161 // sethostname
+            | 162 // setdomainname
+    )
+}
+
+fn patch_tracee_stat_uid_gid_root(pid: Pid, stat_addr: u64) {
+    if stat_addr == 0 {
+        return;
+    }
+    let st = std::mem::MaybeUninit::<nix::libc::stat>::uninit();
+    let base = st.as_ptr() as usize;
+    let uid_off = unsafe { std::ptr::addr_of!((*st.as_ptr()).st_uid) as usize - base };
+    let gid_off = unsafe { std::ptr::addr_of!((*st.as_ptr()).st_gid) as usize - base };
+    let zero = 0u32.to_ne_bytes();
+    let _ = write_bytes(pid, stat_addr as usize + uid_off, &zero);
+    let _ = write_bytes(pid, stat_addr as usize + gid_off, &zero);
+}
+
+fn log_pacman_fs_failure(pid: Pid, regs: &UserPtRegs, mappings: &[(String, String)]) {
+    let ret = regs.regs[0] as i64;
+    if ret >= 0 {
+        return;
+    }
+    let sys = regs.regs[8] as i64;
+    let (path_idx, dirfd_idx) = match sys {
+        n if syscall_is_fstatat(n) => (1usize, Some(0usize)),
+        nix::libc::SYS_openat
+        | nix::libc::SYS_openat2
+        | nix::libc::SYS_faccessat
+        | nix::libc::SYS_faccessat2
+        | nix::libc::SYS_readlinkat
+        | nix::libc::SYS_mkdirat
+        | nix::libc::SYS_unlinkat
+        | nix::libc::SYS_fchmodat
+        | nix::libc::SYS_fchownat
+        | nix::libc::SYS_utimensat
+        | nix::libc::SYS_execveat
+        | nix::libc::SYS_statx => (1usize, Some(0usize)),
+        nix::libc::SYS_execve | nix::libc::SYS_chdir => (0usize, None),
+        _ => return,
+    };
+    let addr_raw = regs.regs[path_idx] as usize;
+    if addr_raw == 0 {
+        return;
+    }
+    let Ok((_addr, path_bytes)) = read_cstring_candidates_any(pid, addr_raw) else {
+        return;
+    };
+    let raw_path = String::from_utf8_lossy(&path_bytes).to_string();
+    let mut candidates = vec![raw_path.clone()];
+    if !raw_path.starts_with('/') {
+        if let Some(di) = dirfd_idx {
+            let dirfd = regs.regs[di] as i64;
+            if let Some(resolved) = resolve_effective_path_for_tracee(pid, Some(dirfd), &raw_path) {
+                candidates.push(resolved);
+            }
+        }
+    }
+    let mut mapped: Option<String> = None;
+    let mut relevant = false;
+    for candidate in &candidates {
+        if candidate.contains("/var/lib/pacman") {
+            relevant = true;
+        }
+        if mapped.is_none() {
+            mapped = apply_path_mappings(candidate, mappings);
+        }
+    }
+    if !relevant {
+        if let Some(m) = mapped.as_deref() {
+            relevant = m.contains("/var/lib/pacman");
+        }
+    }
+    if !relevant {
+        return;
+    }
+    let dirfd_display = dirfd_idx.map(|i| regs.regs[i] as i64);
+    eprintln!(
+        "pacman fs syscall error: tid={} sys={} ret={} raw={} resolved={:?} mapped={:?} dirfd={:?}",
+        pid, sys, ret, raw_path, candidates, mapped, dirfd_display
+    );
 }
 
 fn path_matches_prefix(path: &str, prefix: &str) -> bool {
@@ -1724,6 +3520,26 @@ fn read_siginfo_raw(pid: Pid) -> Vec<u8> {
     }
 }
 
+fn sigsys_siginfo_decoded(siginfo_raw: &[u8]) -> Option<(i32, i32, i32, i32, u64, u32)> {
+    // Linux/Android 64-bit siginfo_t:
+    //   0x00 si_signo (int)
+    //   0x04 si_errno (int)
+    //   0x08 si_code  (int)
+    //   0x10 _sigsys._call_addr (void*)
+    //   0x18 _sigsys._syscall   (int)
+    //   0x1c _sigsys._arch      (u32)
+    if siginfo_raw.len() < 0x20 {
+        return None;
+    }
+    let si_signo = i32::from_ne_bytes(siginfo_raw.get(0x00..0x04)?.try_into().ok()?);
+    let si_errno = i32::from_ne_bytes(siginfo_raw.get(0x04..0x08)?.try_into().ok()?);
+    let si_code = i32::from_ne_bytes(siginfo_raw.get(0x08..0x0c)?.try_into().ok()?);
+    let si_call_addr = u64::from_ne_bytes(siginfo_raw.get(0x10..0x18)?.try_into().ok()?);
+    let si_syscall = i32::from_ne_bytes(siginfo_raw.get(0x18..0x1c)?.try_into().ok()?);
+    let si_arch = u32::from_ne_bytes(siginfo_raw.get(0x1c..0x20)?.try_into().ok()?);
+    Some((si_signo, si_errno, si_code, si_syscall, si_call_addr, si_arch))
+}
+
 fn find_aarch64_sigframe_in_stack_blob(
     stack_blob: &[u8],
     si_addr: u64,
@@ -2069,6 +3885,73 @@ fn sigcontext_scan_all_hits_from_blob(
     Vec::new()
 }
 
+#[cfg(target_arch = "aarch64")]
+fn try_restore_sigsys_interrupted_regs_from_stack(
+    pid: Pid,
+    stop_regs: UserPtRegs,
+    out_regs: &mut UserPtRegs,
+) -> bool {
+    // For seccomp SIGSYS delivery, Android kernels may present a ptrace signal-stop with the
+    // interrupted PC already visible while SP points at a just-built rt_sigframe. If we suppress
+    // delivery, restore the interrupted regs from that frame so execution continues as if the
+    // signal had not been queued.
+    // Android kernels vary in how much state they push for seccomp SIGSYS (SVE/extra contexts can
+    // make the rt_sigframe much larger than a minimal frame), so search a wider window.
+    let scan_back = 0x10000usize;
+    let start = (stop_regs.sp as usize).saturating_sub(scan_back);
+    let blob = read_bytes_process_vm_best_effort(pid, start, 0x30000);
+    if blob.len() < 256 {
+        return false;
+    }
+    for off in (0..blob.len().saturating_sub(256)).step_by(8) {
+        let Some((_, sp, pc, pstate, saved_regs, _esr)) =
+            decode_aarch64_ucontext_from_slice(&blob[off..])
+        else {
+            continue;
+        };
+        if pc == 0 || sp == 0 {
+            continue;
+        }
+        let pc_diff = |a: u64, b: u64| a.abs_diff(b);
+        let near_pc = pc_diff(pc, stop_regs.pc) <= 0x40
+            || pc_diff(pc, stop_regs.pc.wrapping_sub(4)) <= 0x40
+            || pc_diff(pc, stop_regs.pc.wrapping_add(4)) <= 0x40;
+        if !near_pc {
+            continue;
+        }
+        let delta = sp.abs_diff(stop_regs.sp);
+        // Prefer the common "signal-frame SP below interrupted SP" case, but accept wider
+        // deltas because Android can emit large extended signal frames.
+        if delta == 0 || delta > 0x20000 {
+            continue;
+        }
+        out_regs.regs = saved_regs;
+        out_regs.sp = sp;
+        out_regs.pc = pc;
+        out_regs.pstate = pstate;
+        eprintln!(
+            "SIGSYS frame restore: uctx@0x{:x} (scan+0x{:x}) delta_sp=0x{:x} saved_pc=0x{:x} saved_sp=0x{:x} x8=0x{:x}",
+            start + off,
+            off,
+            delta,
+            pc,
+            sp,
+            saved_regs[8]
+        );
+        return true;
+    }
+    false
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn try_restore_sigsys_interrupted_regs_from_stack(
+    _pid: Pid,
+    _stop_regs: UserPtRegs,
+    _out_regs: &mut UserPtRegs,
+) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2102,6 +3985,7 @@ mod tests {
             command: cmd,
             rootfs,
             binds: vec![],
+            emulate_root_identity: false,
             shim_exe: shim.into_os_string(),
             log: Some(Box::new(move |s| {
                 let mut g = out2.lock().unwrap();
@@ -2149,6 +4033,7 @@ mod tests {
             command: cmd,
             rootfs: rootfs_dir.to_string_lossy().to_string(),
             binds: vec![],
+            emulate_root_identity: false,
             shim_exe: shim.into_os_string(),
             log: Some(Box::new(move |s| {
                 let mut g = out2.lock().unwrap();

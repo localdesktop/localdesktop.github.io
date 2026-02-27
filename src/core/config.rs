@@ -62,12 +62,12 @@ pub struct CommandConfig {
 }
 
 fn default_check() -> String {
-    "pacman -Qg lxqt && pacman -Q xorg-xwayland && pacman -Q lxqt-wayland-session && pacman -Q labwc && pacman -Q breeze-icons && pacman -Q onboard"
+    "pacman -Q lxqt-session && pacman -Q xorg-xwayland && pacman -Q lxqt-wayland-session && pacman -Q labwc && pacman -Q breeze-icons && pacman -Q onboard"
         .to_string()
 }
 
 fn default_install() -> String {
-    "stdbuf -oL pacman -Syu lxqt xorg-xwayland lxqt-wayland-session labwc breeze-icons onboard --noconfirm --noprogressbar"
+    "stdbuf -oL pacman -Syyu lxqt-session xorg-xwayland lxqt-wayland-session labwc breeze-icons onboard --noconfirm --noprogressbar"
         .to_string()
 }
 

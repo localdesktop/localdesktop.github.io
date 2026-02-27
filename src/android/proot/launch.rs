@@ -1,6 +1,6 @@
 use super::process::ArchProcess;
 use crate::android::utils::application_context::get_application_context;
-use std::thread;
+use std::{sync::Arc, thread};
 
 pub fn launch() {
     thread::spawn(move || {
@@ -26,7 +26,7 @@ pub fn launch() {
         ArchProcess {
             command: full_launch_command,
             user: Some(username),
-            log: Some(Box::new(|it| {
+            log: Some(Arc::new(|it| {
                 log::info!("{}", it);
             })),
         }
