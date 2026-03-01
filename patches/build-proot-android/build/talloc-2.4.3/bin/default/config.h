@@ -3,7 +3,7 @@
 #ifndef W_DEFAULT_CONFIG_H_WAF
 #define W_DEFAULT_CONFIG_H_WAF
 
-#define SRCDIR "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3"
+#define SRCDIR "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3"
 #define HAVE_SYS_UTSNAME_H 1
 #define SYSTEM_UNAME_SYSNAME "Linux"
 #define SYSTEM_UNAME_MACHINE "dontcare"
@@ -29,6 +29,8 @@
 #define HAVE_STDINT_H 1
 #define HAVE_UNISTD_H 1
 #define HAVE_CTYPE_H 1
+#define _DARWIN_C_SOURCE 1
+#define _DARWIN_UNLIMITED_GETGROUPS 1
 #define HAVE_STDBOOL_H 1
 #define HAVE_STDARG_H 1
 #define HAVE_LIMITS_H 1
@@ -49,7 +51,6 @@
 #define RETSIGTYPE void
 #define HAVE_FUNCTION_MACRO 1
 #define HAVE_VA_COPY 1
-#define LINUX 1
 #define BOOL_DEFINED 1
 #define HAVE_LIBREPLACE 1
 #define LIBREPLACE_NETWORK_CHECKS 1

@@ -98,8 +98,10 @@ impl ArchProcess {
     }
 
     pub fn is_supported() -> bool {
-        let check_command = "cat /proc/cpuinfo";
-        Self::setup_base_command()
+        // Probe PRoot with a direct host binary instead of `sh -c ...`.
+        // Some devices/app contexts fail on `/system/bin/sh` under `-r /` even though
+        // the real app flow (running `/bin/sh` inside the Arch rootfs) can still work.
+        let output_result = Self::setup_base_command()
             .arg("-r")
             .arg("/")
             .arg("-L")
@@ -107,12 +109,28 @@ impl ArchProcess {
             .arg("--sysvipc")
             .arg("--kill-on-exit")
             .arg("--root-id")
-            .arg("sh")
-            .arg("-c")
-            .arg(check_command)
-            .output()
-            .map(|res| res.stderr.is_empty())
-            .unwrap_or(false)
+            .arg("/system/bin/true")
+            .output();
+
+        match output_result {
+            Ok(res) => {
+                let stderr = String::from_utf8_lossy(&res.stderr).replace('\n', "\\n");
+                let stderr_raw = String::from_utf8_lossy(&res.stderr);
+                let host_exec_enosys = !res.status.success()
+                    && stderr_raw.contains("proot error: execve(\"/system/bin/")
+                    && stderr.contains("Function not implemented")
+                    && stderr.contains("fatal error: see `libproot.so --help`")
+                    && stderr.contains("proot error: execve(");
+
+                let supported = if host_exec_enosys {
+                    true
+                } else {
+                    res.status.success()
+                };
+                supported
+            }
+            Err(e) => false,
+        }
     }
 
     /// Run the command inside Proot
