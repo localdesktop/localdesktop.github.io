@@ -61,15 +61,21 @@ impl WebviewBackend {
                     for message in receiver_clone.lock().unwrap().iter() {
                         let progress = *progress_clone.lock().unwrap();
                         let json_message = match message {
-                            SetupMessage::Progress(msg) => json!({
-                                "progress": progress,
-                                "message": msg,
-                            }),
-                            SetupMessage::Error(msg) => json!({
-                                "progress": progress,
-                                "message": msg,
-                                "isError": true
-                            }),
+                            SetupMessage::Progress(msg) => {
+                                log::info!("Setup progress [{}%]: {}", progress, msg);
+                                json!({
+                                    "progress": progress,
+                                    "message": msg,
+                                })
+                            }
+                            SetupMessage::Error(msg) => {
+                                log::error!("Setup error [{}%]: {}", progress, msg);
+                                json!({
+                                    "progress": progress,
+                                    "message": msg,
+                                    "isError": true
+                                })
+                            }
                         };
 
                         let message = OwnedMessage::Text(json_message.to_string());
