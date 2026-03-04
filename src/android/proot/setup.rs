@@ -20,6 +20,7 @@ use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
     fs::{self, File},
+    io::ErrorKind,
     io::{Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
     path::Path,
@@ -244,7 +245,7 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
 
     let mpsc_sender = mpsc_sender.clone();
     return Some(thread::spawn(move || {
-        const MAX_INSTALL_ATTEMPTS: usize = 5;
+        const MAX_INSTALL_ATTEMPTS: usize = 10;
 
         // Install dependencies until `check` succeeds.
         for attempt in 1..=MAX_INSTALL_ATTEMPTS {
@@ -664,6 +665,19 @@ fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
     );
     fs::write(&session_path, session_out).pb_expect("Failed to write session.conf");
 
+    // lxqt-powermanagement frequently crashes in a PRoot container due to missing
+    // host power-management interfaces. Disable its autostart by default.
+    let autostart_dir = fs_root.join("root/.config/autostart");
+    let _ = fs::create_dir_all(&autostart_dir);
+    let powermanagement_override = autostart_dir.join("lxqt-powermanagement.desktop");
+    let powermanagement_hidden = r#"[Desktop Entry]
+Type=Application
+Name=LXQt Power Management
+Hidden=true
+"#;
+    fs::write(&powermanagement_override, powermanagement_hidden)
+        .pb_expect("Failed to disable lxqt-powermanagement autostart");
+
     let openbox_user_rc = fs_root.join("root/.config/openbox/rc.xml");
     let openbox_system_rc = fs_root.join("etc/xdg/openbox/rc.xml");
     let openbox_source = if openbox_user_rc.exists() {
@@ -721,10 +735,12 @@ fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
                     let _ = fs::remove_file(&xkb_path);
                     // Create the new relative symlink
                     if let Err(e) = symlink(&rel_target, &xkb_path) {
-                        emit_setup_error(
-                            &mpsc_sender,
-                            format!("Failed to create relative symlink for xkb: {}", e),
-                        );
+                        mpsc_sender
+                            .send(SetupMessage::Error(format!(
+                                "Failed to create relative symlink for xkb: {}",
+                                e
+                            )))
+                            .unwrap_or(());
                     }
                 }
             }

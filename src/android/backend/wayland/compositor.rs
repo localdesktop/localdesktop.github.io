@@ -173,13 +173,9 @@ pub struct ClientState {
 }
 
 impl ClientData for ClientState {
-    fn initialized(&self, _client_id: ClientId) {
-        log::info!("initialized");
-    }
+    fn initialized(&self, _client_id: ClientId) {}
 
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {
-        log::info!("disconnected");
-    }
+    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
 }
 
 impl OutputHandler for State {}
