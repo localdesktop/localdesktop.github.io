@@ -1,4 +1,4 @@
-prefix=/Users/teddy/Desktop/github/build-proot-android/build/root-aarch64/root
+prefix=/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/root-aarch64/root
 exec_prefix=${prefix}
 libdir=${prefix}/lib
 includedir=${prefix}/include

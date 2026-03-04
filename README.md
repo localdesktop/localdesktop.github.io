@@ -47,7 +47,7 @@ brew install llvm lld gradle@8
 Then install our local version of xbuild:
 
 ```bash
-cargo install --path patches/xbuild/xbuild
+cargo install --path patches/xbuild/xbuild --force
 x build --release --platform android --arch arm64 --format apk
 ```
 

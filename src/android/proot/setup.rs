@@ -20,6 +20,7 @@ use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
     fs::{self, File},
+    io::ErrorKind,
     io::{Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
     path::Path,
@@ -53,6 +54,12 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 /// Thus, it should return a finished status if the task is done, so that the setup process can move on to the next stage.
 /// Otherwise, it should return a `JoinHandle`, so that the setup process can wait for the task to finish, but not block the main thread so that the setup progress can be reported to the user.
 type StageOutput = Option<JoinHandle<()>>;
+
+fn emit_setup_error(sender: &Sender<SetupMessage>, message: impl Into<String>) {
+    let message = message.into();
+    log::error!("Setup error: {}", message);
+    sender.send(SetupMessage::Error(message)).unwrap_or(());
+}
 
 fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     let context = get_application_context();
@@ -135,12 +142,13 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                     let _ = fs::remove_dir_all(&extracted_dir);
                     let _ = fs::remove_file(&temp_file);
 
-                    mpsc_sender
-                        .send(SetupMessage::Error(format!(
+                    emit_setup_error(
+                        &mpsc_sender,
+                        format!(
                             "Failed to extract Arch Linux FS: {}. Restarting download...",
                             e
-                        )))
-                        .unwrap_or(());
+                        ),
+                    );
 
                     // Continue the outer loop to retry the download
                     continue;
@@ -237,16 +245,36 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
 
     let mpsc_sender = mpsc_sender.clone();
     return Some(thread::spawn(move || {
-        // Install dependencies until `check` succeed
-        loop {
+        const MAX_INSTALL_ATTEMPTS: usize = 10;
+
+        // Install dependencies until `check` succeeds.
+        for attempt in 1..=MAX_INSTALL_ATTEMPTS {
+            mpsc_sender
+                .send(SetupMessage::Progress(format!(
+                    "Installing desktop dependencies (attempt {}/{})...",
+                    attempt, MAX_INSTALL_ATTEMPTS
+                )))
+                .pb_expect("Failed to send dependency install progress");
+
             ArchProcess::exec_with_panic_on_error("rm -f /var/lib/pacman/db.lck");
-            ArchProcess::exec(&install).with_log(|it| {
+            let install_with_stderr = format!("({}) 2>&1", install);
+            ArchProcess::exec(&install_with_stderr).with_log(|it| {
                 mpsc_sender
                     .send(SetupMessage::Progress(it))
                     .pb_expect("Failed to send log message");
             });
+
             if installed() {
-                break;
+                return;
+            }
+
+            if attempt == MAX_INSTALL_ATTEMPTS {
+                let error_message = format!(
+                    "Failed to install desktop dependencies after {} attempts. Check network/repo health and package availability.",
+                    MAX_INSTALL_ATTEMPTS
+                );
+                emit_setup_error(&mpsc_sender, error_message.clone());
+                panic!("{}", error_message);
             }
         }
     }));
@@ -622,7 +650,7 @@ fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
     );
 
     let session_content = fs::read_to_string(&session_path).unwrap_or_default();
-    let session_out = update_ini_section(
+    let session_with_env = update_ini_section(
         &session_content,
         "Environment",
         &[
@@ -630,7 +658,25 @@ fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
             ("QT_SCALE_FACTOR", scale.to_string()),
         ],
     );
+    let session_out = update_ini_section(
+        &session_with_env,
+        "General",
+        &[("window_manager", "openbox".to_string())],
+    );
     fs::write(&session_path, session_out).pb_expect("Failed to write session.conf");
+
+    // lxqt-powermanagement frequently crashes in a PRoot container due to missing
+    // host power-management interfaces. Disable its autostart by default.
+    let autostart_dir = fs_root.join("root/.config/autostart");
+    let _ = fs::create_dir_all(&autostart_dir);
+    let powermanagement_override = autostart_dir.join("lxqt-powermanagement.desktop");
+    let powermanagement_hidden = r#"[Desktop Entry]
+Type=Application
+Name=LXQt Power Management
+Hidden=true
+"#;
+    fs::write(&powermanagement_override, powermanagement_hidden)
+        .pb_expect("Failed to disable lxqt-powermanagement autostart");
 
     let openbox_user_rc = fs_root.join("root/.config/openbox/rc.xml");
     let openbox_system_rc = fs_root.join("etc/xdg/openbox/rc.xml");
@@ -714,6 +760,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             ))
             .unwrap_or(());
     } else {
+        log::error!("PRoot support check failed, showing Device Unsupported page");
         return PolarBearBackend::WebView(WebviewBackend {
             socket_port: 0,
             progress,
@@ -743,7 +790,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         } else {
             "Stage execution failed: Unknown error".to_string()
         };
-        sender.send(SetupMessage::Error(error_msg)).unwrap_or(());
+        emit_setup_error(sender, error_msg);
     };
 
     let fully_installed = 'outer: loop {

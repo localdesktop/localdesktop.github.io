@@ -65,11 +65,14 @@ impl WebviewBackend {
                                 "progress": progress,
                                 "message": msg,
                             }),
-                            SetupMessage::Error(msg) => json!({
-                                "progress": progress,
-                                "message": msg,
-                                "isError": true
-                            }),
+                            SetupMessage::Error(msg) => {
+                                log::error!("Setup error [{}%]: {}", progress, msg);
+                                json!({
+                                    "progress": progress,
+                                    "message": msg,
+                                    "isError": true
+                                })
+                            }
                         };
 
                         let message = OwnedMessage::Text(json_message.to_string());

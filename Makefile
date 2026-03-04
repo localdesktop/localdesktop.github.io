@@ -1,5 +1,5 @@
 install-xbuild:
-	cargo install --path ./patches/xbuild/xbuild
+	cargo install --path ./patches/xbuild/xbuild --force
 
 build: install-xbuild
 	x build --release --platform android --arch arm64 --format apk

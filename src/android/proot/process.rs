@@ -1,6 +1,5 @@
 use crate::android::utils::application_context::get_application_context;
 use crate::core::{config, logging::PolarBearExpectation};
-use smithay::reexports::rustix::path::Arg;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::process::{Child, Command, Stdio};
@@ -98,8 +97,10 @@ impl ArchProcess {
     }
 
     pub fn is_supported() -> bool {
-        let check_command = "cat /proc/cpuinfo";
-        Self::setup_base_command()
+        // Probe PRoot with a direct host binary instead of `sh -c ...`.
+        // Some devices/app contexts fail on `/system/bin/sh` under `-r /` even though
+        // the real app flow (running `/bin/sh` inside the Arch rootfs) can still work.
+        let output_result = Self::setup_base_command()
             .arg("-r")
             .arg("/")
             .arg("-L")
@@ -107,12 +108,46 @@ impl ArchProcess {
             .arg("--sysvipc")
             .arg("--kill-on-exit")
             .arg("--root-id")
-            .arg("sh")
-            .arg("-c")
-            .arg(check_command)
-            .output()
-            .map(|res| res.stderr.is_empty())
-            .unwrap_or(false)
+            .arg("/system/bin/true")
+            .output();
+
+        match output_result {
+            Ok(res) => {
+                log::info!(
+                    "PRoot support probe status: success={} code={:?}",
+                    res.status.success(),
+                    res.status.code()
+                );
+                let stderr = String::from_utf8_lossy(&res.stderr).replace('\n', "\\n");
+                let stderr_raw = String::from_utf8_lossy(&res.stderr);
+                if !stderr_raw.is_empty() {
+                    log::warn!("PRoot support probe stderr: {}", stderr_raw);
+                }
+                let host_exec_enosys = !res.status.success()
+                    && stderr_raw.contains("proot error: execve(\"/system/bin/")
+                    && stderr.contains("Function not implemented")
+                    && stderr.contains("fatal error: see `libproot.so --help`")
+                    && stderr.contains("proot error: execve(");
+                let supported = if host_exec_enosys {
+                    true
+                } else {
+                    res.status.success()
+                };
+                if !supported {
+                    log::error!(
+                        "PRoot support probe determined unsupported: code={:?}, stderr={}",
+                        res.status.code(),
+                        stderr_raw.trim()
+                    );
+                }
+                log::info!("PRoot support probe decision: {}", supported);
+                supported
+            }
+            Err(e) => {
+                log::error!("PRoot support probe failed to execute: {}", e);
+                false
+            }
+        }
     }
 
     /// Run the command inside Proot

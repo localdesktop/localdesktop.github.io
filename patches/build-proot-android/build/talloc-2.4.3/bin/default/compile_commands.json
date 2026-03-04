@@ -1,10 +1,12 @@
 [
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
       "-fstack-protector-strong",
@@ -19,17 +21,20 @@
       "-I../..",
       "../../lib/replace/replace.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/replace.c.2.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/replace.c.2.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "../../lib/replace/replace.c"
   },
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
       "-fstack-protector-strong",
@@ -42,17 +47,20 @@
       "-I../..",
       "lib/replace/replace.empty.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/replace.empty.c.4.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/replace.empty.c.4.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "lib/replace/replace.empty.c"
   },
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-Wno-format-truncation",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
@@ -66,17 +74,20 @@
       "-I../..",
       "../../lib/replace/tests/testsuite.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/tests/testsuite.c.5.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/tests/testsuite.c.5.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "../../lib/replace/tests/testsuite.c"
   },
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-Wno-format-truncation",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
@@ -90,17 +101,20 @@
       "-I../..",
       "../../lib/replace/tests/strptime.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/tests/strptime.c.5.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/tests/strptime.c.5.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "../../lib/replace/tests/strptime.c"
   },
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-Wno-format-truncation",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
@@ -114,17 +128,20 @@
       "-I../..",
       "../../lib/replace/tests/os2_delete.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/tests/os2_delete.c.5.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/tests/os2_delete.c.5.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "../../lib/replace/tests/os2_delete.c"
   },
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-Wno-format-truncation",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
@@ -138,17 +155,20 @@
       "-I../..",
       "../../lib/replace/tests/getifaddrs.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/tests/getifaddrs.c.5.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/tests/getifaddrs.c.5.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "../../lib/replace/tests/getifaddrs.c"
   },
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
       "-fstack-protector-strong",
@@ -161,17 +181,20 @@
       "-I../..",
       "../../lib/replace/tests/main.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/tests/main.c.6.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/tests/main.c.6.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "../../lib/replace/tests/main.c"
   },
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
       "-fstack-protector-strong",
@@ -186,17 +209,20 @@
       "-I../../lib/replace",
       "../../testsuite_main.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/testsuite_main.c.1.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/testsuite_main.c.1.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "../../testsuite_main.c"
   },
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
       "-fstack-protector-strong",
@@ -211,17 +237,20 @@
       "-I../../lib/replace",
       "../../testsuite.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/testsuite.c.1.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/testsuite.c.1.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "../../testsuite.c"
   },
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
       "-fstack-protector-strong",
@@ -236,17 +265,20 @@
       "-I../../lib/replace",
       "../../test_magic_differs_helper.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/test_magic_differs_helper.c.3.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/test_magic_differs_helper.c.3.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "../../test_magic_differs_helper.c"
   },
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
       "-fstack-protector-strong",
@@ -262,17 +294,20 @@
       "-I../../lib/replace",
       "../../talloc.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/talloc.c.6.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/talloc.c.6.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "../../talloc.c"
   },
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
       "-fstack-protector-strong",
@@ -287,17 +322,20 @@
       "-I../..",
       "../../lib/replace/closefrom.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/closefrom.c.2.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/closefrom.c.2.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "../../lib/replace/closefrom.c"
   },
   {
     "arguments": [
-      "/mnt/mac/opt/homebrew/Caskroom/android-ndk/28/AndroidNDK13004108.app/Contents/NDK//toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
+      "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang",
       "-MMD",
       "-D_GNU_SOURCE=1",
       "-D_XOPEN_SOURCE_EXTENDED=1",
+      "-D_DARWIN_C_SOURCE=1",
+      "-D_DARWIN_UNLIMITED_GETGROUPS=1",
       "-fPIC",
       "-D__STDC_WANT_LIB_EXT1__=1",
       "-fstack-protector-strong",
@@ -312,9 +350,10 @@
       "-I../..",
       "../../lib/replace/getifaddrs.c",
       "-c",
-      "-o/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/getifaddrs.c.2.o"
+      "-o/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default/lib/replace/getifaddrs.c.2.o",
+      "-I/opt/homebrew/opt/llvm/include"
     ],
-    "directory": "/Users/teddy/Desktop/github/build-proot-android/build/talloc-2.4.3/bin/default",
+    "directory": "/Users/teddy/Desktop/github/localdesktop/patches/build-proot-android/build/talloc-2.4.3/bin/default",
     "file": "../../lib/replace/getifaddrs.c"
   }
 ]

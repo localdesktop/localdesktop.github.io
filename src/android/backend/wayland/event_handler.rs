@@ -42,7 +42,6 @@ fn get_surface(state: &State) -> Option<ToplevelSurface> {
 pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop: &ActiveEventLoop) {
     match event {
         CentralizedEvent::CloseRequested => {
-            log::info!("The close button was pressed; stopping");
             event_loop.exit();
         }
         CentralizedEvent::Redraw => {
@@ -93,8 +92,6 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                         .accept()
                         .pb_expect("Failed to accept listener")
                     {
-                        log::info!("Got a client: {:?}", stream);
-
                         let client = compositor
                             .display
                             .handle()
