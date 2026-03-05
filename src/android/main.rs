@@ -32,6 +32,10 @@ fn android_main(android_app: AndroidApp) {
 
     // Wrap the Android logger with Sentry's logger
     let logger = SentryLogger::with_dest(android_logger::AndroidLogger::default()).filter(|md| {
+        // How to use log::*() macros in this project:
+        // - log::error!() for critical errors that maintainers should be NOTIFIED about via email
+        // - log::trace!() for very detailed debugging information that need NOT to be captured with telemetry
+        // - log::info!() for everything else, maintainers can check this with Sentry's Logs
         match md.level() {
             // Capture error records as Sentry events
             // These are grouped into issues, representing high-severity errors to act upon
