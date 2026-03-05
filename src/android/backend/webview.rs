@@ -66,7 +66,7 @@ impl WebviewBackend {
                                 "message": msg,
                             }),
                             SetupMessage::Error(msg) => {
-                                log::error!("Setup error [{}%]: {}", progress, msg);
+                                log::info!("Setup error [{}%]: {}", progress, msg);
                                 json!({
                                     "progress": progress,
                                     "message": msg,

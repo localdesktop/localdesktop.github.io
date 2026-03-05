@@ -14,7 +14,7 @@ pub fn launch() {
         let full_launch_command = local_config.command.launch;
 
         ArchProcess::exec_as(&full_launch_command, &username).with_log(|it| {
-            log::info!("{}", it);
+            log::trace!("{}", it);
         });
     });
 }

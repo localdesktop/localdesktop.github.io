@@ -57,7 +57,7 @@ type StageOutput = Option<JoinHandle<()>>;
 
 fn emit_setup_error(sender: &Sender<SetupMessage>, message: impl Into<String>) {
     let message = message.into();
-    log::error!("Setup error: {}", message);
+    log::info!("Setup error: {}", message);
     sender.send(SetupMessage::Error(message)).unwrap_or(());
 }
 
@@ -760,7 +760,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             ))
             .unwrap_or(());
     } else {
-        log::error!("PRoot support check failed, showing Device Unsupported page");
+        log::info!("PRoot support check failed, showing Device Unsupported page");
         return PolarBearBackend::WebView(WebviewBackend {
             socket_port: 0,
             progress,

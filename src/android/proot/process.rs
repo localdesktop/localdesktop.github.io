@@ -134,7 +134,7 @@ impl ArchProcess {
                     res.status.success()
                 };
                 if !supported {
-                    log::error!(
+                    log::info!(
                         "PRoot support probe determined unsupported: code={:?}, stderr={}",
                         res.status.code(),
                         stderr_raw.trim()
@@ -144,7 +144,7 @@ impl ArchProcess {
                 supported
             }
             Err(e) => {
-                log::error!("PRoot support probe failed to execute: {}", e);
+                log::info!("PRoot support probe failed to execute: {}", e);
                 false
             }
         }
