@@ -1,5 +1,5 @@
 use crate::android::utils::application_context::get_application_context;
-use crate::core::{config, logging::PolarBearExpectation};
+use crate::core::config;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::process::{Command, ExitStatus, Output, Stdio};
@@ -81,7 +81,10 @@ impl ArchProcess {
 
         let mut process = Command::new(context.native_library_dir.join("libproot.so"));
         process
-            .env("PROOT_LOADER", context.native_library_dir.join("libproot_loader.so"))
+            .env(
+                "PROOT_LOADER",
+                context.native_library_dir.join("libproot_loader.so"),
+            )
             .env("PROOT_TMP_DIR", context.data_dir);
 
         if *USE_NO_SECCOMP.get().unwrap_or(&false) {
@@ -140,7 +143,12 @@ impl ArchProcess {
         if user == "root" {
             process.arg("sh");
         } else {
-            process.arg("runuser").arg("-u").arg(user).arg("--").arg("sh");
+            process
+                .arg("runuser")
+                .arg("-u")
+                .arg(user)
+                .arg("--")
+                .arg("sh");
         }
 
         process.arg("-c").arg(&self.command);
@@ -150,7 +158,7 @@ impl ArchProcess {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .spawn()
-                .pb_expect("Failed to run command");
+                .expect("Failed to run command");
 
             let reader = BufReader::new(child.stdout.take().unwrap());
             for line in reader.lines() {
@@ -158,11 +166,11 @@ impl ArchProcess {
                 log(line);
             }
 
-            child.wait_with_output().pb_expect("Failed to wait for command")
+            child
+                .wait_with_output()
+                .expect("Failed to wait for command")
         } else {
-            process
-                .output()
-                .pb_expect("Failed to run command")
+            process.output().expect("Failed to run command")
         }
     }
 }

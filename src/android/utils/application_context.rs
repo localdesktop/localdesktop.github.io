@@ -1,9 +1,6 @@
 use crate::{
     android::utils::ndk::run_in_jvm,
-    core::{
-        config::{parse_config, LocalConfig, ARCH_FS_ROOT, CONFIG_FILE},
-        logging::PolarBearExpectation,
-    },
+    core::config::{parse_config, LocalConfig, ARCH_FS_ROOT, CONFIG_FILE},
 };
 use jni::{
     objects::{JObject, JString},
@@ -24,12 +21,11 @@ pub struct ApplicationContext {
 
 impl ApplicationContext {
     pub fn build(android_app: &AndroidApp) {
-        let vm = unsafe {
-            JavaVM::from_raw(android_app.vm_as_ptr() as *mut _).pb_expect("Failed to get JavaVM")
-        };
+        let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr() as *mut _) }
+            .expect("Failed to get JavaVM");
         let mut env = vm
             .attach_current_thread()
-            .pb_expect("Failed to attach current thread");
+            .expect("Failed to attach current thread");
 
         let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as *mut _) };
 
@@ -43,7 +39,7 @@ impl ApplicationContext {
         {
             let mut context = APPLICATION_CONTEXT
                 .write()
-                .pb_expect("Failed to write application context");
+                .expect("Failed to write application context");
             *context = Some(ApplicationContext {
                 cache_dir,
                 data_dir,
@@ -61,17 +57,17 @@ impl ApplicationContext {
     fn get_path(env: &mut JNIEnv, activity: &JObject, method: &str) -> PathBuf {
         let path_obj = env
             .call_method(activity, method, "()Ljava/io/File;", &[])
-            .pb_expect("Failed to call method")
+            .expect("Failed to call method")
             .l()
-            .pb_expect("Failed to get path object");
+            .expect("Failed to get path object");
         let path_str = env
             .call_method(path_obj, "getAbsolutePath", "()Ljava/lang/String;", &[])
-            .pb_expect("Failed to get absolute path")
+            .expect("Failed to get absolute path")
             .l()
-            .pb_expect("Failed to get path string");
+            .expect("Failed to get path string");
         let path: String = env
             .get_string(&JString::from(path_str))
-            .pb_expect("Failed to convert path to string")
+            .expect("Failed to convert path to string")
             .into();
         PathBuf::from(path)
     }
@@ -84,17 +80,17 @@ impl ApplicationContext {
                 "()Landroid/content/pm/ApplicationInfo;",
                 &[],
             )
-            .pb_expect("Failed to get application info")
+            .expect("Failed to get application info")
             .l()
-            .pb_expect("Failed to get application info object");
+            .expect("Failed to get application info object");
         let native_library_dir = env
             .get_field(app_info, "nativeLibraryDir", "Ljava/lang/String;")
-            .pb_expect("Failed to get native library dir field")
+            .expect("Failed to get native library dir field")
             .l()
-            .pb_expect("Failed to get native library dir object");
+            .expect("Failed to get native library dir object");
         let path: String = env
             .get_string(&JString::from(native_library_dir))
-            .pb_expect("Failed to convert native library dir to string")
+            .expect("Failed to convert native library dir to string")
             .into();
         PathBuf::from(path)
     }
@@ -122,7 +118,7 @@ static APPLICATION_CONTEXT: RwLock<Option<ApplicationContext>> = RwLock::new(Non
 pub fn get_application_context() -> ApplicationContext {
     return APPLICATION_CONTEXT
         .read()
-        .pb_expect("Failed to read application context")
+        .expect("Failed to read application context")
         .clone()
-        .pb_expect("ApplicationContext is not initialized. Please make sure `ApplicationContext::build(&android_app);` is called in `android_main`.");
+        .expect("ApplicationContext is not initialized. Please make sure `ApplicationContext::build(&android_app);` is called in `android_main`.");
 }
