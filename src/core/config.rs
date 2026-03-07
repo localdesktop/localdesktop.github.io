@@ -67,7 +67,7 @@ fn default_check() -> String {
 }
 
 fn default_install() -> String {
-    "stdbuf -oL pacman -Syu --needed --noconfirm --noprogressbar noto-fonts liblxqt lxqt-about lxqt-admin lxqt-archiver lxqt-config lxqt-globalkeys lxqt-menu-data lxqt-notificationd lxqt-openssh-askpass lxqt-panel lxqt-policykit lxqt-powermanagement lxqt-qtplugin lxqt-runner lxqt-session lxqt-sudo lxqt-themes lxqt-wayland-session pcmanfm-qt qps screengrab xdg-desktop-portal-lxqt openbox xorg-xwayland labwc breeze-icons onboard"
+    "pacman -Syy --needed --noconfirm --noprogressbar noto-fonts liblxqt lxqt-about lxqt-admin lxqt-archiver lxqt-config lxqt-globalkeys lxqt-menu-data lxqt-notificationd lxqt-openssh-askpass lxqt-panel lxqt-policykit lxqt-powermanagement lxqt-qtplugin lxqt-runner lxqt-session lxqt-sudo lxqt-themes lxqt-wayland-session pcmanfm-qt qps screengrab xdg-desktop-portal-lxqt openbox xorg-xwayland labwc breeze-icons onboard"
         .to_string()
 }
 
