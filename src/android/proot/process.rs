@@ -2,31 +2,91 @@ use crate::android::utils::application_context::get_application_context;
 use crate::core::{config, logging::PolarBearExpectation};
 use std::io::BufRead;
 use std::io::BufReader;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, ExitStatus, Output, Stdio};
+use std::sync::{Arc, OnceLock};
 
-pub type Log = Box<dyn Fn(String)>;
+static USE_NO_SECCOMP: OnceLock<bool> = OnceLock::new();
 
+pub type Log = Arc<dyn Fn(String) + Send + Sync>;
+
+/// Runs a shell command inside the Arch Linux PRoot environment.
+///
+/// - `command`: The shell command to execute (passed to `sh -c`).
+/// - `user`: The user to run as. Defaults to `"root"` when `None`.
+/// - `log`: Optional stdout line callback. When set, stdout is streamed line-by-line
+///   to the callback. When `None`, stdout/stderr are captured.
 pub struct ArchProcess {
     pub command: String,
-    pub user: String,
-    pub process: Option<Child>,
+    pub user: Option<String>,
+    pub log: Option<Log>,
 }
 
 impl ArchProcess {
-    fn setup_base_command() -> Command {
+    fn probe_proot(no_seccomp: bool) -> bool {
         let context = get_application_context();
         let proot_loader = context.native_library_dir.join("libproot_loader.so");
 
         let mut process = Command::new(context.native_library_dir.join("libproot.so"));
         process
-            .env("PROOT_LOADER", proot_loader)
-            .env("PROOT_TMP_DIR", context.data_dir);
-        // .env("PROOT_NO_SECCOMP", "1");
+            .env("PROOT_LOADER", &proot_loader)
+            .env("PROOT_TMP_DIR", &context.data_dir);
+
+        if no_seccomp {
+            process.env("PROOT_NO_SECCOMP", "1");
+        }
+
         process
+            .arg("-V")
+            .output()
+            .map(|o| {
+                log::info!(
+                    "probe_proot(no_seccomp={}) {:?}, stdout: {}, stderr: {}",
+                    no_seccomp,
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                );
+                o.status.success()
+            })
+            .unwrap_or_else(|e| {
+                log::info!("probe_proot(no_seccomp={}) error: {}", no_seccomp, e);
+                false
+            })
     }
 
-    fn with_args(mut process: Command) -> Command {
+    pub fn is_supported() -> bool {
+        // Try with seccomp first (default), fall back to PROOT_NO_SECCOMP=1
+        let supported = if Self::probe_proot(false) {
+            USE_NO_SECCOMP.set(false).ok();
+            log::info!("PRoot works with seccomp filter enabled");
+            true
+        } else if Self::probe_proot(true) {
+            USE_NO_SECCOMP.set(true).ok();
+            log::info!("PRoot works with PROOT_NO_SECCOMP=1");
+            true
+        } else {
+            USE_NO_SECCOMP.set(false).ok();
+            false
+        };
+
+        if !supported {
+            log::error!("⚡️ Device Unsupported");
+        }
+        supported
+    }
+
+    pub fn run(self) -> Output {
         let context = get_application_context();
+        let user = self.user.as_deref().unwrap_or("root");
+
+        let mut process = Command::new(context.native_library_dir.join("libproot.so"));
+        process
+            .env("PROOT_LOADER", context.native_library_dir.join("libproot_loader.so"))
+            .env("PROOT_TMP_DIR", context.data_dir);
+
+        if *USE_NO_SECCOMP.get().unwrap_or(&false) {
+            process.env("PROOT_NO_SECCOMP", "1");
+        }
 
         process
             .arg("-r")
@@ -61,152 +121,48 @@ impl ArchProcess {
             .arg(format!("--bind={}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap", config::ARCH_FS_ROOT))
             .arg(format!("--bind={}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches", config::ARCH_FS_ROOT))
             .arg(format!("--bind={}/sys/.empty:/sys/fs/selinux", config::ARCH_FS_ROOT));
-        process
-    }
 
-    fn with_env_vars(mut process: Command, user: &str) -> Command {
+        // env vars
         process.arg("/usr/bin/env").arg("-i");
-
-        let home = if user == "root" {
-            "HOME=/root".to_string()
+        if user == "root" {
+            process.arg("HOME=/root");
         } else {
-            format!("HOME=/home/{}", user)
-        };
-        process.arg(home);
-
+            process.arg(format!("HOME=/home/{}", user));
+        }
         process
             .arg("LANG=C.UTF-8")
             .arg("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:/system/bin:/system/xbin")
             .arg("TMPDIR=/tmp")
             .arg(format!("USER={}", user))
             .arg(format!("LOGNAME={}", user));
-        process
-    }
 
-    fn with_user_shell(mut process: Command, user: &str) -> Command {
+        // user shell
         if user == "root" {
             process.arg("sh");
         } else {
-            process
-                .arg("runuser")
-                .arg("-u")
-                .arg(user)
-                .arg("--")
-                .arg("sh");
+            process.arg("runuser").arg("-u").arg(user).arg("--").arg("sh");
         }
-        process
-    }
 
-    pub fn is_supported() -> bool {
-        let supported = Self::setup_base_command()
-            .arg("-V")
-            .output()
-            .map(|o| {
-                log::info!(
-                    "is_supported() {:?}, stdout: {}, stderr: {}",
-                    o.status.code(),
-                    String::from_utf8_lossy(&o.stdout),
-                    String::from_utf8_lossy(&o.stderr)
-                );
-                o.status.success()
-            })
-            .unwrap_or_else(|e| {
-                log::info!("is_supported() error: {}", e);
-                false
-            });
+        process.arg("-c").arg(&self.command);
 
-        if !supported {
-            log::error!("⚡️ Device Unsupported 🐻‍❄️");
-        }
-        supported
-    }
+        if let Some(log) = self.log {
+            let mut child = process
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .pb_expect("Failed to run command");
 
-    /// Run the command inside Proot
-    pub fn spawn(mut self) -> Self {
-        let mut process = Self::setup_base_command();
-        process = Self::with_args(process);
-        process = Self::with_env_vars(process, &self.user);
-        process = Self::with_user_shell(process, &self.user);
-
-        let child = process
-            .arg("-c")
-            .arg(&self.command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .pb_expect("Failed to run command");
-
-        self.process.replace(child);
-        self
-    }
-
-    pub fn exec(command: &str) -> Self {
-        ArchProcess {
-            command: command.to_string(),
-            user: "root".to_string(),
-            process: None,
-        }
-        .spawn()
-    }
-
-    pub fn exec_as(command: &str, user: &str) -> Self {
-        ArchProcess {
-            command: command.to_string(),
-            user: user.to_string(),
-            process: None,
-        }
-        .spawn()
-    }
-
-    pub fn with_log(self, mut log: impl FnMut(String)) {
-        if let Some(child) = self.process {
-            let reader = BufReader::new(child.stdout.unwrap());
+            let reader = BufReader::new(child.stdout.take().unwrap());
             for line in reader.lines() {
                 let line = line.unwrap();
                 log(line);
             }
-        }
-    }
 
-    pub fn exec_with_panic_on_error(command: &str) {
-        let mut process = Self::setup_base_command();
-        process = Self::with_args(process);
-        process = Self::with_env_vars(process, "root");
-        process = Self::with_user_shell(process, "root");
-
-        let output = process
-            .arg("-c")
-            .arg(command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .pb_expect("Failed to run command");
-
-        let error_output = String::from_utf8_lossy(&output.stderr);
-        if error_output.contains("fatal error: see `libproot.so --help`") {
-            panic!("PRoot error: {}", error_output);
-        }
-    }
-
-    pub fn wait_with_output(self) -> std::io::Result<std::process::Output> {
-        if let Some(child) = self.process {
-            child.wait_with_output()
+            child.wait_with_output().pb_expect("Failed to wait for command")
         } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Process not spawned",
-            ))
-        }
-    }
-
-    pub fn wait(self) -> std::io::Result<std::process::ExitStatus> {
-        if let Some(mut child) = self.process {
-            child.wait()
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Process not spawned",
-            ))
+            process
+                .output()
+                .pb_expect("Failed to run command")
         }
     }
 }
