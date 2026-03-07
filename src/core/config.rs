@@ -17,7 +17,7 @@ pub const WAYLAND_SOCKET_NAME: &str = "wayland-0";
 
 pub const MAX_PANEL_LOG_ENTRIES: usize = 100;
 
-pub const SENTRY_DSN: &str = "https://0d24d49d44f5ecd61f7f8b2d8ed87c04@o4509548388417536.ingest.de.sentry.io/4509548392480848";
+pub const SENTRY_DSN: &str = "https://d8af27f864ade027ff81ecadea91b02e@o4509548388417536.ingest.de.sentry.io/4509548392480848";
 
 /// Make sure the config keys are all lowercase, and config values are single-line. Use \n for multi-line config values if needed
 /// If a key exists multiple time, the first entry is applied

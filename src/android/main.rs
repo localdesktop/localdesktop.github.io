@@ -7,7 +7,7 @@ use crate::{
             ndk::run_in_jvm,
         },
     },
-    core::{config, logging::PolarBearExpectation},
+    core::config,
 };
 use sentry::integrations::log::{LogFilter, SentryLogger};
 use winit::{
@@ -65,7 +65,7 @@ fn android_main(android_app: AndroidApp) {
     let event_loop = EventLoop::builder()
         .with_android_app(android_app.clone())
         .build()
-        .pb_expect("Failed to create event loop");
+        .expect("Failed to create event loop");
 
     // ControlFlow::Poll continuously runs the event loop, even if the OS hasn't
     // dispatched any events. This is ideal for games and similar applications.
@@ -80,5 +80,5 @@ fn android_main(android_app: AndroidApp) {
     let mut app = PolarBearApp::build(android_app);
 
     // Phase 2: Run
-    event_loop.run_app(&mut app).pb_expect("Failed to run app");
+    event_loop.run_app(&mut app).expect("Failed to run app");
 }

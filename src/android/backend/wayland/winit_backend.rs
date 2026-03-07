@@ -41,8 +41,6 @@ use winit::event_loop::ActiveEventLoop;
 use winit::raw_window_handle::{AndroidNdkWindowHandle, HasWindowHandle, RawWindowHandle};
 use winit::window::{Window as WinitWindow, WindowAttributes};
 
-use crate::core::logging::PolarBearExpectation;
-
 pub struct AndroidNativeSurface {
     handle: AndroidNdkWindowHandle,
 }
@@ -75,7 +73,7 @@ fn create_egl_display(
 
     // Get the display
     let display = unsafe { egl.get_display(khronos_egl::DEFAULT_DISPLAY) }
-        .pb_expect("Failed to get EGL display");
+        .expect("Failed to get EGL display");
 
     // Initialize the display
     let (major, minor) = egl.initialize(display)?;
@@ -84,8 +82,8 @@ fn create_egl_display(
     let config_attribs = [khronos_egl::NONE];
     let config = egl
         .choose_first_config(display, &config_attribs)
-        .pb_expect("Failed to choose EGL config")
-        .pb_expect("No suitable EGL config found");
+        .expect("Failed to choose EGL config")
+        .expect("No suitable EGL config found");
 
     // Create the EGLDisplay from raw pointers
     let egl_display = unsafe {
@@ -94,7 +92,7 @@ fn create_egl_display(
             config.as_ptr() as *mut c_void,
         )
     }
-    .pb_expect("Failed to create EGL display");
+    .expect("Failed to create EGL display");
 
     Ok(egl_display)
 }
@@ -108,7 +106,7 @@ pub fn bind(event_loop: &ActiveEventLoop) -> WinitGraphicsBackend<GlesRenderer> 
     let window = Arc::new(
         event_loop
             .create_window(WindowAttributes::default())
-            .pb_expect("Failed to create window"),
+            .expect("Failed to create window"),
     );
 
     let handle = window.window_handle().map(|handle| handle.as_raw());
@@ -140,7 +138,7 @@ pub fn bind(event_loop: &ActiveEventLoop) -> WinitGraphicsBackend<GlesRenderer> 
                     PixelFormatRequirements::_8_bit(),
                 )
             })
-            .pb_expect("Failed to create EGLContext");
+            .expect("Failed to create EGLContext");
 
             let surface = unsafe {
                 EGLSurface::new(
@@ -149,7 +147,7 @@ pub fn bind(event_loop: &ActiveEventLoop) -> WinitGraphicsBackend<GlesRenderer> 
                     context.config_id(),
                     AndroidNativeSurface { handle },
                 )
-                .pb_expect("Failed to create EGLSurface")
+                .expect("Failed to create EGLSurface")
             };
 
             let _ = context.unbind();
@@ -159,8 +157,7 @@ pub fn bind(event_loop: &ActiveEventLoop) -> WinitGraphicsBackend<GlesRenderer> 
         Err(error) => panic!("Failed to get window handle: {:?}", error),
     };
 
-    let renderer =
-        unsafe { GlesRenderer::new(context) }.pb_expect("Failed to create GLES Renderer");
+    let renderer = unsafe { GlesRenderer::new(context) }.expect("Failed to create GLES Renderer");
     let damage_tracking = display.supports_damage();
 
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);

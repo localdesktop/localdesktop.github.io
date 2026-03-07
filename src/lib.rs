@@ -1,6 +1,5 @@
 pub mod core {
     pub mod config;
-    pub mod logging;
 }
 
 #[cfg(target_os = "android")]

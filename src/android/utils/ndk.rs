@@ -1,4 +1,3 @@
-use crate::core::logging::PolarBearExpectation;
 use jni::sys::JNIInvokeInterface_;
 use jni::{JNIEnv, JavaVM};
 use winit::platform::android::activity::AndroidApp;
@@ -11,11 +10,9 @@ where
     // Set up JNI and gather the JavaVM
     let vm =
         unsafe { JavaVM::from_raw(android_app.vm_as_ptr() as *mut *const JNIInvokeInterface_) }
-            .pb_expect("Failed to get JavaVM");
+            .expect("Failed to get JavaVM");
 
-    let mut env = vm
-        .attach_current_thread()
-        .pb_expect("Failed to attach thread");
+    let mut env = vm.attach_current_thread().expect("Failed to attach thread");
 
     // Call the provided JNI function
     let res = jni_function(&mut env, &android_app);

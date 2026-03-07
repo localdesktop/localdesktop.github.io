@@ -9,10 +9,7 @@ use crate::{
         utils::application_context::get_application_context,
         utils::ndk::run_in_jvm,
     },
-    core::{
-        config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT},
-        logging::PolarBearExpectation,
-    },
+    core::config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT},
 };
 use jni::objects::JObject;
 use jni::sys::_jobject;
@@ -73,14 +70,14 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                         .send(SetupMessage::Progress(
                             "Downloading Arch Linux FS...".to_string(),
                         ))
-                        .pb_expect("Failed to send log message");
+                        .expect("Failed to send log message");
 
                     let response = reqwest::blocking::get(ARCH_FS_ARCHIVE)
-                        .pb_expect("Failed to download Arch Linux FS");
+                        .expect("Failed to download Arch Linux FS");
 
                     let total_size = response.content_length().unwrap_or(0);
                     let mut file = File::create(&temp_file)
-                        .pb_expect("Failed to create temp file for Arch Linux FS");
+                        .expect("Failed to create temp file for Arch Linux FS");
 
                     let mut downloaded = 0u64;
                     let mut buffer = [0u8; 8192];
@@ -90,12 +87,12 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                     loop {
                         let n = reader
                             .read(&mut buffer)
-                            .pb_expect("Failed to read from response");
+                            .expect("Failed to read from response");
                         if n == 0 {
                             break;
                         }
                         file.write_all(&buffer[..n])
-                            .pb_expect("Failed to write to file");
+                            .expect("Failed to write to file");
                         downloaded += n as u64;
                         if total_size > 0 {
                             let percent = (downloaded * 100 / total_size).min(100) as u8;
@@ -118,14 +115,14 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                     .send(SetupMessage::Progress(
                         "Extracting Arch Linux FS...".to_string(),
                     ))
-                    .pb_expect("Failed to send log message");
+                    .expect("Failed to send log message");
 
                 // Ensure the extracted directory is clean
                 let _ = fs::remove_dir_all(&extracted_dir);
 
                 // Extract tar file directly to the final destination
-                let tar_file = File::open(&temp_file)
-                    .pb_expect("Failed to open downloaded Arch Linux FS file");
+                let tar_file =
+                    File::open(&temp_file).expect("Failed to open downloaded Arch Linux FS file");
                 let tar = XzDecoder::new(tar_file);
                 let mut archive = Archive::new(tar);
 
@@ -152,10 +149,10 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
 
             // Move the extracted files to the final destination
             fs::rename(&extracted_dir, fs_root)
-                .pb_expect("Failed to rename extracted files to final destination");
+                .expect("Failed to rename extracted files to final destination");
 
             // Clean up the temporary file
-            fs::remove_file(&temp_file).pb_expect("Failed to remove temporary file");
+            fs::remove_file(&temp_file).expect("Failed to remove temporary file");
         }));
     }
     None
@@ -171,7 +168,7 @@ fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
                 .send(SetupMessage::Progress(
                     "Simulating Linux system data...".to_string(),
                 ))
-                .pb_expect(&format!("Failed to send log message"));
+                .expect(&format!("Failed to send log message"));
 
             // Create necessary directories - don't fail if they already exist
             let _ = fs::create_dir_all(fs_root.join("proc"));
@@ -204,7 +201,7 @@ fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
 
             for (path, content) in proc_files {
                 let _ = fs::write(fs_root.join(path), content)
-                    .pb_expect(&format!("Permission denied while writing to {}", path));
+                    .expect(&format!("Permission denied while writing to {}", path));
             }
         }));
     }
@@ -225,10 +222,14 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
     } = context.local_config.command;
 
     let installed = move || {
-        ArchProcess { command: check.clone(), user: None, log: None }
-            .run()
-            .status
-            .success()
+        ArchProcess {
+            command: check.clone(),
+            user: None,
+            log: None,
+        }
+        .run()
+        .status
+        .success()
     };
 
     if installed() {
@@ -241,8 +242,17 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
 
         // Install dependencies until `check` succeeds.
         for attempt in 1..=MAX_INSTALL_ATTEMPTS {
-            let output = ArchProcess { command: "rm -f /var/lib/pacman/db.lck".into(), user: None, log: None }.run();
-            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let output = ArchProcess {
+                command: "rm -f /var/lib/pacman/db.lck".into(),
+                user: None,
+                log: None,
+            }
+            .run();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             let sender = mpsc_sender.clone();
             ArchProcess {
                 command: install.clone(),
@@ -250,9 +260,10 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
                 log: Some(Arc::new(move |it| {
                     sender
                         .send(SetupMessage::Progress(it))
-                        .pb_expect("Failed to send log message");
+                        .expect("Failed to send log message");
                 })),
-            }.run();
+            }
+            .run();
 
             if installed() {
                 return;
@@ -262,7 +273,7 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
                     "Retrying installation... (attempt {}/{})",
                     attempt, MAX_INSTALL_ATTEMPTS
                 )))
-                .pb_expect("Failed to send dependency install progress");
+                .expect("Failed to send dependency install progress");
 
             if attempt == MAX_INSTALL_ATTEMPTS {
                 let error_message = format!(
@@ -281,11 +292,11 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
 fn setup_firefox_config(_: &SetupOptions) -> StageOutput {
     // Create the Firefox root directory if it doesn't exist
     let firefox_root = format!("{}/usr/lib/firefox", ARCH_FS_ROOT);
-    let _ = fs::create_dir_all(&firefox_root).pb_expect("Failed to create Firefox root directory");
+    let _ = fs::create_dir_all(&firefox_root).expect("Failed to create Firefox root directory");
 
     // Create the defaults/pref directory
     let pref_dir = format!("{}/defaults/pref", firefox_root);
-    let _ = fs::create_dir_all(&pref_dir).pb_expect("Failed to create Firefox pref directory");
+    let _ = fs::create_dir_all(&pref_dir).expect("Failed to create Firefox pref directory");
 
     // Create autoconfig.js in defaults/pref
     let autoconfig_js = r#"pref("general.config.filename", "localdesktop.cfg");
@@ -293,7 +304,7 @@ pref("general.config.obscure_value", 0);
 "#;
 
     let _ = fs::write(format!("{}/autoconfig.js", pref_dir), autoconfig_js)
-        .pb_expect("Failed to write Firefox autoconfig.js");
+        .expect("Failed to write Firefox autoconfig.js");
 
     // Create localdesktop.cfg in the Firefox root directory
     let firefox_cfg = r#"// Auto updated by Local Desktop on each startup, do not edit manually
@@ -302,7 +313,7 @@ defaultPref("security.sandbox.content.level", 0);
 "#; // It is required that the first line of this file is a comment, even if you have nothing to comment. Docs: https://support.mozilla.org/en-US/kb/customizing-firefox-using-autoconfig
 
     let _ = fs::write(format!("{}/localdesktop.cfg", firefox_root), firefox_cfg)
-        .pb_expect("Failed to write Firefox configuration");
+        .expect("Failed to write Firefox configuration");
 
     None
 }
@@ -397,7 +408,7 @@ fn upsert_kv_file(path: &Path, delimiter: char, updates: &[(&str, String)]) {
         set_kv_value(&mut lines, key, value, delimiter);
     }
     let content = render_kv_lines(&lines);
-    fs::write(path, content).pb_expect("Failed to write key/value file");
+    fs::write(path, content).expect("Failed to write key/value file");
 }
 
 fn update_ini_section(content: &str, section: &str, updates: &[(&str, String)]) -> String {
@@ -592,9 +603,9 @@ fn update_openbox_theme(fs_root: &Path, theme_name: &str, scale: i32) {
     let _ = fs::create_dir_all(
         user_theme
             .parent()
-            .pb_expect("Failed to read openbox theme directory"),
+            .expect("Failed to read openbox theme directory"),
     );
-    fs::write(&user_theme, content).pb_expect("Failed to write openbox theme file");
+    fs::write(&user_theme, content).expect("Failed to write openbox theme file");
 }
 
 fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
@@ -612,9 +623,9 @@ fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
                     "()Landroid/content/res/Resources;",
                     &[],
                 )
-                .pb_expect("Failed to call getResources")
+                .expect("Failed to call getResources")
                 .l()
-                .pb_expect("Failed to read getResources result");
+                .expect("Failed to read getResources result");
             let metrics = env
                 .call_method(
                     resources,
@@ -622,14 +633,14 @@ fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
                     "()Landroid/util/DisplayMetrics;",
                     &[],
                 )
-                .pb_expect("Failed to call getDisplayMetrics")
+                .expect("Failed to call getDisplayMetrics")
                 .l()
-                .pb_expect("Failed to read getDisplayMetrics result");
+                .expect("Failed to read getDisplayMetrics result");
             density_dpi = env
                 .get_field(metrics, "densityDpi", "I")
-                .pb_expect("Failed to read densityDpi")
+                .expect("Failed to read densityDpi")
                 .i()
-                .pb_expect("Failed to convert densityDpi");
+                .expect("Failed to convert densityDpi");
         },
         android_app,
     );
@@ -644,7 +655,7 @@ fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
     let _ = fs::create_dir_all(
         session_path
             .parent()
-            .pb_expect("Failed to read LXQt session.conf parent directory"),
+            .expect("Failed to read LXQt session.conf parent directory"),
     );
 
     let session_content = fs::read_to_string(&session_path).unwrap_or_default();
@@ -661,7 +672,7 @@ fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
         "General",
         &[("window_manager", "openbox".to_string())],
     );
-    fs::write(&session_path, session_out).pb_expect("Failed to write session.conf");
+    fs::write(&session_path, session_out).expect("Failed to write session.conf");
 
     // lxqt-powermanagement frequently crashes in a PRoot container due to missing
     // host power-management interfaces. Disable its autostart by default.
@@ -674,7 +685,7 @@ Name=LXQt Power Management
 Hidden=true
 "#;
     fs::write(&powermanagement_override, powermanagement_hidden)
-        .pb_expect("Failed to disable lxqt-powermanagement autostart");
+        .expect("Failed to disable lxqt-powermanagement autostart");
 
     let openbox_user_rc = fs_root.join("root/.config/openbox/rc.xml");
     let openbox_system_rc = fs_root.join("etc/xdg/openbox/rc.xml");
@@ -692,9 +703,9 @@ Hidden=true
         let _ = fs::create_dir_all(
             openbox_user_rc
                 .parent()
-                .pb_expect("Failed to read openbox config directory"),
+                .expect("Failed to read openbox config directory"),
         );
-        fs::write(&openbox_user_rc, rc_out).pb_expect("Failed to write openbox rc.xml");
+        fs::write(&openbox_user_rc, rc_out).expect("Failed to write openbox rc.xml");
 
         if let Some(theme_name) = theme_name {
             update_openbox_theme(fs_root, &theme_name, scale);
@@ -833,7 +844,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
                         .send(SetupMessage::Progress(
                             "Installation finished, please restart the app".to_string(),
                         ))
-                        .pb_expect("Failed to send installation finished message");
+                        .expect("Failed to send installation finished message");
                 });
 
                 // Setup is still running in the background, but we need to return control
@@ -848,7 +859,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
 
     if fully_installed {
         PolarBearBackend::Wayland(WaylandBackend {
-            compositor: Compositor::build().pb_expect("Failed to build compositor"),
+            compositor: Compositor::build().expect("Failed to build compositor"),
             graphic_renderer: None,
             clock: Clock::new(),
             key_counter: 0,

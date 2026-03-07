@@ -1,9 +1,6 @@
-use crate::{
-    android::backend::wayland::{
-        compositor::{send_frames_surface_tree, ClientState, State},
-        CentralizedEvent, WaylandBackend,
-    },
-    core::logging::PolarBearExpectation,
+use crate::android::backend::wayland::{
+    compositor::{send_frames_surface_tree, ClientState, State},
+    CentralizedEvent, WaylandBackend,
 };
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
@@ -90,7 +87,7 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                     if let Some(stream) = compositor
                         .listener
                         .accept()
-                        .pb_expect("Failed to accept listener")
+                        .expect("Failed to accept listener")
                     {
                         let client = compositor
                             .display
@@ -103,11 +100,11 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                     compositor
                         .display
                         .dispatch_clients(&mut compositor.state)
-                        .pb_expect("Failed to dispatch clients");
+                        .expect("Failed to dispatch clients");
                     compositor
                         .display
                         .flush_clients()
-                        .pb_expect("Failed to flush clients");
+                        .expect("Failed to flush clients");
                 }
 
                 // It is important that all events on the display have been dispatched and flushed to clients before
