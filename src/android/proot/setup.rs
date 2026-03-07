@@ -20,7 +20,6 @@ use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
     fs::{self, File},
-    io::ErrorKind,
     io::{Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
     path::Path,
@@ -54,12 +53,6 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 /// Thus, it should return a finished status if the task is done, so that the setup process can move on to the next stage.
 /// Otherwise, it should return a `JoinHandle`, so that the setup process can wait for the task to finish, but not block the main thread so that the setup progress can be reported to the user.
 type StageOutput = Option<JoinHandle<()>>;
-
-fn emit_setup_error(sender: &Sender<SetupMessage>, message: impl Into<String>) {
-    let message = message.into();
-    log::info!("Setup error: {}", message);
-    sender.send(SetupMessage::Error(message)).unwrap_or(());
-}
 
 fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     let context = get_application_context();
@@ -142,13 +135,12 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                     let _ = fs::remove_dir_all(&extracted_dir);
                     let _ = fs::remove_file(&temp_file);
 
-                    emit_setup_error(
-                        &mpsc_sender,
-                        format!(
+                    mpsc_sender
+                        .send(SetupMessage::Error(format!(
                             "Failed to extract Arch Linux FS: {}. Restarting download...",
                             e
-                        ),
-                    );
+                        )))
+                        .unwrap_or(());
 
                     // Continue the outer loop to retry the download
                     continue;
@@ -233,9 +225,9 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
     } = context.local_config.command;
 
     let installed = move || {
-        ArchProcess::exec(&check)
-            .wait()
-            .pb_expect("Failed to check whether the installation target is installed")
+        ArchProcess { command: check.clone(), user: None, log: None }
+            .run()
+            .status
             .success()
     };
 
@@ -249,31 +241,37 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
 
         // Install dependencies until `check` succeeds.
         for attempt in 1..=MAX_INSTALL_ATTEMPTS {
-            mpsc_sender
-                .send(SetupMessage::Progress(format!(
-                    "Installing desktop dependencies (attempt {}/{})...",
-                    attempt, MAX_INSTALL_ATTEMPTS
-                )))
-                .pb_expect("Failed to send dependency install progress");
-
-            ArchProcess::exec_with_panic_on_error("rm -f /var/lib/pacman/db.lck");
-            let install_with_stderr = format!("({}) 2>&1", install);
-            ArchProcess::exec(&install_with_stderr).with_log(|it| {
-                mpsc_sender
-                    .send(SetupMessage::Progress(it))
-                    .pb_expect("Failed to send log message");
-            });
+            let output = ArchProcess { command: "rm -f /var/lib/pacman/db.lck".into(), user: None, log: None }.run();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let sender = mpsc_sender.clone();
+            ArchProcess {
+                command: install.clone(),
+                user: None,
+                log: Some(Arc::new(move |it| {
+                    sender
+                        .send(SetupMessage::Progress(it))
+                        .pb_expect("Failed to send log message");
+                })),
+            }.run();
 
             if installed() {
                 return;
             }
+            mpsc_sender
+                .send(SetupMessage::Progress(format!(
+                    "Retrying installation... (attempt {}/{})",
+                    attempt, MAX_INSTALL_ATTEMPTS
+                )))
+                .pb_expect("Failed to send dependency install progress");
 
             if attempt == MAX_INSTALL_ATTEMPTS {
                 let error_message = format!(
-                    "Failed to install desktop dependencies after {} attempts. Check network/repo health and package availability.",
+                    "Failed to install desktop dependencies after {} attempts. Please check your net connection and try restarting the app.",
                     MAX_INSTALL_ATTEMPTS
                 );
-                emit_setup_error(&mpsc_sender, error_message.clone());
+                mpsc_sender
+                    .send(SetupMessage::Error(error_message.clone()))
+                    .unwrap_or(());
                 panic!("{}", error_message);
             }
         }
@@ -790,7 +788,9 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         } else {
             "Stage execution failed: Unknown error".to_string()
         };
-        emit_setup_error(sender, error_msg);
+        sender
+            .send(SetupMessage::Error(error_msg.clone()))
+            .unwrap_or(());
     };
 
     let fully_installed = 'outer: loop {
