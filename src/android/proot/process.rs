@@ -2,10 +2,8 @@ use crate::android::utils::application_context::get_application_context;
 use crate::core::config;
 use std::io::BufRead;
 use std::io::BufReader;
-use std::process::{Command, ExitStatus, Output, Stdio};
-use std::sync::{Arc, OnceLock};
-
-static USE_NO_SECCOMP: OnceLock<bool> = OnceLock::new();
+use std::process::{Command, Output, Stdio};
+use std::sync::Arc;
 
 pub type Log = Arc<dyn Fn(String) + Send + Sync>;
 
@@ -22,7 +20,7 @@ pub struct ArchProcess {
 }
 
 impl ArchProcess {
-    fn probe_proot(no_seccomp: bool) -> bool {
+    fn try_proot_without_archfs() -> bool {
         let context = get_application_context();
         let proot_loader = context.native_library_dir.join("libproot_loader.so");
 
@@ -31,17 +29,29 @@ impl ArchProcess {
             .env("PROOT_LOADER", &proot_loader)
             .env("PROOT_TMP_DIR", &context.data_dir);
 
-        if no_seccomp {
-            process.env("PROOT_NO_SECCOMP", "1");
-        }
-
         process
-            .arg("-V")
+            .arg("-r")
+            .arg("/")
+            .arg("-L")
+            .arg("--link2symlink")
+            .arg("--sysvipc")
+            .arg("--kill-on-exit")
+            .arg("--root-id")
+            .arg("--bind=/dev")
+            .arg("--bind=/proc")
+            .arg("--bind=/sys")
+            .arg("--bind=/dev/urandom:/dev/random")
+            .arg("--bind=/proc/self/fd:/dev/fd")
+            .arg("--bind=/proc/self/fd/0:/dev/stdin")
+            .arg("--bind=/proc/self/fd/1:/dev/stdout")
+            .arg("--bind=/proc/self/fd/2:/dev/stderr")
+            .arg("/system/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
             .output()
             .map(|o| {
                 log::info!(
-                    "probe_proot(no_seccomp={}) {:?}, stdout: {}, stderr: {}",
-                    no_seccomp,
+                    "try_proot_without_archfs {:?}, stdout: {}, stderr: {}",
                     o.status.code(),
                     String::from_utf8_lossy(&o.stdout),
                     String::from_utf8_lossy(&o.stderr)
@@ -49,25 +59,13 @@ impl ArchProcess {
                 o.status.success()
             })
             .unwrap_or_else(|e| {
-                log::info!("probe_proot(no_seccomp={}) error: {}", no_seccomp, e);
+                log::info!("try_proot_without_archfs error: {}", e);
                 false
             })
     }
 
     pub fn is_supported() -> bool {
-        // Try with seccomp first (default), fall back to PROOT_NO_SECCOMP=1
-        let supported = if Self::probe_proot(false) {
-            USE_NO_SECCOMP.set(false).ok();
-            log::info!("PRoot works with seccomp filter enabled");
-            true
-        } else if Self::probe_proot(true) {
-            USE_NO_SECCOMP.set(true).ok();
-            log::info!("PRoot works with PROOT_NO_SECCOMP=1");
-            true
-        } else {
-            USE_NO_SECCOMP.set(false).ok();
-            false
-        };
+        let supported = Self::try_proot_without_archfs();
 
         if !supported {
             log::error!("⚡️ Device Unsupported");
@@ -86,10 +84,6 @@ impl ArchProcess {
                 context.native_library_dir.join("libproot_loader.so"),
             )
             .env("PROOT_TMP_DIR", context.data_dir);
-
-        if *USE_NO_SECCOMP.get().unwrap_or(&false) {
-            process.env("PROOT_NO_SECCOMP", "1");
-        }
 
         process
             .arg("-r")
