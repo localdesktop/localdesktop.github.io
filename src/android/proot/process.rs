@@ -1,13 +1,17 @@
 use crate::android::utils::application_context::get_application_context;
 use crate::core::config;
-use std::io::BufRead;
-use std::io::BufReader;
-use std::process::{Command, ExitStatus, Output, Stdio};
-use std::sync::{Arc, OnceLock};
-
-static USE_NO_SECCOMP: OnceLock<bool> = OnceLock::new();
+use std::ffi::CString;
+use std::fs;
+use std::io::{BufRead, BufReader, Read};
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::process::{Command, Output, Stdio};
+use std::sync::Arc;
+use winit::platform::android::activity::AndroidApp;
 
 pub type Log = Arc<dyn Fn(String) + Send + Sync>;
+
+const SUPPORT_CHECK_BINARY: &str = "ld-linux-aarch64.so.1";
 
 /// Runs a shell command inside the Arch Linux PRoot environment.
 ///
@@ -22,7 +26,22 @@ pub struct ArchProcess {
 }
 
 impl ArchProcess {
-    fn probe_proot(no_seccomp: bool) -> bool {
+    fn ensure_support_probe_rootfs(android_app: &AndroidApp) -> Option<()> {
+        let context = get_application_context();
+        let probe_exec = context.data_dir.join(SUPPORT_CHECK_BINARY);
+
+        let asset_name = CString::new(SUPPORT_CHECK_BINARY).ok()?;
+        let mut asset = android_app.asset_manager().open(&asset_name)?;
+
+        let mut bytes = Vec::with_capacity(asset.length());
+        asset.read_to_end(&mut bytes).ok()?;
+        fs::write(&probe_exec, bytes).ok()?;
+        fs::set_permissions(&probe_exec, fs::Permissions::from_mode(0o755)).ok()?;
+
+        Some(())
+    }
+
+    fn try_proot_probe(rootfs: &Path, guest_program: &str, args: &[&str]) -> bool {
         let context = get_application_context();
         let proot_loader = context.native_library_dir.join("libproot_loader.so");
 
@@ -31,17 +50,19 @@ impl ArchProcess {
             .env("PROOT_LOADER", &proot_loader)
             .env("PROOT_TMP_DIR", &context.data_dir);
 
-        if no_seccomp {
-            process.env("PROOT_NO_SECCOMP", "1");
-        }
-
         process
-            .arg("-V")
+            .arg("-r")
+            .arg(rootfs)
+            .arg("-w")
+            .arg("/")
+            .arg(guest_program)
+            .args(args)
             .output()
             .map(|o| {
                 log::info!(
-                    "probe_proot(no_seccomp={}) {:?}, stdout: {}, stderr: {}",
-                    no_seccomp,
+                    "try_proot_probe rootfs={}, program={}, status={:?}, stdout: {}, stderr: {}",
+                    rootfs.display(),
+                    guest_program,
                     o.status.code(),
                     String::from_utf8_lossy(&o.stdout),
                     String::from_utf8_lossy(&o.stderr)
@@ -49,23 +70,26 @@ impl ArchProcess {
                 o.status.success()
             })
             .unwrap_or_else(|e| {
-                log::info!("probe_proot(no_seccomp={}) error: {}", no_seccomp, e);
+                log::info!(
+                    "try_proot_probe rootfs={}, program={} error: {}",
+                    rootfs.display(),
+                    guest_program,
+                    e
+                );
                 false
             })
     }
 
-    pub fn is_supported() -> bool {
-        // Try with seccomp first (default), fall back to PROOT_NO_SECCOMP=1
-        let supported = if Self::probe_proot(false) {
-            USE_NO_SECCOMP.set(false).ok();
-            log::info!("PRoot works with seccomp filter enabled");
-            true
-        } else if Self::probe_proot(true) {
-            USE_NO_SECCOMP.set(true).ok();
-            log::info!("PRoot works with PROOT_NO_SECCOMP=1");
-            true
+    pub fn is_supported(android_app: &AndroidApp) -> bool {
+        let context = get_application_context();
+        let supported = if Self::ensure_support_probe_rootfs(android_app).is_some() {
+            Self::try_proot_probe(
+                &context.data_dir,
+                &format!("/{}", SUPPORT_CHECK_BINARY),
+                &["--help"],
+            )
         } else {
-            USE_NO_SECCOMP.set(false).ok();
+            log::info!("Support probe asset missing or could not be extracted");
             false
         };
 
@@ -86,10 +110,6 @@ impl ArchProcess {
                 context.native_library_dir.join("libproot_loader.so"),
             )
             .env("PROOT_TMP_DIR", context.data_dir);
-
-        if *USE_NO_SECCOMP.get().unwrap_or(&false) {
-            process.env("PROOT_NO_SECCOMP", "1");
-        }
 
         process
             .arg("-r")
