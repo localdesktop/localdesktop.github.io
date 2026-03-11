@@ -122,7 +122,9 @@ impl ArchProcess {
             .arg("--bind=/dev")
             .arg("--bind=/proc")
             .arg("--bind=/sys")
-            .arg(format!("--bind={}/tmp:/dev/shm", config::ARCH_FS_ROOT));
+            .arg(format!("--bind={}/tmp:/dev/shm", config::ARCH_FS_ROOT))
+            .arg("--bind=/dev/pts:/dev/pts")
+            .arg("--bind=/dev/ptmx:/dev/ptmx");
 
         if context.permission_all_files_access {
             process
