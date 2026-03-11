@@ -351,10 +351,7 @@ pub mod apk {
 
         let android_jar = ensure_android_jar(
             &root,
-            manifest
-                .sdk
-                .target_sdk_version
-                .unwrap_or(33),
+            manifest.sdk.target_sdk_version.unwrap_or(33),
             android_jar_override,
         )?;
 
@@ -2207,20 +2204,16 @@ pub mod apk {
                     Some(ChunkType::TableType) => {
                         tracing::trace!("table type");
                         let type_header = ResTableTypeHeader::read(r)?;
-                            let is_sparse = type_header.res1 & 0x1 != 0;
-                            if is_sparse {
+                        let is_sparse = type_header.res1 & 0x1 != 0;
+                        if is_sparse {
                             let entries_base = start_pos + type_header.entries_start as u64;
-                                let mut sparse = Vec::with_capacity(type_header.entry_count as usize);
-                                for _ in 0..type_header.entry_count {
-                                    let idx = r.read_u16::<LittleEndian>()?;
+                            let mut sparse = Vec::with_capacity(type_header.entry_count as usize);
+                            for _ in 0..type_header.entry_count {
+                                let idx = r.read_u16::<LittleEndian>()?;
                                 let offset = r.read_u16::<LittleEndian>()?;
                                 sparse.push((idx, offset));
                             }
-                            let max_idx = sparse
-                                .iter()
-                                .map(|(idx, _)| *idx)
-                                .max()
-                                .unwrap_or(0);
+                            let max_idx = sparse.iter().map(|(idx, _)| *idx).max().unwrap_or(0);
                             let mut entries = vec![None; max_idx as usize + 1];
                             for (idx, offset) in sparse {
                                 let entry_pos = entries_base + (offset as u64) * 4;
@@ -2713,7 +2706,10 @@ pub mod apk {
         }
 
         fn normalize_pem(pem: &str) -> String {
-            pem.lines().map(|line| line.trim()).collect::<Vec<_>>().join("\n")
+            pem.lines()
+                .map(|line| line.trim())
+                .collect::<Vec<_>>()
+                .join("\n")
         }
 
         fn compute_digest<R: Read + Seek>(

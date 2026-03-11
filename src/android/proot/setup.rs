@@ -762,7 +762,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let (sender, receiver) = mpsc::channel();
     let progress = Arc::new(Mutex::new(0));
 
-    if ArchProcess::is_supported() {
+    if ArchProcess::is_supported(&android_app) {
         sender
             .send(SetupMessage::Progress(
                 "✅ Your device is supported!".to_string(),

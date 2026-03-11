@@ -3,6 +3,7 @@ android:
   assets:
     - assets/setup-progress.html
     - assets/unsupported.html
+    - assets/ld-linux-aarch64.so.1
   runtime_libs:
     - assets/libs
   gradle: true

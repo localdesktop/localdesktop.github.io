@@ -1,11 +1,17 @@
 use crate::android::utils::application_context::get_application_context;
 use crate::core::config;
-use std::io::BufRead;
-use std::io::BufReader;
+use std::ffi::CString;
+use std::fs;
+use std::io::{BufRead, BufReader, Read};
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
+use winit::platform::android::activity::AndroidApp;
 
 pub type Log = Arc<dyn Fn(String) + Send + Sync>;
+
+const SUPPORT_CHECK_BINARY: &str = "ld-linux-aarch64.so.1";
 
 /// Runs a shell command inside the Arch Linux PRoot environment.
 ///
@@ -20,7 +26,22 @@ pub struct ArchProcess {
 }
 
 impl ArchProcess {
-    fn try_proot_without_archfs() -> bool {
+    fn ensure_support_probe_rootfs(android_app: &AndroidApp) -> Option<()> {
+        let context = get_application_context();
+        let probe_exec = context.data_dir.join(SUPPORT_CHECK_BINARY);
+
+        let asset_name = CString::new(SUPPORT_CHECK_BINARY).ok()?;
+        let mut asset = android_app.asset_manager().open(&asset_name)?;
+
+        let mut bytes = Vec::with_capacity(asset.length());
+        asset.read_to_end(&mut bytes).ok()?;
+        fs::write(&probe_exec, bytes).ok()?;
+        fs::set_permissions(&probe_exec, fs::Permissions::from_mode(0o755)).ok()?;
+
+        Some(())
+    }
+
+    fn try_proot_probe(rootfs: &Path, guest_program: &str, args: &[&str]) -> bool {
         let context = get_application_context();
         let proot_loader = context.native_library_dir.join("libproot_loader.so");
 
@@ -31,27 +52,17 @@ impl ArchProcess {
 
         process
             .arg("-r")
+            .arg(rootfs)
+            .arg("-w")
             .arg("/")
-            .arg("-L")
-            .arg("--link2symlink")
-            .arg("--sysvipc")
-            .arg("--kill-on-exit")
-            .arg("--root-id")
-            .arg("--bind=/dev")
-            .arg("--bind=/proc")
-            .arg("--bind=/sys")
-            .arg("--bind=/dev/urandom:/dev/random")
-            .arg("--bind=/proc/self/fd:/dev/fd")
-            .arg("--bind=/proc/self/fd/0:/dev/stdin")
-            .arg("--bind=/proc/self/fd/1:/dev/stdout")
-            .arg("--bind=/proc/self/fd/2:/dev/stderr")
-            .arg("/system/bin/sh")
-            .arg("-c")
-            .arg("exit 0")
+            .arg(guest_program)
+            .args(args)
             .output()
             .map(|o| {
                 log::info!(
-                    "try_proot_without_archfs {:?}, stdout: {}, stderr: {}",
+                    "try_proot_probe rootfs={}, program={}, status={:?}, stdout: {}, stderr: {}",
+                    rootfs.display(),
+                    guest_program,
                     o.status.code(),
                     String::from_utf8_lossy(&o.stdout),
                     String::from_utf8_lossy(&o.stderr)
@@ -59,13 +70,28 @@ impl ArchProcess {
                 o.status.success()
             })
             .unwrap_or_else(|e| {
-                log::info!("try_proot_without_archfs error: {}", e);
+                log::info!(
+                    "try_proot_probe rootfs={}, program={} error: {}",
+                    rootfs.display(),
+                    guest_program,
+                    e
+                );
                 false
             })
     }
 
-    pub fn is_supported() -> bool {
-        let supported = Self::try_proot_without_archfs();
+    pub fn is_supported(android_app: &AndroidApp) -> bool {
+        let context = get_application_context();
+        let supported = if Self::ensure_support_probe_rootfs(android_app).is_some() {
+            Self::try_proot_probe(
+                &context.data_dir,
+                &format!("/{}", SUPPORT_CHECK_BINARY),
+                &["--help"],
+            )
+        } else {
+            log::info!("Support probe asset missing or could not be extracted");
+            false
+        };
 
         if !supported {
             log::error!("⚡️ Device Unsupported");

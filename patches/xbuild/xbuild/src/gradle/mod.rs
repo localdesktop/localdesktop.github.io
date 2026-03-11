@@ -44,6 +44,9 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
     let assets = main.join("assets");
 
     std::fs::create_dir_all(&kotlin)?;
+    if assets.exists() {
+        std::fs::remove_dir_all(&assets)?;
+    }
     std::fs::create_dir_all(&assets)?;
     std::fs::write(gradle.join("build.gradle"), BUILD_GRADLE)?;
     std::fs::write(gradle.join("gradle.properties"), GRADLE_PROPERTIES)?;
