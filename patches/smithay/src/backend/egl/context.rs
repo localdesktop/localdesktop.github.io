@@ -237,70 +237,88 @@ impl EGLContext {
             }
         };
 
-        let mut context_attributes = Vec::with_capacity(12);
-
-        if let Some((attributes, _)) = config {
-            let version = attributes.version;
-
-            if display.get_egl_version() >= (1, 5)
-                || display.extensions().iter().any(|s| s == "EGL_KHR_create_context")
-            {
-                trace!("Setting CONTEXT_MAJOR_VERSION to {}", version.0);
-                context_attributes.push(ffi::egl::CONTEXT_MAJOR_VERSION as i32);
-                context_attributes.push(version.0 as i32);
-                trace!("Setting CONTEXT_MINOR_VERSION to {}", version.1);
-                context_attributes.push(ffi::egl::CONTEXT_MINOR_VERSION as i32);
-                context_attributes.push(version.1 as i32);
-
-                if attributes.debug && display.get_egl_version() >= (1, 5) {
-                    trace!("Setting CONTEXT_OPENGL_DEBUG to TRUE");
-                    context_attributes.push(ffi::egl::CONTEXT_OPENGL_DEBUG as i32);
-                    context_attributes.push(ffi::egl::TRUE as i32);
-                }
-
-                context_attributes.push(ffi::egl::CONTEXT_FLAGS_KHR as i32);
-                context_attributes.push(0);
-            } else if display.get_egl_version() >= (1, 3) {
-                trace!("Setting CONTEXT_CLIENT_VERSION to {}", version.0);
-                context_attributes.push(ffi::egl::CONTEXT_CLIENT_VERSION as i32);
-                context_attributes.push(version.0 as i32);
-            }
-        } else {
-            trace!("Setting CONTEXT_CLIENT_VERSION to 2");
-            context_attributes.push(ffi::egl::CONTEXT_CLIENT_VERSION as i32);
-            context_attributes.push(2);
-        }
-
         let has_context_priority = display
             .extensions()
             .iter()
             .any(|x| x == "EGL_IMG_context_priority");
-        if let Some(priority) = priority {
-            if !has_context_priority {
-                warn!(
-                    ?priority,
-                    "ignoring requested context priority, EGL_IMG_context_priority not supported"
-                );
+        let build_context_attributes = |use_legacy_client_version: bool| {
+            let mut context_attributes = Vec::with_capacity(12);
+
+            if let Some((attributes, _)) = config {
+                let version = attributes.version;
+
+                if !use_legacy_client_version && display.get_egl_version() >= (1, 5) {
+                    trace!("Setting CONTEXT_MAJOR_VERSION to {}", version.0);
+                    context_attributes.push(ffi::egl::CONTEXT_MAJOR_VERSION as i32);
+                    context_attributes.push(version.0 as i32);
+                    trace!("Setting CONTEXT_MINOR_VERSION to {}", version.1);
+                    context_attributes.push(ffi::egl::CONTEXT_MINOR_VERSION as i32);
+                    context_attributes.push(version.1 as i32);
+
+                    if attributes.debug && display.get_egl_version() >= (1, 5) {
+                        trace!("Setting CONTEXT_OPENGL_DEBUG to TRUE");
+                        context_attributes.push(ffi::egl::CONTEXT_OPENGL_DEBUG as i32);
+                        context_attributes.push(ffi::egl::TRUE as i32);
+                    }
+
+                    context_attributes.push(ffi::egl::CONTEXT_FLAGS_KHR as i32);
+                    context_attributes.push(0);
+                } else if display.get_egl_version() >= (1, 3) {
+                    trace!("Setting CONTEXT_CLIENT_VERSION to {}", version.0);
+                    context_attributes.push(ffi::egl::CONTEXT_CLIENT_VERSION as i32);
+                    context_attributes.push(version.0 as i32);
+                }
             } else {
-                context_attributes.push(ffi::egl::CONTEXT_PRIORITY_LEVEL_IMG as i32);
-                context_attributes.push(Into::<ffi::egl::types::EGLenum>::into(priority) as i32);
+                trace!("Setting CONTEXT_CLIENT_VERSION to 2");
+                context_attributes.push(ffi::egl::CONTEXT_CLIENT_VERSION as i32);
+                context_attributes.push(2);
             }
-        }
 
-        context_attributes.push(ffi::egl::NONE as i32);
+            if let Some(priority) = priority {
+                if !has_context_priority {
+                    warn!(
+                        ?priority,
+                        "ignoring requested context priority, EGL_IMG_context_priority not supported"
+                    );
+                } else {
+                    context_attributes.push(ffi::egl::CONTEXT_PRIORITY_LEVEL_IMG as i32);
+                    context_attributes.push(Into::<ffi::egl::types::EGLenum>::into(priority) as i32);
+                }
+            }
 
-        trace!("Creating EGL context...");
-        let context = wrap_egl_call_ptr(|| unsafe {
-            ffi::egl::CreateContext(
-                **display.get_display_handle(),
-                config_id,
-                shared
-                    .map(|context| context.context)
-                    .unwrap_or(ffi::egl::NO_CONTEXT),
-                context_attributes.as_ptr(),
-            )
-        })
-        .map_err(Error::CreationFailed)?;
+            context_attributes.push(ffi::egl::NONE as i32);
+            context_attributes
+        };
+
+        let create_context = |context_attributes: &[i32]| {
+            trace!("Creating EGL context...");
+            wrap_egl_call_ptr(|| unsafe {
+                ffi::egl::CreateContext(
+                    **display.get_display_handle(),
+                    config_id,
+                    shared
+                        .map(|context| context.context)
+                        .unwrap_or(ffi::egl::NO_CONTEXT),
+                    context_attributes.as_ptr(),
+                )
+            })
+        };
+
+        let context_attributes = build_context_attributes(false);
+        let context = match create_context(&context_attributes) {
+            Ok(context) => context,
+            Err(EGLError::BadAttribute)
+                if config.is_some()
+                    && display.get_egl_version() >= (1, 5) =>
+            {
+                warn!(
+                    "CreateContext rejected core EGL 1.5 context attributes, retrying with CONTEXT_CLIENT_VERSION"
+                );
+                let legacy_context_attributes = build_context_attributes(true);
+                create_context(&legacy_context_attributes).map_err(Error::CreationFailed)?
+            }
+            Err(error) => return Err(Error::CreationFailed(error)),
+        };
         span.record("ptr", context as usize);
 
         let context_priority = if has_context_priority {

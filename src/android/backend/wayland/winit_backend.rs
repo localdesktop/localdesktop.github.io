@@ -41,6 +41,99 @@ use winit::event_loop::ActiveEventLoop;
 use winit::raw_window_handle::{AndroidNdkWindowHandle, HasWindowHandle, RawWindowHandle};
 use winit::window::{Window as WinitWindow, WindowAttributes};
 
+#[derive(Clone, Copy, Debug)]
+struct ContextCandidate {
+    label: &'static str,
+    attributes: GlAttributes,
+    pixel_format: PixelFormatRequirements,
+}
+
+fn create_egl_context(display: &EGLDisplay) -> Result<EGLContext, String> {
+    let candidates = [
+        ContextCandidate {
+            label: "OpenGL ES 3.0 with 10-bit hardware-accelerated surface",
+            attributes: GlAttributes {
+                version: (3, 0),
+                profile: None,
+                debug: cfg!(debug_assertions),
+                vsync: false,
+            },
+            pixel_format: PixelFormatRequirements::_10_bit(),
+        },
+        ContextCandidate {
+            label: "OpenGL ES 3.0 with 8-bit hardware-accelerated surface",
+            attributes: GlAttributes {
+                version: (3, 0),
+                profile: None,
+                debug: cfg!(debug_assertions),
+                vsync: false,
+            },
+            pixel_format: PixelFormatRequirements::_8_bit(),
+        },
+        ContextCandidate {
+            label: "OpenGL ES 3.0 with 8-bit emulator-friendly surface",
+            attributes: GlAttributes {
+                version: (3, 0),
+                profile: None,
+                debug: cfg!(debug_assertions),
+                vsync: false,
+            },
+            pixel_format: PixelFormatRequirements {
+                hardware_accelerated: None,
+                color_bits: Some(24),
+                float_color_buffer: false,
+                alpha_bits: Some(8),
+                depth_bits: Some(24),
+                stencil_bits: Some(8),
+                multisampling: None,
+            },
+        },
+        ContextCandidate {
+            label: "OpenGL ES 2.0 with 8-bit emulator-friendly surface",
+            attributes: GlAttributes {
+                version: (2, 0),
+                profile: None,
+                debug: cfg!(debug_assertions),
+                vsync: false,
+            },
+            pixel_format: PixelFormatRequirements {
+                hardware_accelerated: None,
+                color_bits: Some(24),
+                float_color_buffer: false,
+                alpha_bits: Some(8),
+                depth_bits: Some(24),
+                stencil_bits: Some(8),
+                multisampling: None,
+            },
+        },
+    ];
+    let mut errors = Vec::with_capacity(candidates.len());
+
+    for candidate in candidates {
+        match EGLContext::new_with_config(display, candidate.attributes, candidate.pixel_format) {
+            Ok(context) => {
+                if !errors.is_empty() {
+                    log::warn!(
+                        "Using EGL fallback after {} failed attempt(s): {}",
+                        errors.len(),
+                        candidate.label
+                    );
+                }
+                return Ok(context);
+            }
+            Err(error) => {
+                log::warn!("Failed EGL candidate '{}': {}", candidate.label, error);
+                errors.push(format!("{}: {}", candidate.label, error));
+            }
+        }
+    }
+
+    Err(format!(
+        "Failed to create EGLContext. Tried: {}",
+        errors.join(" | ")
+    ))
+}
+
 pub struct AndroidNativeSurface {
     handle: AndroidNdkWindowHandle,
 }
@@ -65,7 +158,7 @@ unsafe impl EGLNativeSurface for AndroidNativeSurface {
 }
 
 fn create_egl_display(
-    handle: AndroidNdkWindowHandle,
+    _handle: AndroidNdkWindowHandle,
 ) -> Result<EGLDisplay, Box<dyn std::error::Error>> {
     // Load the EGL library
     let lib = unsafe { libloading::Library::new("libEGL.so") }?;
@@ -76,7 +169,7 @@ fn create_egl_display(
         .expect("Failed to get EGL display");
 
     // Initialize the display
-    let (major, minor) = egl.initialize(display)?;
+    let (_major, _minor) = egl.initialize(display)?;
 
     // Choose an EGL configuration
     let config_attribs = [khronos_egl::NONE];
@@ -120,25 +213,8 @@ pub fn bind(event_loop: &ActiveEventLoop) -> WinitGraphicsBackend<GlesRenderer> 
                 }
             };
 
-            let gl_attributes = GlAttributes {
-                version: (3, 0),
-                profile: None,
-                debug: cfg!(debug_assertions),
-                vsync: false,
-            };
-            let context = EGLContext::new_with_config(
-                &display,
-                gl_attributes,
-                PixelFormatRequirements::_10_bit(),
-            )
-            .or_else(|_| {
-                EGLContext::new_with_config(
-                    &display,
-                    gl_attributes,
-                    PixelFormatRequirements::_8_bit(),
-                )
-            })
-            .expect("Failed to create EGLContext");
+            let context =
+                create_egl_context(&display).unwrap_or_else(|message| panic!("{}", message));
 
             let surface = unsafe {
                 EGLSurface::new(
