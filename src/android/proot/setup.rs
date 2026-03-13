@@ -318,6 +318,30 @@ defaultPref("security.sandbox.content.level", 0);
     None
 }
 
+fn setup_qterminal_wrapper(_: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+
+    let wrapper_path = fs_root.join("usr/local/bin/qterminal");
+    let wrapper = r#"#!/bin/sh
+if [ "$#" -eq 0 ]; then
+  exec /usr/bin/qterminal -e /bin/bash -i
+fi
+
+exec /usr/bin/qterminal "$@"
+"#;
+
+    let _ = fs::create_dir_all(
+        wrapper_path
+            .parent()
+            .expect("Failed to read qterminal wrapper parent directory"),
+    );
+    fs::write(&wrapper_path, wrapper).expect("Failed to write qterminal wrapper");
+    fs::set_permissions(&wrapper_path, fs::Permissions::from_mode(0o755))
+        .expect("Failed to mark qterminal wrapper executable");
+
+    None
+}
+
 #[derive(Debug)]
 enum KvLine {
     Entry {
@@ -787,8 +811,9 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
         Box::new(install_dependencies),         // Step 3. Install dependencies
         Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
-        Box::new(setup_lxqt_scaling),           // Step 5. Setup LXQt HiDPI scaling
-        Box::new(fix_xkb_symlink),              // Step 6. Fix xkb symlink (last)
+        Box::new(setup_qterminal_wrapper), // Step 5. Ensure qterminal launches interactive bash
+        Box::new(setup_lxqt_scaling),      // Step 6. Setup LXQt HiDPI scaling
+        Box::new(fix_xkb_symlink),         // Step 7. Fix xkb symlink (last)
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
