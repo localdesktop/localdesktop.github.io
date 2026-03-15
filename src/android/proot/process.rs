@@ -6,12 +6,19 @@ use std::io::{BufRead, BufReader, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use winit::platform::android::activity::AndroidApp;
 
 pub type Log = Arc<dyn Fn(String) + Send + Sync>;
 
 const SUPPORT_CHECK_BINARY: &str = "ld-linux-aarch64.so.1";
+const PRIMARY_PROOT_BINARY: &str = "libproot.so";
+const FALLBACK_PROOT_BINARY: &str = "libproot_fallback.so";
+
+static USE_FALLBACK_PROOT: AtomicBool = AtomicBool::new(false);
 
 /// Runs a shell command inside the Arch Linux PRoot environment.
 ///
@@ -26,6 +33,18 @@ pub struct ArchProcess {
 }
 
 impl ArchProcess {
+    fn selected_proot_binary() -> &'static str {
+        if USE_FALLBACK_PROOT.load(Ordering::Relaxed) {
+            FALLBACK_PROOT_BINARY
+        } else {
+            PRIMARY_PROOT_BINARY
+        }
+    }
+
+    fn proot_path(binary_name: &str) -> std::path::PathBuf {
+        get_application_context().native_library_dir.join(binary_name)
+    }
+
     fn ensure_support_probe_rootfs(android_app: &AndroidApp) -> Option<()> {
         let context = get_application_context();
         let probe_exec = context.data_dir.join(SUPPORT_CHECK_BINARY);
@@ -41,11 +60,11 @@ impl ArchProcess {
         Some(())
     }
 
-    fn try_proot_probe(rootfs: &Path, guest_program: &str, args: &[&str]) -> bool {
+    fn try_proot_probe(binary_name: &str, rootfs: &Path, guest_program: &str, args: &[&str]) -> bool {
         let context = get_application_context();
         let proot_loader = context.native_library_dir.join("libproot_loader.so");
 
-        let mut process = Command::new(context.native_library_dir.join("libproot.so"));
+        let mut process = Command::new(context.native_library_dir.join(binary_name));
         process
             .env("PROOT_LOADER", &proot_loader)
             .env("PROOT_TMP_DIR", &context.data_dir);
@@ -60,7 +79,8 @@ impl ArchProcess {
             .output()
             .map(|o| {
                 log::info!(
-                    "try_proot_probe rootfs={}, program={}, status={:?}, stdout: {}, stderr: {}",
+                    "try_proot_probe binary={}, rootfs={}, program={}, status={:?}, stdout: {}, stderr: {}",
+                    binary_name,
                     rootfs.display(),
                     guest_program,
                     o.status.code(),
@@ -71,7 +91,8 @@ impl ArchProcess {
             })
             .unwrap_or_else(|e| {
                 log::info!(
-                    "try_proot_probe rootfs={}, program={} error: {}",
+                    "try_proot_probe binary={}, rootfs={}, program={} error: {}",
+                    binary_name,
                     rootfs.display(),
                     guest_program,
                     e
@@ -82,12 +103,32 @@ impl ArchProcess {
 
     pub fn is_supported(android_app: &AndroidApp) -> bool {
         let context = get_application_context();
+        USE_FALLBACK_PROOT.store(false, Ordering::Relaxed);
+
         let supported = if Self::ensure_support_probe_rootfs(android_app).is_some() {
-            Self::try_proot_probe(
+            let guest_program = format!("/{}", SUPPORT_CHECK_BINARY);
+            if Self::try_proot_probe(
+                PRIMARY_PROOT_BINARY,
                 &context.data_dir,
-                &format!("/{}", SUPPORT_CHECK_BINARY),
+                &guest_program,
                 &["--help"],
-            )
+            ) {
+                log::info!("Selected primary PRoot binary: {}", PRIMARY_PROOT_BINARY);
+                true
+            } else if Self::proot_path(FALLBACK_PROOT_BINARY).exists()
+                && Self::try_proot_probe(
+                    FALLBACK_PROOT_BINARY,
+                    &context.data_dir,
+                    &guest_program,
+                    &["--help"],
+                )
+            {
+                USE_FALLBACK_PROOT.store(true, Ordering::Relaxed);
+                log::info!("Selected fallback PRoot binary: {}", FALLBACK_PROOT_BINARY);
+                true
+            } else {
+                false
+            }
         } else {
             log::info!("Support probe asset missing or could not be extracted");
             false
@@ -103,7 +144,9 @@ impl ArchProcess {
         let context = get_application_context();
         let user = self.user.as_deref().unwrap_or("root");
 
-        let mut process = Command::new(context.native_library_dir.join("libproot.so"));
+        let selected_proot = Self::selected_proot_binary();
+        log::info!("Running PRoot command with {}", selected_proot);
+        let mut process = Command::new(context.native_library_dir.join(selected_proot));
         process
             .env(
                 "PROOT_LOADER",
