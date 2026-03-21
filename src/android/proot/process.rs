@@ -1,4 +1,4 @@
-use crate::android::utils::application_context::get_application_context;
+use crate::android::{audio::pulseaudio, utils::application_context::get_application_context};
 use crate::core::config;
 use std::ffi::CString;
 use std::fs;
@@ -157,6 +157,7 @@ impl ArchProcess {
         process
             .arg("LANG=C.UTF-8")
             .arg("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:/system/bin:/system/xbin")
+            .arg(format!("PULSE_SERVER={}", pulseaudio::pulse_server_env_value()))
             .arg("TMPDIR=/tmp")
             .arg(format!("USER={}", user))
             .arg(format!("LOGNAME={}", user));

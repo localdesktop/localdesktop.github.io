@@ -19,6 +19,7 @@ tracing = "0.1.41"
 jni = "0.21.1"
 mockall = "0.13.1"
 android_logger = { version = "0.14", default-features = false }
+flate2 = "1.1.0"
 winit = { version = "0.30.11", features = [
     "android-native-activity",
     "wayland",

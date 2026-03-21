@@ -5,6 +5,9 @@ pub mod core {
 #[cfg(target_os = "android")]
 pub mod android {
 
+    pub mod audio {
+        pub mod pulseaudio;
+    }
     pub mod main;
     pub mod app {
         pub mod build;

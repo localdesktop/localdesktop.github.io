@@ -1,4 +1,6 @@
 use super::bind::bind_socket;
+use crate::core::config::ARCH_FS_ROOT;
+use pathdiff::diff_paths;
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm,
@@ -37,7 +39,57 @@ use smithay::{
         Client, ListeningSocket,
     },
 };
-use std::{error::Error, os::unix::io::OwnedFd, time::Instant};
+use std::{
+    error::Error,
+    fs,
+    io::{Error as IoError, ErrorKind},
+    os::unix::{fs::symlink, io::OwnedFd},
+    path::Path,
+    time::Instant,
+};
+
+fn ensure_guest_xkb_path() -> Result<(), Box<dyn Error>> {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let xkb_path = fs_root.join("usr/share/X11/xkb");
+    let target_inside = Path::new("/usr/share/xkeyboard-config-2");
+    let target_path = fs_root.join("usr/share/xkeyboard-config-2");
+
+    let should_relink = match fs::symlink_metadata(&xkb_path) {
+        Ok(meta) if meta.file_type().is_symlink() => match fs::read_link(&xkb_path) {
+            Ok(target) => target.is_absolute() || !xkb_path.exists(),
+            Err(_) => true,
+        },
+        Ok(_) => false,
+        Err(_) => true,
+    };
+
+    if should_relink && target_path.exists() {
+        let xkb_inside = Path::new("/usr/share/X11/xkb");
+        let rel_target = diff_paths(target_inside, xkb_inside.parent().unwrap())
+            .unwrap_or_else(|| target_inside.to_path_buf());
+
+        let _ = fs::remove_file(&xkb_path);
+        fs::create_dir_all(
+            xkb_path
+                .parent()
+                .expect("Failed to read xkb parent directory"),
+        )?;
+        symlink(&rel_target, &xkb_path)?;
+    }
+
+    if xkb_path.exists() {
+        return Ok(());
+    }
+
+    Err(IoError::new(
+        ErrorKind::NotFound,
+        format!(
+            "missing guest keyboard data at {}. Install xkeyboard-config and ensure /usr/share/X11/xkb exists",
+            xkb_path.display()
+        ),
+    )
+    .into())
+}
 
 pub struct Compositor {
     pub state: State,
@@ -189,6 +241,8 @@ delegate_output!(State);
 
 impl Compositor {
     pub fn build() -> Result<Compositor, Box<dyn Error>> {
+        ensure_guest_xkb_path()?;
+
         let display = Display::new()?;
         let dh = display.handle();
 

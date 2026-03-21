@@ -2,6 +2,7 @@ use super::process::ArchProcess;
 use crate::{
     android::{
         app::build::PolarBearBackend,
+        audio::pulseaudio,
         backend::{
             wayland::{Compositor, WaylandBackend},
             webview::{ErrorVariant, WebviewBackend},
@@ -20,6 +21,7 @@ use std::{
     io::{Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
     path::Path,
+    process::Command,
     sync::{
         mpsc::{self, Sender},
         Arc, Mutex,
@@ -289,33 +291,254 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
     }));
 }
 
+fn install_audio_runtime(options: &SetupOptions) -> StageOutput {
+    if pulseaudio::host_runtime_installed().unwrap_or(false) {
+        return None;
+    }
+
+    let sender = options.mpsc_sender.clone();
+    Some(thread::spawn(move || {
+        pulseaudio::install_host_runtime_with_progress(|message| {
+            sender.send(SetupMessage::Progress(message)).unwrap_or(());
+        })
+        .expect("Failed to install Android audio runtime");
+    }))
+}
+
 fn setup_firefox_config(_: &SetupOptions) -> StageOutput {
+    refresh_firefox_support().expect("Failed to refresh Firefox support");
+    None
+}
+
+pub fn refresh_firefox_support() -> std::io::Result<()> {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+
     // Create the Firefox root directory if it doesn't exist
-    let firefox_root = format!("{}/usr/lib/firefox", ARCH_FS_ROOT);
-    let _ = fs::create_dir_all(&firefox_root).expect("Failed to create Firefox root directory");
+    let firefox_root = fs_root.join("usr/lib/firefox");
+    fs::create_dir_all(&firefox_root)?;
 
     // Create the defaults/pref directory
-    let pref_dir = format!("{}/defaults/pref", firefox_root);
-    let _ = fs::create_dir_all(&pref_dir).expect("Failed to create Firefox pref directory");
+    let pref_dir = firefox_root.join("defaults/pref");
+    fs::create_dir_all(&pref_dir)?;
 
     // Create autoconfig.js in defaults/pref
     let autoconfig_js = r#"pref("general.config.filename", "localdesktop.cfg");
 pref("general.config.obscure_value", 0);
 "#;
 
-    let _ = fs::write(format!("{}/autoconfig.js", pref_dir), autoconfig_js)
-        .expect("Failed to write Firefox autoconfig.js");
+    fs::write(pref_dir.join("autoconfig.js"), autoconfig_js)?;
 
     // Create localdesktop.cfg in the Firefox root directory
-    let firefox_cfg = r#"// Auto updated by Local Desktop on each startup, do not edit manually
+    let mut firefox_cfg = String::from(
+        r#"// Auto updated by Local Desktop on each startup, do not edit manually
 defaultPref("media.cubeb.sandbox", false);
 defaultPref("security.sandbox.content.level", 0);
-"#; // It is required that the first line of this file is a comment, even if you have nothing to comment. Docs: https://support.mozilla.org/en-US/kb/customizing-firefox-using-autoconfig
+"#,
+    ); // It is required that the first line of this file is a comment, even if you have nothing to comment. Docs: https://support.mozilla.org/en-US/kb/customizing-firefox-using-autoconfig
 
-    let _ = fs::write(format!("{}/localdesktop.cfg", firefox_root), firefox_cfg)
-        .expect("Failed to write Firefox configuration");
+    if is_android_emulator() {
+        firefox_cfg.push_str(
+            r#"defaultPref("layers.acceleration.disabled", true);
+defaultPref("layers.gpu-process.enabled", false);
+defaultPref("gfx.webrender.software", true);
+defaultPref("webgl.disabled", true);
+defaultPref("browser.tabs.remote.autostart", false);
+defaultPref("browser.tabs.remote.autostart.2", false);
+defaultPref("browser.tabs.remote.separatePrivilegedContentProcess", false);
+defaultPref("browser.sessionstore.resume_from_crash", false);
+defaultPref("general.useragent.override", "Mozilla/5.0 (Android 16; Mobile; rv:148.0) Gecko/148.0 Firefox/148.0");
+defaultPref("fission.autostart", false);
+defaultPref("media.hardware-video-decoding.enabled", false);
+defaultPref("media.ffmpeg.vaapi.enabled", false);
+defaultPref("media.av1.enabled", false);
+defaultPref("media.gpu-process-decoder", false);
+defaultPref("media.rdd-process.enabled", false);
+defaultPref("media.utility-process.enabled", false);
+defaultPref("media.webm.enabled", false);
+defaultPref("media.mediasource.enabled", false);
+defaultPref("media.mediasource.mp4.enabled", true);
+defaultPref("media.mediasource.webm.enabled", false);
+defaultPref("media.mediasource.vp9.enabled", false);
+defaultPref("media.encoder.webm.enabled", false);
+"#,
+        );
+    }
 
-    None
+    fs::write(firefox_root.join("localdesktop.cfg"), firefox_cfg)?;
+    install_firefox_runtime_bridge(fs_root)?;
+
+    Ok(())
+}
+
+fn install_firefox_runtime_bridge(fs_root: &Path) -> std::io::Result<()> {
+    let local_bin_dir = fs_root.join("usr/local/bin");
+    fs::create_dir_all(&local_bin_dir)?;
+
+    let firefox_wrapper_path = local_bin_dir.join("firefox");
+    let firefox_wrapper = r#"#!/bin/sh
+FIREFOX_LIB_DIR=/usr/lib/firefox
+case ":${LD_LIBRARY_PATH:-}:" in
+  *":${FIREFOX_LIB_DIR}:"*) ;;
+  *)
+    if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+      export LD_LIBRARY_PATH="${FIREFOX_LIB_DIR}:/usr/lib:${LD_LIBRARY_PATH}"
+    else
+      export LD_LIBRARY_PATH="${FIREFOX_LIB_DIR}:/usr/lib"
+    fi
+    ;;
+esac
+export MOZ_DISABLE_UTILITY_SANDBOX="${MOZ_DISABLE_UTILITY_SANDBOX:-1}"
+exec /usr/bin/firefox "$@"
+"#;
+    fs::write(&firefox_wrapper_path, firefox_wrapper)?;
+    fs::set_permissions(&firefox_wrapper_path, fs::Permissions::from_mode(0o755))?;
+
+    ensure_guest_symlink(
+        Path::new("/usr/lib/firefox/libgkcodecs.so"),
+        &fs_root.join("usr/lib/libgkcodecs.so"),
+    )?;
+    ensure_guest_symlink(
+        Path::new("/usr/lib/firefox/libmozavutil.so"),
+        &fs_root.join("usr/lib/libmozavutil.so"),
+    )?;
+
+    let pacman_hook_dir = fs_root.join("etc/pacman.d/hooks");
+    fs::create_dir_all(&pacman_hook_dir)?;
+
+    let repair_script_path = local_bin_dir.join("localdesktop-fix-firefox");
+    let repair_script = r#"#!/bin/sh
+set -eu
+
+mkdir -p /usr/local/bin
+cat > /usr/local/bin/firefox <<'WRAPPER'
+#!/bin/sh
+FIREFOX_LIB_DIR=/usr/lib/firefox
+case ":${LD_LIBRARY_PATH:-}:" in
+  *":${FIREFOX_LIB_DIR}:"*) ;;
+  *)
+    if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+      export LD_LIBRARY_PATH="${FIREFOX_LIB_DIR}:/usr/lib:${LD_LIBRARY_PATH}"
+    else
+      export LD_LIBRARY_PATH="${FIREFOX_LIB_DIR}:/usr/lib"
+    fi
+    ;;
+esac
+export MOZ_DISABLE_UTILITY_SANDBOX="${MOZ_DISABLE_UTILITY_SANDBOX:-1}"
+exec /usr/bin/firefox "$@"
+WRAPPER
+chmod 755 /usr/local/bin/firefox
+
+ln -sf /usr/lib/firefox/libgkcodecs.so /usr/lib/libgkcodecs.so
+ln -sf /usr/lib/firefox/libmozavutil.so /usr/lib/libmozavutil.so
+
+if [ -f /usr/share/applications/firefox.desktop ]; then
+  sed -i 's|^Exec=.*|Exec=/usr/local/bin/firefox %u|' /usr/share/applications/firefox.desktop
+fi
+"#;
+    fs::write(&repair_script_path, repair_script)?;
+    fs::set_permissions(&repair_script_path, fs::Permissions::from_mode(0o755))?;
+
+    let pacman_hook = r#"[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = firefox
+
+[Action]
+Description = Repair Firefox media runtime for Local Desktop
+When = PostTransaction
+Exec = /usr/local/bin/localdesktop-fix-firefox
+"#;
+    fs::write(
+        pacman_hook_dir.join("localdesktop-firefox.hook"),
+        pacman_hook,
+    )?;
+
+    patch_firefox_desktop_entry(&fs_root.join("usr/share/applications/firefox.desktop"))?;
+    Ok(())
+}
+
+fn ensure_guest_symlink(target: &Path, link_path: &Path) -> std::io::Result<()> {
+    if let Ok(existing) = fs::read_link(link_path) {
+        if existing == target {
+            return Ok(());
+        }
+    }
+
+    if let Ok(metadata) = fs::symlink_metadata(link_path) {
+        if metadata.file_type().is_dir() {
+            fs::remove_dir_all(link_path)?;
+        } else {
+            fs::remove_file(link_path)?;
+        }
+    }
+
+    symlink(target, link_path)?;
+    Ok(())
+}
+
+fn patch_firefox_desktop_entry(desktop_path: &Path) -> std::io::Result<()> {
+    let Ok(content) = fs::read_to_string(desktop_path) else {
+        return Ok(());
+    };
+
+    let mut updated = false;
+    let mut lines = Vec::new();
+    for line in content.lines() {
+        if line.starts_with("Exec=") {
+            lines.push("Exec=/usr/local/bin/firefox %u".to_string());
+            updated = true;
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+
+    if updated {
+        let mut rendered = lines.join("\n");
+        rendered.push('\n');
+        fs::write(desktop_path, rendered)?;
+    }
+
+    Ok(())
+}
+
+fn is_android_emulator() -> bool {
+    let read_prop = |property: &str| -> Option<String> {
+        let output = Command::new("/system/bin/getprop")
+            .arg(property)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        Some(
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_ascii_lowercase(),
+        )
+    };
+
+    if matches!(read_prop("ro.kernel.qemu").as_deref(), Some("1"))
+        || matches!(read_prop("ro.boot.qemu").as_deref(), Some("1"))
+    {
+        return true;
+    }
+
+    [
+        "ro.product.board",
+        "ro.product.device",
+        "ro.product.manufacturer",
+        "ro.product.model",
+    ]
+    .iter()
+    .filter_map(|property| read_prop(property))
+    .any(|value| {
+        value.contains("emulator")
+            || value.contains("sdk_gphone")
+            || value.contains("google_sdk")
+            || value.contains("ranchu")
+            || value.contains("generic")
+    })
 }
 
 fn setup_qterminal_wrapper(_: &SetupOptions) -> StageOutput {
@@ -742,41 +965,48 @@ Hidden=true
 fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let xkb_path = fs_root.join("usr/share/X11/xkb");
+    let target_inside = Path::new("/usr/share/xkeyboard-config-2");
+    let target_path = fs_root.join("usr/share/xkeyboard-config-2");
     let mpsc_sender = options.mpsc_sender.clone();
 
-    if let Ok(meta) = fs::symlink_metadata(&xkb_path) {
-        if meta.file_type().is_symlink() {
-            if let Ok(target) = fs::read_link(&xkb_path) {
-                if target.is_absolute() {
-                    log::info!(
-                        "Absolute symlink target detected: {} -> {}. This is a problem because libxkbcommon is loaded in NDK, whose / is not Arch FS root!",
-                        xkb_path.display(),
-                        target.display()
-                    );
-                    // Compute the relative path from /usr/share/X11/xkb to /usr/share/xkeyboard-config-2
-                    // Both are inside the chroot, so strip the fs_root prefix
-                    let xkb_inside = Path::new("/usr/share/X11/xkb");
-                    let target_inside = Path::new("/usr/share/xkeyboard-config-2");
-                    let rel_target = diff_paths(target_inside, xkb_inside.parent().unwrap())
-                        .unwrap_or_else(|| target_inside.to_path_buf());
-                    log::info!(
-                        "Fixing with new relative symlink: {} -> {}",
-                        xkb_path.display(),
-                        rel_target.display()
-                    );
-                    // Remove the old symlink
-                    let _ = fs::remove_file(&xkb_path);
-                    // Create the new relative symlink
-                    if let Err(e) = symlink(&rel_target, &xkb_path) {
-                        mpsc_sender
-                            .send(SetupMessage::Error(format!(
-                                "Failed to create relative symlink for xkb: {}",
-                                e
-                            )))
-                            .unwrap_or(());
-                    }
-                }
-            }
+    if !target_path.exists() {
+        return None;
+    }
+
+    let should_relink = match fs::symlink_metadata(&xkb_path) {
+        Ok(meta) if meta.file_type().is_symlink() => match fs::read_link(&xkb_path) {
+            Ok(target) => target.is_absolute() || !xkb_path.exists(),
+            Err(_) => true,
+        },
+        Ok(_) => false,
+        Err(_) => true,
+    };
+
+    if should_relink {
+        log::info!(
+            "Ensuring relative xkb symlink: {} -> {}",
+            xkb_path.display(),
+            target_inside.display()
+        );
+
+        let xkb_inside = Path::new("/usr/share/X11/xkb");
+        let rel_target = diff_paths(target_inside, xkb_inside.parent().unwrap())
+            .unwrap_or_else(|| target_inside.to_path_buf());
+
+        let _ = fs::remove_file(&xkb_path);
+        let _ = fs::create_dir_all(
+            xkb_path
+                .parent()
+                .expect("Failed to read xkb parent directory"),
+        );
+
+        if let Err(e) = symlink(&rel_target, &xkb_path) {
+            mpsc_sender
+                .send(SetupMessage::Error(format!(
+                    "Failed to create relative symlink for xkb: {}",
+                    e
+                )))
+                .unwrap_or(());
         }
     }
     None
@@ -810,10 +1040,11 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (extract)
         Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
         Box::new(install_dependencies),         // Step 3. Install dependencies
-        Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
-        Box::new(setup_qterminal_wrapper), // Step 5. Ensure qterminal launches interactive bash
-        Box::new(setup_lxqt_scaling),      // Step 6. Setup LXQt HiDPI scaling
-        Box::new(fix_xkb_symlink),         // Step 7. Fix xkb symlink (last)
+        Box::new(install_audio_runtime),        // Step 4. Install Android PulseAudio runtime
+        Box::new(setup_firefox_config),         // Step 5. Setup Firefox config
+        Box::new(setup_qterminal_wrapper), // Step 6. Ensure qterminal launches interactive bash
+        Box::new(setup_lxqt_scaling),      // Step 7. Setup LXQt HiDPI scaling
+        Box::new(fix_xkb_symlink),         // Step 8. Fix xkb symlink (last)
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
@@ -883,13 +1114,24 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     };
 
     if fully_installed {
-        PolarBearBackend::Wayland(WaylandBackend {
-            compositor: Compositor::build().expect("Failed to build compositor"),
-            graphic_renderer: None,
-            clock: Clock::new(),
-            key_counter: 0,
-            scale_factor: 1.0,
-        })
+        match Compositor::build() {
+            Ok(compositor) => PolarBearBackend::Wayland(WaylandBackend {
+                compositor,
+                graphic_renderer: None,
+                clock: Clock::new(),
+                key_counter: 0,
+                scale_factor: 1.0,
+            }),
+            Err(err) => {
+                sender
+                    .send(SetupMessage::Error(format!(
+                        "Desktop startup failed: {}",
+                        err
+                    )))
+                    .unwrap_or(());
+                PolarBearBackend::WebView(WebviewBackend::build(receiver, progress))
+            }
+        }
     } else {
         PolarBearBackend::WebView(WebviewBackend::build(receiver, progress))
     }
