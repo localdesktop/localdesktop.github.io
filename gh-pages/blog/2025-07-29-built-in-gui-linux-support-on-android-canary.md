@@ -20,4 +20,4 @@ In some way, we just got sherlocked, since people are less likely to pick a thir
 
 This built-in feature will likely be available starting from **Android 16**, but Local Desktop will continue to do its best to support all devices from **Android 5 and beyond**. We've always been about unlocking possibilities *before* they go mainstream - and we're not stopping now.
 
-Please star our [GitHub repository](https://github.com/localdesktop/localdesktop) and follow our adventure 🐻‍❄️
+Please star our [GitHub repository](https://github.com/localdesktop/localdesktop.github.io) and follow our adventure 🐻‍❄️

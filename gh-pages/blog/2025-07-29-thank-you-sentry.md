@@ -13,4 +13,4 @@ If you're maintaining an open-source project, you can apply [here](https://sentr
 ![How Sentry helped us](/img/sentry-dashboard.webp)
 
 We also plan to make further use of Sentry by leveraging traces and spans to monitor FPS and frame delays. This will help us optimize the app's smoothness even more.
-Follow our progress on [GitHub](https://github.com/localdesktop/localdesktop)!
+Follow our progress on [GitHub](https://github.com/localdesktop/localdesktop.github.io)!

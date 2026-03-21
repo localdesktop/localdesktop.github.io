@@ -4,8 +4,8 @@ import type * as Preset from "@docusaurus/preset-classic";
 
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
-const downloadUrl = "https://github.com/localdesktop/localdesktop/releases";
-const repositoryUrl = "https://github.com/localdesktop/localdesktop";
+const downloadUrl = "https://github.com/localdesktop/localdesktop.github.io/releases";
+const repositoryUrl = "https://github.com/localdesktop/localdesktop.github.io";
 
 const config: Config = {
   title: "Local Desktop | Linux on Android",
@@ -22,7 +22,7 @@ const config: Config = {
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
   organizationName: "localdesktop",
-  projectName: "localdesktop",
+  projectName: "localdesktop.github.io",
 
   onBrokenLinks: "throw",
   onBrokenMarkdownLinks: "warn",
@@ -44,7 +44,7 @@ const config: Config = {
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl:
-            "https://github.com/localdesktop/localdesktop/tree/main/docs/",
+            "https://github.com/localdesktop/localdesktop.github.io/tree/main/gh-pages/",
         },
         blog: {
           showReadingTime: true,
@@ -55,7 +55,7 @@ const config: Config = {
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl:
-            "https://github.com/localdesktop/localdesktop/tree/main/docs/",
+            "https://github.com/localdesktop/localdesktop.github.io/tree/main/gh-pages/",
           // Useful options to enforce blogging best practices
           onInlineTags: "warn",
           onInlineAuthors: "warn",

@@ -24,4 +24,4 @@ try_launch = "XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 /usr/lib/plasma-dbu
 ```
 
 
-The outcome has been so promising that we're considering setting KDE Plasma as the default desktop environment in Local Desktop. This aligns with our long-term goal: replacing XWayland with a native Wayland session for better performance. We'd love to hear your thoughts on our [GitHub repository](https://github.com/localdesktop/localdesktop), and toss us a ⭐️ to help keep us motivated to improve KDE Plasma compatibility!
+The outcome has been so promising that we're considering setting KDE Plasma as the default desktop environment in Local Desktop. This aligns with our long-term goal: replacing XWayland with a native Wayland session for better performance. We'd love to hear your thoughts on our [GitHub repository](https://github.com/localdesktop/localdesktop.github.io), and toss us a ⭐️ to help keep us motivated to improve KDE Plasma compatibility!

@@ -20,7 +20,7 @@ So remember: **whenever you get stuck, come back here!** And don't just read - p
 
 ### EGL_BAD_MATCH
 
-Local Desktop patched this [portion of Smithay](https://github.com/localdesktop/localdesktop/commit/58ffc6fc37da2d799db0d68b8549abe57fa2e636) to create a dummy 1x1 pbuffer surface and use it as both the draw and read surface when calling `eglMakeCurrent` to avoid the `EGL_BAD_MATCH` error.
+Local Desktop patched this [portion of Smithay](https://github.com/localdesktop/localdesktop.github.io/commit/58ffc6fc37da2d799db0d68b8549abe57fa2e636) to create a dummy 1x1 pbuffer surface and use it as both the draw and read surface when calling `eglMakeCurrent` to avoid the `EGL_BAD_MATCH` error.
 
 Dear EGL experts, does the above hack make sense?
 

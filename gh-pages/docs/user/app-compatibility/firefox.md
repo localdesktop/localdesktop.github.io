@@ -21,7 +21,7 @@ In order to fix issue [#139](https://github.com/termux/proot/issues/139), Local 
 - Setting `media.cubeb.sandbox` to `false`.
 - Setting `security.sandbox.content.level` to `0`.
 
-These tweaks are applied automatically using [Firefox AutoConfig](https://support.mozilla.org/en-US/kb/customizing-firefox-using-autoconfig) [on each startup](https://github.com/localdesktop/localdesktop/commit/e4781875f767cb311452a254f329ba2e1566f885).
+These tweaks are applied automatically using [Firefox AutoConfig](https://support.mozilla.org/en-US/kb/customizing-firefox-using-autoconfig) [on each startup](https://github.com/localdesktop/localdesktop.github.io/commit/e4781875f767cb311452a254f329ba2e1566f885).
 
 <details>
 <summary>Consequences</summary>

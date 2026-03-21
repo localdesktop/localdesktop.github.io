@@ -8,7 +8,7 @@ tags: [community, contributor, development]
 
 *...on their phone*
 
-[Pull request #170](https://github.com/localdesktop/localdesktop/pull/170) added the ability to build `localdesktop.apk` directly on your phone. But why would we want to do that? As we want to support as many devices as possible, we'd like to call for more contributors. I believe **Local Desktop's own users are the most motivated to become maintainers and contributors** — and coding has always been the highest barrier to entry. However, with the rise of AI and agentic coding tools like Codex, Claude Code, Gemini CLI, and others, that barrier no longer exists. And with the ability to build an APK right on your phone, you don't need a PC or even any prior coding experience to contribute to this project.
+[Pull request #170](https://github.com/localdesktop/localdesktop.github.io/pull/170) added the ability to build `localdesktop.apk` directly on your phone. But why would we want to do that? As we want to support as many devices as possible, we'd like to call for more contributors. I believe **Local Desktop's own users are the most motivated to become maintainers and contributors** — and coding has always been the highest barrier to entry. However, with the rise of AI and agentic coding tools like Codex, Claude Code, Gemini CLI, and others, that barrier no longer exists. And with the ability to build an APK right on your phone, you don't need a PC or even any prior coding experience to contribute to this project.
 
 <!-- truncate -->
 
@@ -45,7 +45,7 @@ It's simple enough to sign in :))
 Just paste this prompt and hit Enter:
 
 ```
-Install `git`, then clone `https://github.com/localdesktop/localdesktop.git`
+Install `git`, then clone `https://github.com/localdesktop/localdesktop.github.io.git`
 ```
 
 ### Build an APK
@@ -70,7 +70,7 @@ This device can run `proot` on Termux, but gets "Device Unsupported" on localdes
 
 Two important things to keep in mind:
 
-- **Make sure** you enable ["All files access"](https://github.com/localdesktop/localdesktop/releases/tag/v1.4.7) for **both** Local Desktop and Termux so they can both write and read logs to the same location. Otherwise, agents won't be able to debug the issue.
+- **Make sure** you enable ["All files access"](https://github.com/localdesktop/localdesktop.github.io/releases/tag/v1.4.7) for **both** Local Desktop and Termux so they can both write and read logs to the same location. Otherwise, agents won't be able to debug the issue.
 - Step 4 (Install and run it) is known to not work on most devices, but on some — especially rooted ones — it may work and save you some time. Otherwise, the AI will pause and wait for you to open the Downloads folder and manually install and run the APK. You can return to Codex and type "Continue" at any time.
 
 With the ability to run a coding agent and build Local Desktop directly on your phone, we look forward to welcoming more maintainers — or at least some code contributions to fix **issues that we can't reproduce with our limited access to devices**.

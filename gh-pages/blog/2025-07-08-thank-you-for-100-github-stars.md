@@ -4,7 +4,7 @@ authors: teddy
 tags: [for-user, milestone]
 ---
 
-Local Desktop just reached 100 stars on [GitHub](https://github.com/localdesktop/localdesktop) 🎉
+Local Desktop just reached 100 stars on [GitHub](https://github.com/localdesktop/localdesktop.github.io) 🎉
 What surprised me even more was a sudden wave of traffic from Brazil. Obrigado 🇧🇷
 
 ![Brazil led the wave of visitors to Local Desktop](/img/thank-you-Brazil.png)

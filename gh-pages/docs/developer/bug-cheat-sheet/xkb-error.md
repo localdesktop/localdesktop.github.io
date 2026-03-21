@@ -14,4 +14,4 @@ This error occurs because by default, xkbcommon will look for configuration file
 
 ## Solution
 
-To resolve this issue, you need to re-cross-compile `libxkbcommon.so` for Android with the right `xkb-config-root`. Please check this [working example](https://github.com/localdesktop/localdesktop/blob/40fb83cfbe588f1fc23f4bf14e733297a0e64473/patches/build-libxkbcommon/Dockerfile#L48-L49) on how to specify the correct config root (and other important parameters such as locale root).
+To resolve this issue, you need to re-cross-compile `libxkbcommon.so` for Android with the right `xkb-config-root`. Please check this [working example](https://github.com/localdesktop/localdesktop.github.io/blob/40fb83cfbe588f1fc23f4bf14e733297a0e64473/patches/build-libxkbcommon/Dockerfile#L48-L49) on how to specify the correct config root (and other important parameters such as locale root).

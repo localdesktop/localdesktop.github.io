@@ -22,7 +22,7 @@ Some important notes:
 
 ## Config schema
 
-We might draw a table or have a mechanism to generate the config schema automatically here. But for now, please check the code for the schema: [localdesktop/src/utils/config.rs#L32-L88](https://github.com/localdesktop/localdesktop/blob/a581c45943fcfd97d1292ed1847f5a1556de4632/src/utils/config.rs#L32-L88).
+We might draw a table or have a mechanism to generate the config schema automatically here. But for now, please check the code for the schema: [localdesktop/src/utils/config.rs#L32-L88](https://github.com/localdesktop/localdesktop.github.io/blob/a581c45943fcfd97d1292ed1847f5a1556de4632/src/utils/config.rs#L32-L88).
 
 ## Special `try_*` configs
 

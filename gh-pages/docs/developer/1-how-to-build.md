@@ -7,7 +7,7 @@ To build Local Desktop from source code, you can follow these steps:
 1. Clone the source code repository:
 
    ```
-   git clone https://github.com/localdesktop/localdesktop.git
+   git clone https://github.com/localdesktop/localdesktop.github.io.git
    ```
 
 1. Make sure you already have Rust and Cargo installed. If not, please check the official Rust website for [installation instructions](https://www.rust-lang.org/tools/install). Then, you can install the [xbuild](https://github.com/rust-mobile/xbuild) tool:
