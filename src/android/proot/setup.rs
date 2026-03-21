@@ -889,6 +889,8 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             clock: Clock::new(),
             key_counter: 0,
             scale_factor: 1.0,
+            touch_points: std::collections::HashMap::new(),
+            scroll_centroid: None,
         })
     } else {
         PolarBearBackend::WebView(WebviewBackend::build(receiver, progress))

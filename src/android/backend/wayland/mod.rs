@@ -15,6 +15,8 @@ use smithay::{
     backend::renderer::gles::GlesRenderer,
     utils::{Clock, Monotonic},
 };
+use std::collections::HashMap;
+use winit::dpi::PhysicalPosition;
 
 pub struct WaylandBackend {
     pub compositor: Compositor,
@@ -22,4 +24,8 @@ pub struct WaylandBackend {
     pub clock: Clock<Monotonic>,
     pub key_counter: u32,
     pub scale_factor: f64,
+    /// Active touch points keyed by pointer id, used for two-finger scroll detection.
+    pub touch_points: HashMap<u64, PhysicalPosition<f64>>,
+    /// Centroid of the two active touch points at the last scroll update.
+    pub scroll_centroid: Option<PhysicalPosition<f64>>,
 }
