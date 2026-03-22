@@ -11,7 +11,7 @@ Local Desktop helps you run a desktop Linux environment on your Android device.
 3. A minimal built-in Wayland compositor runs in Android NDK.
 4. Rootful Xwayland & a desktop environment launches inside the chroot and renders back to the Android native activity.
 
-![POC](./assets/docs/proof-of-concept.png)
+![POC](./gh-pages/static/img/proof-of-concept.png)
 _Proof of Concept: A Pixel Tablet running the XFCE desktop environment inside a Proot-based ARM64 Linux. No configuration is required; just install and go._
 
 ## Getting Started
@@ -85,7 +85,7 @@ pkg install helix helix-grammars rust-analyzer
 
 A wonderful thing about developing directly on Android is that an agent like [Codex on Termux](https://github.com/DioNanos/codex-termux) can **test the code for you** by running unit tests, reading the output, understanding what went wrong, and trying again. In my experience, this is not possible when cross-developing on other operating systems, so you have to run the tests yourself.
 
-![Developing on Android](./assets/docs/dev-from-android.webp)
+![Developing on Android](./gh-pages/static/img/dev-from-android.webp)
 
 
 #### Linux/Mac/Windows
@@ -108,7 +108,7 @@ Recommended setup:
      - Install the APK on a selectable device, and launch the app in debug mode.
      - Redirect stdout/stderr output to the terminal.
 
-![It is easy to debug](./assets/docs/debugable.webp)
+![It is easy to debug](./gh-pages/static/img/debugable.webp)
 
 > **Tip**: You can debug the app on either a physical device or a virtual device.
 
