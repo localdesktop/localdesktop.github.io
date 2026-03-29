@@ -207,7 +207,8 @@ impl Config {
         if !wry {
             activity.meta_data.push(MetaData {
                 name: "android.app.lib_name".into(),
-                value: manifest_package.name.replace('-', "_"),
+                value: Some(manifest_package.name.replace('-', "_")),
+                resource: None,
             });
         }
         activity.intent_filters.push(IntentFilter {

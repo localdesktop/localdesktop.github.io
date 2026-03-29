@@ -39,6 +39,39 @@ pub enum CentralizedEvent {
     Unsupported,
 }
 
+fn centralize_keyboard(
+    scancode: u32,
+    state: ElementState,
+    time: u64,
+    backend: &mut WaylandBackend,
+) -> CentralizedEvent {
+    match state {
+        ElementState::Pressed => backend.key_counter += 1,
+        ElementState::Released => {
+            backend.key_counter = backend.key_counter.saturating_sub(1);
+        }
+    };
+
+    let event = InputEvent::Keyboard {
+        event: WinitKeyboardInputEvent {
+            time,
+            key: scancode,
+            count: backend.key_counter,
+            state,
+        },
+    };
+    CentralizedEvent::Input(event)
+}
+
+pub fn centralize_injected_keyboard(
+    scancode: u32,
+    state: ElementState,
+    time: u64,
+    backend: &mut WaylandBackend,
+) -> CentralizedEvent {
+    centralize_keyboard(scancode, state, time, backend)
+}
+
 pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> CentralizedEvent {
     let time = backend.clock.now().as_millis() as u64;
     return match event {
@@ -75,23 +108,8 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
             is_synthetic,
             ..
         } if !is_synthetic && !event.repeat => {
-            match event.state {
-                ElementState::Pressed => backend.key_counter += 1,
-                ElementState::Released => {
-                    backend.key_counter = backend.key_counter.saturating_sub(1);
-                }
-            };
-
             let scancode = physicalkey_to_scancode(event.physical_key).unwrap_or(0);
-            let event = InputEvent::Keyboard {
-                event: WinitKeyboardInputEvent {
-                    time,
-                    key: scancode,
-                    count: backend.key_counter,
-                    state: event.state,
-                },
-            };
-            CentralizedEvent::Input(event)
+            centralize_keyboard(scancode, event.state, time, backend)
         }
         WindowEvent::CursorMoved { position, .. } => {
             let size = backend

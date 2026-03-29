@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="keyboard_service_label">Local Desktop Physical keyboard</string>
+    <string name="accessibility_description_text">Only used when Android intercepts physical keyboard shortcuts before they reach the Linux desktop session. Local Desktop does not inspect window content and does not use this service to collect passwords, card numbers, or other private information.</string>
+</resources>

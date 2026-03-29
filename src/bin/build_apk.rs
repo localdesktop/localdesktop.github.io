@@ -300,7 +300,8 @@ pub mod apk {
         if !wry {
             activity.meta_data.push(MetaData {
                 name: "android.app.lib_name".into(),
-                value: lib_name.clone(),
+                value: Some(lib_name.clone()),
+                resource: None,
             });
         }
         activity.intent_filters.push(IntentFilter {
@@ -308,6 +309,12 @@ pub mod apk {
             categories: vec!["android.intent.category.LAUNCHER".into()],
             data: vec![],
         });
+        if !manifest.application.services.is_empty() {
+            eprintln!(
+                "warning: skipping Android service declarations in local cargo APK builds; use the Gradle/xbuild path for accessibility-service packaging"
+            );
+            manifest.application.services.clear();
+        }
 
         let mut cargo = Command::new("cargo");
         cargo.arg("build").arg("--lib");
@@ -960,6 +967,9 @@ pub mod apk {
             #[serde(rename(serialize = "activity"))]
             #[serde(default)]
             pub activities: Vec<Activity>,
+            #[serde(rename(serialize = "service"))]
+            #[serde(default)]
+            pub services: Vec<Service>,
             #[serde(rename(serialize = "android:usesCleartextTraffic"))]
             pub use_cleartext_traffic: Option<bool>,
             #[serde(rename(serialize = "android:extractNativeLibs"))]
@@ -995,6 +1005,28 @@ pub mod apk {
             pub intent_filters: Vec<IntentFilter>,
             #[serde(rename(serialize = "android:colorMode"))]
             pub color_mode: Option<String>,
+        }
+
+        /// Android [service element](https://developer.android.com/guide/topics/manifest/service-element).
+        #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+        #[serde(deny_unknown_fields)]
+        pub struct Service {
+            #[serde(rename(serialize = "android:permission"))]
+            pub permission: Option<String>,
+            #[serde(rename(serialize = "android:name"))]
+            pub name: Option<String>,
+            #[serde(rename(serialize = "android:label"))]
+            pub label: Option<String>,
+            #[serde(rename(serialize = "android:enabled"))]
+            pub enabled: Option<bool>,
+            #[serde(rename(serialize = "android:exported"))]
+            pub exported: Option<bool>,
+            #[serde(rename(serialize = "meta-data"))]
+            #[serde(default)]
+            pub meta_data: Vec<MetaData>,
+            #[serde(rename(serialize = "intent-filter"))]
+            #[serde(default)]
+            pub intent_filters: Vec<IntentFilter>,
         }
 
         /// Android [intent filter element](https://developer.android.com/guide/topics/manifest/intent-filter-element).
@@ -1083,7 +1115,9 @@ pub mod apk {
             #[serde(rename(serialize = "android:name"))]
             pub name: String,
             #[serde(rename(serialize = "android:value"))]
-            pub value: String,
+            pub value: Option<String>,
+            #[serde(rename(serialize = "android:resource"))]
+            pub resource: Option<String>,
         }
 
         /// Android [uses-feature element](https://developer.android.com/guide/topics/manifest/uses-feature-element).

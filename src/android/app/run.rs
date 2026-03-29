@@ -2,8 +2,9 @@ use std::thread;
 
 use super::build::{PolarBearApp, PolarBearBackend};
 use crate::android::{
+    accessibility::{self, AppUserEvent},
     backend::{
-        wayland::{bind, centralize, handle, State},
+        wayland::{bind, centralize, centralize_injected_keyboard, handle, State},
         webview::ErrorVariant,
     },
     proot::launch::launch,
@@ -17,10 +18,11 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
-impl ApplicationHandler for PolarBearApp {
+impl ApplicationHandler<AppUserEvent> for PolarBearApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         match self.backend {
             PolarBearBackend::WebView(ref mut backend) => {
+                accessibility::set_runtime_active(false);
                 let url = match backend.error {
                     ErrorVariant::None => {
                         let port = backend.socket_port;
@@ -77,9 +79,27 @@ impl ApplicationHandler for PolarBearApp {
                 );
 
                 backend.compositor.output.replace(output);
+                accessibility::set_runtime_active(true);
 
                 launch();
             }
+        }
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: AppUserEvent) {
+        let PolarBearBackend::Wayland(backend) = &mut self.backend else {
+            accessibility::drain_pending_events();
+            return;
+        };
+
+        for event in accessibility::drain_pending_events() {
+            let event = centralize_injected_keyboard(
+                event.scancode,
+                event.state,
+                event.event_time_ms,
+                backend,
+            );
+            handle(event, backend, event_loop);
         }
     }
 
@@ -91,5 +111,9 @@ impl ApplicationHandler for PolarBearApp {
             // Handle the centralized events
             handle(event, backend, event_loop);
         }
+    }
+
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        accessibility::set_runtime_active(false);
     }
 }
