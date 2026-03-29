@@ -82,6 +82,9 @@ pub struct Application {
     #[serde(rename(serialize = "activity"))]
     #[serde(default)]
     pub activities: Vec<Activity>,
+    #[serde(rename(serialize = "service"))]
+    #[serde(default)]
+    pub services: Vec<Service>,
     #[serde(rename(serialize = "android:usesCleartextTraffic"))]
     pub use_cleartext_traffic: Option<bool>,
     #[serde(rename(serialize = "android:extractNativeLibs"))]
@@ -117,6 +120,28 @@ pub struct Activity {
     pub intent_filters: Vec<IntentFilter>,
     #[serde(rename(serialize = "android:colorMode"))]
     pub color_mode: Option<String>,
+}
+
+/// Android [service element](https://developer.android.com/guide/topics/manifest/service-element).
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Service {
+    #[serde(rename(serialize = "android:permission"))]
+    pub permission: Option<String>,
+    #[serde(rename(serialize = "android:name"))]
+    pub name: Option<String>,
+    #[serde(rename(serialize = "android:label"))]
+    pub label: Option<String>,
+    #[serde(rename(serialize = "android:enabled"))]
+    pub enabled: Option<bool>,
+    #[serde(rename(serialize = "android:exported"))]
+    pub exported: Option<bool>,
+    #[serde(rename(serialize = "meta-data"))]
+    #[serde(default)]
+    pub meta_data: Vec<MetaData>,
+    #[serde(rename(serialize = "intent-filter"))]
+    #[serde(default)]
+    pub intent_filters: Vec<IntentFilter>,
 }
 
 /// Android [intent filter element](https://developer.android.com/guide/topics/manifest/intent-filter-element).
@@ -205,7 +230,9 @@ pub struct MetaData {
     #[serde(rename(serialize = "android:name"))]
     pub name: String,
     #[serde(rename(serialize = "android:value"))]
-    pub value: String,
+    pub value: Option<String>,
+    #[serde(rename(serialize = "android:resource"))]
+    pub resource: Option<String>,
 }
 
 /// Android [uses-feature element](https://developer.android.com/guide/topics/manifest/uses-feature-element).

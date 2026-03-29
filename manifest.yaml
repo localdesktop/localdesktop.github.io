@@ -16,6 +16,18 @@ android:
       label: "Local Desktop"
       extract_native_libs: true # Required for proot invocations
       use_cleartext_traffic: true # Required for connecting to ws://127.0.0.1, see assets/setup-progress.html
+      services:
+        - name: app.polarbear.KeyboardAccessibilityService
+          permission: android.permission.BIND_ACCESSIBILITY_SERVICE
+          label: "@string/keyboard_service_label"
+          enabled: true
+          exported: false
+          intent_filters:
+            - actions:
+                - android.accessibilityservice.AccessibilityService
+          meta_data:
+            - name: android.accessibilityservice
+              resource: "@xml/keyboard_accessibility_service"
       meta_data:
         - name: com.samsung.android.dex.launchwidth
           value: 0

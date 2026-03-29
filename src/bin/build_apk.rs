@@ -135,6 +135,143 @@ pub mod apk {
         version: String,
     }
 
+    #[derive(Clone, Debug, Default)]
+    struct AndroidXmlResource {
+        name: String,
+        contents: String,
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct AndroidResources {
+        strings: Vec<(String, String)>,
+        xml_files: Vec<AndroidXmlResource>,
+    }
+
+    impl AndroidResources {
+        fn is_empty(&self) -> bool {
+            self.strings.is_empty() && self.xml_files.is_empty()
+        }
+    }
+
+    fn load_android_resources(root: &Path) -> Result<AndroidResources> {
+        let mut resources = AndroidResources::default();
+        if !root.exists() {
+            return Ok(resources);
+        }
+
+        load_value_resources(&root.join("values"), &mut resources)?;
+        load_xml_resources(&root.join("xml"), &mut resources)?;
+        Ok(resources)
+    }
+
+    fn load_value_resources(root: &Path, resources: &mut AndroidResources) -> Result<()> {
+        if !root.exists() {
+            return Ok(());
+        }
+
+        let mut entries = fs::read_dir(root)?.collect::<std::result::Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("xml") {
+                continue;
+            }
+
+            let contents = fs::read_to_string(&path)
+                .with_context(|| format!("Reading `{}`", path.display()))?;
+            let doc = roxmltree::Document::parse(&contents)
+                .with_context(|| format!("Parsing `{}`", path.display()))?;
+            let root = doc.root_element();
+            anyhow::ensure!(
+                root.tag_name().name() == "resources",
+                "Expected `<resources>` root in `{}`",
+                path.display()
+            );
+
+            for node in root.children().filter(|node| node.is_element()) {
+                anyhow::ensure!(
+                    node.tag_name().name() == "string",
+                    "Unsupported value resource `{}` in `{}`",
+                    node.tag_name().name(),
+                    path.display()
+                );
+                let name = node
+                    .attribute("name")
+                    .with_context(|| format!("Missing `name` attribute in `{}`", path.display()))?
+                    .to_string();
+                anyhow::ensure!(
+                    !resources
+                        .strings
+                        .iter()
+                        .any(|(existing, _)| existing == &name),
+                    "Duplicate string resource `{name}`",
+                );
+                let value = node
+                    .children()
+                    .filter_map(|child| child.text())
+                    .collect::<String>()
+                    .trim()
+                    .to_string();
+                resources.strings.push((name, value));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn android_support_path(
+        root: &Path,
+        rel: impl AsRef<Path>,
+        legacy: impl AsRef<Path>,
+    ) -> PathBuf {
+        let canonical = root.join("src").join("android").join(rel);
+        if canonical.exists() {
+            return canonical;
+        }
+
+        let legacy = root.join(legacy);
+        if legacy.exists() {
+            legacy
+        } else {
+            canonical
+        }
+    }
+
+    fn load_xml_resources(root: &Path, resources: &mut AndroidResources) -> Result<()> {
+        if !root.exists() {
+            return Ok(());
+        }
+
+        let mut entries = fs::read_dir(root)?.collect::<std::result::Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("xml") {
+                continue;
+            }
+
+            let name = path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .with_context(|| format!("Invalid xml resource filename `{}`", path.display()))?
+                .to_string();
+            anyhow::ensure!(
+                !resources
+                    .xml_files
+                    .iter()
+                    .any(|resource| resource.name == name),
+                "Duplicate xml resource `{name}`",
+            );
+            let contents = fs::read_to_string(&path)
+                .with_context(|| format!("Reading `{}`", path.display()))?;
+            resources
+                .xml_files
+                .push(AndroidXmlResource { name, contents });
+        }
+
+        Ok(())
+    }
+
     pub fn build() -> Result<()> {
         let mut release = true;
         let mut manifest_path = PathBuf::from("manifest.yaml");
@@ -179,6 +316,14 @@ pub mod apk {
         if !manifest_path.is_absolute() {
             manifest_path = root.join(manifest_path);
         }
+
+        let android_resources =
+            load_android_resources(&android_support_path(&root, "res", "android-res"))?;
+        let dex_path = android_support_path(
+            &root,
+            Path::new("dex").join("classes.dex"),
+            Path::new("android-dex").join("classes.dex"),
+        );
 
         let config = {
             let contents = fs::read_to_string(&manifest_path)
@@ -240,6 +385,7 @@ pub mod apk {
             .get_or_insert(target_sdk_version);
         manifest.sdk.min_sdk_version.get_or_insert(min_sdk_version);
 
+        let has_android_code = !manifest.application.services.is_empty() || dex_path.exists();
         let app = &mut manifest.application;
         if app.label.is_none() {
             app.label = Some(package_name.clone());
@@ -249,6 +395,9 @@ pub mod apk {
         }
         if app.has_code.is_none() {
             app.has_code = Some(wry);
+        }
+        if has_android_code {
+            app.has_code = Some(true);
         }
         if wry && app.theme.is_none() {
             app.theme = Some("@style/Theme.AppCompat.Light.NoActionBar".into());
@@ -300,7 +449,8 @@ pub mod apk {
         if !wry {
             activity.meta_data.push(MetaData {
                 name: "android.app.lib_name".into(),
-                value: lib_name.clone(),
+                value: Some(lib_name.clone()),
+                resource: None,
             });
         }
         activity.intent_filters.push(IntentFilter {
@@ -354,11 +504,17 @@ pub mod apk {
             manifest.sdk.target_sdk_version.unwrap_or(33),
             android_jar_override,
         )?;
+        if !manifest.application.services.is_empty() && !dex_path.exists() {
+            bail!(
+                "Expected prebuilt dex at `{}` for local Android APK builds with services",
+                dex_path.display()
+            );
+        }
 
         let mut apk = Apk::new(out_path.clone(), manifest, release)?;
 
         let icon_path = icon.map(|path| root.join(path));
-        apk.add_res(icon_path.as_deref(), &android_jar)?;
+        apk.add_res(icon_path.as_deref(), &android_jar, &android_resources)?;
 
         for asset in &assets {
             let path = root.join(asset.path());
@@ -389,6 +545,9 @@ pub mod apk {
                 apk.add_lib(apk_target, &lib)?;
             }
         }
+        if dex_path.exists() {
+            apk.add_dex(&dex_path)?;
+        }
 
         apk.finish(None)?;
 
@@ -396,14 +555,14 @@ pub mod apk {
         Ok(())
     }
 
-    pub struct Apk {
+    struct Apk {
         manifest: AndroidManifest,
         path: PathBuf,
         zip: Zip,
     }
 
     impl Apk {
-        pub fn new(path: PathBuf, manifest: AndroidManifest, compress: bool) -> Result<Self> {
+        fn new(path: PathBuf, manifest: AndroidManifest, compress: bool) -> Result<Self> {
             let zip = Zip::new(&path, compress)?;
             Ok(Self {
                 manifest,
@@ -412,40 +571,73 @@ pub mod apk {
             })
         }
 
-        pub fn add_res(&mut self, icon: Option<&Path>, android: &Path) -> Result<()> {
+        fn add_res(
+            &mut self,
+            icon: Option<&Path>,
+            android: &Path,
+            android_res: &AndroidResources,
+        ) -> Result<()> {
             let mut buf = vec![];
             let mut table = Table::default();
             table
                 .import_apk(android)
                 .with_context(|| format!("Failed to parse `{}`", android.display()))?;
-            if let Some(path) = icon {
-                let mut scaler = Scaler::open(path)?;
-                scaler.optimize();
-                let package = if let Some(package) = self.manifest.package.as_ref() {
-                    package
+            let package = if let Some(package) = self.manifest.package.as_ref() {
+                package
+            } else {
+                anyhow::bail!("missing manifest.package");
+            };
+            if let Some(compiled) =
+                compiler::compile_resources(package, icon.is_some(), android_res)?
+            {
+                let mut scaler = if let Some(path) = icon {
+                    let mut scaler = Scaler::open(path)?;
+                    scaler.optimize();
+                    Some(scaler)
                 } else {
-                    anyhow::bail!("missing manifest.package");
+                    None
                 };
-                let mipmap = compiler::compile_mipmap(package, "icon")?;
 
                 let mut cursor = Cursor::new(&mut buf);
-                mipmap.chunk().write(&mut cursor)?;
+                compiled.chunk().write(&mut cursor)?;
                 self.zip.create_file(
                     Path::new("resources.arsc"),
                     ZipFileOptions::Aligned(4),
                     &buf,
                 )?;
 
-                for (name, size) in mipmap.variants() {
-                    buf.clear();
-                    let mut cursor = Cursor::new(&mut buf);
-                    scaler.write(&mut cursor, ScalerOpts::new(size))?;
-                    self.zip
-                        .create_file(name.as_ref(), ZipFileOptions::Aligned(4), &buf)?;
+                for file in compiled.files() {
+                    match file {
+                        compiler::ResourceFile::Icon { path, size } => {
+                            let scaler = scaler
+                                .as_mut()
+                                .context("Icon resources requested without an icon source")?;
+                            buf.clear();
+                            let mut cursor = Cursor::new(&mut buf);
+                            scaler.write(&mut cursor, ScalerOpts::new(*size))?;
+                            self.zip.create_file(
+                                Path::new(path),
+                                ZipFileOptions::Aligned(4),
+                                &buf,
+                            )?;
+                        }
+                        compiler::ResourceFile::Xml { path, chunk } => {
+                            buf.clear();
+                            let mut cursor = Cursor::new(&mut buf);
+                            chunk.write(&mut cursor)?;
+                            self.zip.create_file(
+                                Path::new(path),
+                                ZipFileOptions::Aligned(4),
+                                &buf,
+                            )?;
+                        }
+                    }
                 }
 
-                table.import_chunk(mipmap.chunk());
-                self.manifest.application.icon = Some("@mipmap/icon".into());
+                table.import_chunk(compiled.chunk());
+                if icon.is_some() {
+                    self.manifest.application.icon = Some("@mipmap/icon".into());
+                }
             }
             let manifest = compiler::compile_manifest(&self.manifest, &table)?;
             buf.clear();
@@ -459,7 +651,7 @@ pub mod apk {
             Ok(())
         }
 
-        pub fn add_asset(&mut self, asset: &Path, opts: ZipFileOptions) -> Result<()> {
+        fn add_asset(&mut self, asset: &Path, opts: ZipFileOptions) -> Result<()> {
             let file_name = asset
                 .file_name()
                 .context("Asset must have file_name component")?;
@@ -472,13 +664,13 @@ pub mod apk {
             .with_context(|| format!("While embedding asset `{}`", asset.display()))
         }
 
-        pub fn add_dex(&mut self, dex: &Path) -> Result<()> {
+        fn add_dex(&mut self, dex: &Path) -> Result<()> {
             self.zip
                 .add_file(dex, Path::new("classes.dex"), ZipFileOptions::Compressed)?;
             Ok(())
         }
 
-        pub fn add_lib(&mut self, target: Target, path: &Path) -> Result<()> {
+        fn add_lib(&mut self, target: Target, path: &Path) -> Result<()> {
             let name = path.file_name().context("invalid path")?;
             self.zip.add_file(
                 path,
@@ -487,13 +679,13 @@ pub mod apk {
             )
         }
 
-        pub fn finish(self, signer: Option<Signer>) -> Result<()> {
+        fn finish(self, signer: Option<Signer>) -> Result<()> {
             self.zip.finish()?;
             sign::sign(&self.path, signer)?;
             Ok(())
         }
 
-        pub fn sign(path: &Path, signer: Option<Signer>) -> Result<()> {
+        fn sign(path: &Path, signer: Option<Signer>) -> Result<()> {
             sign::sign(path, signer)
         }
 
@@ -960,6 +1152,9 @@ pub mod apk {
             #[serde(rename(serialize = "activity"))]
             #[serde(default)]
             pub activities: Vec<Activity>,
+            #[serde(rename(serialize = "service"))]
+            #[serde(default)]
+            pub services: Vec<Service>,
             #[serde(rename(serialize = "android:usesCleartextTraffic"))]
             pub use_cleartext_traffic: Option<bool>,
             #[serde(rename(serialize = "android:extractNativeLibs"))]
@@ -995,6 +1190,28 @@ pub mod apk {
             pub intent_filters: Vec<IntentFilter>,
             #[serde(rename(serialize = "android:colorMode"))]
             pub color_mode: Option<String>,
+        }
+
+        /// Android [service element](https://developer.android.com/guide/topics/manifest/service-element).
+        #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+        #[serde(deny_unknown_fields)]
+        pub struct Service {
+            #[serde(rename(serialize = "android:permission"))]
+            pub permission: Option<String>,
+            #[serde(rename(serialize = "android:name"))]
+            pub name: Option<String>,
+            #[serde(rename(serialize = "android:label"))]
+            pub label: Option<String>,
+            #[serde(rename(serialize = "android:enabled"))]
+            pub enabled: Option<bool>,
+            #[serde(rename(serialize = "android:exported"))]
+            pub exported: Option<bool>,
+            #[serde(rename(serialize = "meta-data"))]
+            #[serde(default)]
+            pub meta_data: Vec<MetaData>,
+            #[serde(rename(serialize = "intent-filter"))]
+            #[serde(default)]
+            pub intent_filters: Vec<IntentFilter>,
         }
 
         /// Android [intent filter element](https://developer.android.com/guide/topics/manifest/intent-filter-element).
@@ -1083,7 +1300,9 @@ pub mod apk {
             #[serde(rename(serialize = "android:name"))]
             pub name: String,
             #[serde(rename(serialize = "android:value"))]
-            pub value: String,
+            pub value: Option<String>,
+            #[serde(rename(serialize = "android:resource"))]
+            pub resource: Option<String>,
         }
 
         /// Android [uses-feature element](https://developer.android.com/guide/topics/manifest/uses-feature-element).
@@ -3096,7 +3315,7 @@ pub mod apk {
                         }
                         (data, data_type)
                     }
-                    _ => fallback_attr_value(name, value, strings)?,
+                    _ => fallback_attr_value(table, name, value, strings)?,
                 };
                 Ok(ResValue {
                     size: 8,
@@ -3107,6 +3326,7 @@ pub mod apk {
             }
 
             fn fallback_attr_value(
+                table: &Table,
                 name: &str,
                 value: &str,
                 strings: &Strings,
@@ -3120,7 +3340,7 @@ pub mod apk {
                 if let Ok(num) = value.parse::<u32>() {
                     return Ok((num, ResValueType::IntDec));
                 }
-                if let Some(id) = resource_id_from_ref(value) {
+                if let Some(id) = resource_id_from_ref(table, value) {
                     return Ok((id, ResValueType::Reference));
                 }
                 if name == "configChanges" || value.contains('|') {
@@ -3129,13 +3349,11 @@ pub mod apk {
                 Ok((strings.id(value) as u32, ResValueType::String))
             }
 
-            fn resource_id_from_ref(value: &str) -> Option<u32> {
-                let value = value.strip_prefix('@')?;
-                let (ty, entry) = value.split_once('/')?;
-                if ty == "mipmap" && entry == "icon" {
-                    return Some(0x7f01_0000);
-                }
-                None
+            fn resource_id_from_ref(table: &Table, value: &str) -> Option<u32> {
+                table
+                    .entry_by_ref(Ref::parse(value).ok()?)
+                    .ok()
+                    .map(|entry| u32::from(entry.id()))
             }
 
             pub struct StringPoolBuilder<'a> {
@@ -3435,7 +3653,7 @@ pub mod apk {
                     }
                 }
 
-                fn lookup_package(&self, id: u8) -> Result<Package> {
+                fn lookup_package(&self, id: u8) -> Result<Package<'_>> {
                     for package in &self.packages {
                         if let Chunk::TablePackage(header, chunks) = package {
                             if header.id == id as u32 {
@@ -3446,7 +3664,7 @@ pub mod apk {
                     anyhow::bail!("failed to locate package {}", id);
                 }
 
-                pub fn entry_by_ref(&self, r: Ref) -> Result<Entry> {
+                pub fn entry_by_ref(&self, r: Ref) -> Result<Entry<'_>> {
                     let id = self.lookup_package_id(r.package)?;
                     let package = self.lookup_package(id)?;
                     let id = package.lookup_type_id(r.ty)?;
@@ -3655,95 +3873,249 @@ pub mod apk {
                 .map(move |size| (format!("res/{0}/{0}{1}.png", name, size), size))
         }
 
-        pub fn compile_mipmap<'a>(package_name: &str, name: &'a str) -> Result<Mipmap<'a>> {
+        #[derive(Clone, Debug)]
+        pub enum ResourceFile {
+            Icon { path: String, size: u32 },
+            Xml { path: String, chunk: Chunk },
+        }
+
+        #[derive(Clone, Debug)]
+        pub struct CompiledResources {
+            chunk: Chunk,
+            files: Vec<ResourceFile>,
+        }
+
+        impl CompiledResources {
+            pub fn chunk(&self) -> &Chunk {
+                &self.chunk
+            }
+
+            pub fn files(&self) -> &[ResourceFile] {
+                &self.files
+            }
+        }
+
+        pub fn compile_resources(
+            package_name: &str,
+            include_icon: bool,
+            android_res: &super::AndroidResources,
+        ) -> Result<Option<CompiledResources>> {
+            if !include_icon && android_res.is_empty() {
+                return Ok(None);
+            }
+
+            let mut files = vec![];
+            let mut package_chunks = vec![];
+            let mut string_pool = vec![];
+            let mut type_names = vec![];
+            let mut key_names = vec![];
+
+            if include_icon {
+                let type_id = push_unique(&mut type_names, "mipmap") as u8 + 1;
+                let key_id = push_unique(&mut key_names, "icon");
+                let mut path_ids = vec![];
+                for (path, size) in variants("icon") {
+                    path_ids.push(push_unique(&mut string_pool, path.as_str()));
+                    files.push(ResourceFile::Icon { path, size });
+                }
+                package_chunks.push(Chunk::TableTypeSpec(
+                    ResTableTypeSpecHeader {
+                        id: type_id,
+                        res0: 0,
+                        res1: 0,
+                        entry_count: 1,
+                    },
+                    vec![256],
+                ));
+                for (density, string_id) in [
+                    (160, path_ids[0]),
+                    (240, path_ids[1]),
+                    (320, path_ids[2]),
+                    (480, path_ids[3]),
+                    (640, path_ids[4]),
+                ] {
+                    package_chunks.push(configured_table_type(
+                        type_id,
+                        mipmap_config(density),
+                        vec![Some(simple_entry(key_id, string_id))],
+                    ));
+                }
+            }
+
+            if !android_res.strings.is_empty() {
+                let type_id = push_unique(&mut type_names, "string") as u8 + 1;
+                let mut entries = vec![];
+                for (name, value) in &android_res.strings {
+                    let key_id = push_unique(&mut key_names, name.as_str());
+                    let string_id = push_unique(&mut string_pool, value.as_str());
+                    entries.push(Some(simple_entry(key_id, string_id)));
+                }
+                package_chunks.push(Chunk::TableTypeSpec(
+                    ResTableTypeSpecHeader {
+                        id: type_id,
+                        res0: 0,
+                        res1: 0,
+                        entry_count: entries.len() as u32,
+                    },
+                    vec![256; entries.len()],
+                ));
+                package_chunks.push(configured_table_type(type_id, default_config(), entries));
+            }
+
+            if !android_res.xml_files.is_empty() {
+                let type_id = push_unique(&mut type_names, "xml") as u8 + 1;
+                let mut entries = vec![];
+                for xml in &android_res.xml_files {
+                    let path = format!("res/xml/{}.xml", xml.name);
+                    let key_id = push_unique(&mut key_names, xml.name.as_str());
+                    let string_id = push_unique(&mut string_pool, path.as_str());
+                    entries.push(Some(simple_entry(key_id, string_id)));
+                }
+                package_chunks.push(Chunk::TableTypeSpec(
+                    ResTableTypeSpecHeader {
+                        id: type_id,
+                        res0: 0,
+                        res1: 0,
+                        entry_count: entries.len() as u32,
+                    },
+                    vec![256; entries.len()],
+                ));
+                package_chunks.push(configured_table_type(type_id, default_config(), entries));
+            }
+
             let chunk = Chunk::Table(
                 ResTableHeader { package_count: 1 },
                 vec![
-                    Chunk::StringPool(variants(name).map(|(res, _)| res).collect(), vec![]),
+                    Chunk::StringPool(string_pool, vec![]),
                     Chunk::TablePackage(
                         ResTablePackageHeader {
                             id: 127,
                             name: package_name.to_string(),
-                            type_strings: 288,
-                            last_public_type: 1,
-                            key_strings: 332,
-                            last_public_key: 1,
+                            type_strings: 0,
+                            last_public_type: type_names.len() as u32,
+                            key_strings: 0,
+                            last_public_key: key_names.len() as u32,
                             type_id_offset: 0,
                         },
-                        vec![
-                            Chunk::StringPool(vec!["mipmap".to_string()], vec![]),
-                            Chunk::StringPool(vec!["icon".to_string()], vec![]),
-                            Chunk::TableTypeSpec(
-                                ResTableTypeSpecHeader {
-                                    id: 1,
-                                    res0: 0,
-                                    res1: 0,
-                                    entry_count: 1,
-                                },
-                                vec![256],
-                            ),
-                            mipmap_table_type(1, 160, 0),
-                            mipmap_table_type(1, 240, 1),
-                            mipmap_table_type(1, 320, 2),
-                            mipmap_table_type(1, 480, 3),
-                            mipmap_table_type(1, 640, 4),
-                        ],
+                        {
+                            let mut chunks = vec![
+                                Chunk::StringPool(type_names, vec![]),
+                                Chunk::StringPool(key_names, vec![]),
+                            ];
+                            chunks.extend(package_chunks);
+                            chunks
+                        },
                     ),
                 ],
             );
-            Ok(Mipmap { name, chunk })
+
+            let mut table = Table::default();
+            table.import_chunk(&chunk);
+            for xml in &android_res.xml_files {
+                files.push(ResourceFile::Xml {
+                    path: format!("res/xml/{}.xml", xml.name),
+                    chunk: xml::compile_xml(&xml.contents, &table)?,
+                });
+            }
+
+            Ok(Some(CompiledResources { chunk, files }))
         }
 
-        fn mipmap_table_type(type_id: u8, density: u16, string_id: u32) -> Chunk {
+        fn push_unique(strings: &mut Vec<String>, value: &str) -> u32 {
+            if let Some(index) = strings.iter().position(|existing| existing == value) {
+                index as u32
+            } else {
+                strings.push(value.to_string());
+                (strings.len() - 1) as u32
+            }
+        }
+
+        fn simple_entry(key: u32, data: u32) -> ResTableEntry {
+            ResTableEntry {
+                size: 8,
+                flags: 0,
+                key,
+                value: ResTableValue::Simple(ResValue {
+                    size: 8,
+                    res0: 0,
+                    data_type: 3,
+                    data,
+                }),
+            }
+        }
+
+        fn configured_table_type(
+            type_id: u8,
+            config: ResTableConfig,
+            entries: Vec<Option<ResTableEntry>>,
+        ) -> Chunk {
+            let mut next_offset = 0;
+            let index = entries
+                .iter()
+                .map(|entry| {
+                    if let Some(entry) = entry {
+                        let current = next_offset;
+                        next_offset += entry_marshaled_size(entry);
+                        current
+                    } else {
+                        u32::MAX
+                    }
+                })
+                .collect();
+            let entry_count = entries.len() as u32;
+            let entries_start = 20 + config.size + entry_count * 4;
             Chunk::TableType(
                 ResTableTypeHeader {
                     id: type_id,
                     res0: 0,
                     res1: 0,
-                    entry_count: 1,
-                    entries_start: 88,
-                    config: ResTableConfig {
-                        size: 28 + 36,
-                        imsi: 0,
-                        locale: 0,
-                        screen_type: ScreenType {
-                            orientation: 0,
-                            touchscreen: 0,
-                            density,
-                        },
-                        input: 0,
-                        screen_size: 0,
-                        version: 4,
-                        unknown: vec![0; 36],
-                    },
+                    entry_count,
+                    entries_start,
+                    config,
                 },
-                vec![0],
-                vec![Some(ResTableEntry {
-                    size: 8,
-                    flags: 0,
-                    key: 0,
-                    value: ResTableValue::Simple(ResValue {
-                        size: 8,
-                        res0: 0,
-                        data_type: 3,
-                        data: string_id,
-                    }),
-                })],
+                index,
+                entries,
             )
         }
 
-        pub struct Mipmap<'a> {
-            name: &'a str,
-            chunk: Chunk,
+        fn entry_marshaled_size(entry: &ResTableEntry) -> u32 {
+            match &entry.value {
+                ResTableValue::Simple(value) => entry.size as u32 + value.size as u32,
+                ResTableValue::Complex(_, map) => entry.size as u32 + 8 + map.len() as u32 * 12,
+            }
         }
 
-        impl<'a> Mipmap<'a> {
-            pub fn chunk(&self) -> &Chunk {
-                &self.chunk
+        fn default_config() -> ResTableConfig {
+            ResTableConfig {
+                size: 28,
+                imsi: 0,
+                locale: 0,
+                screen_type: ScreenType {
+                    orientation: 0,
+                    touchscreen: 0,
+                    density: 0,
+                },
+                input: 0,
+                screen_size: 0,
+                version: 0,
+                unknown: vec![],
             }
+        }
 
-            pub fn variants(&self) -> impl Iterator<Item = (String, u32)> + 'a {
-                variants(self.name)
+        fn mipmap_config(density: u16) -> ResTableConfig {
+            ResTableConfig {
+                size: 28 + 36,
+                imsi: 0,
+                locale: 0,
+                screen_type: ScreenType {
+                    orientation: 0,
+                    touchscreen: 0,
+                    density,
+                },
+                input: 0,
+                screen_size: 0,
+                version: 4,
+                unknown: vec![0; 36],
             }
         }
     }

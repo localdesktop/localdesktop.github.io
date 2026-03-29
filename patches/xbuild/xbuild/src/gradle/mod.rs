@@ -9,13 +9,54 @@ static GRADLE_PROPERTIES: &[u8] = include_bytes!("./gradle.properties");
 static SETTINGS_GRADLE: &[u8] = include_bytes!("./settings.gradle");
 static IC_LAUNCHER: &[u8] = include_bytes!("./ic_launcher.xml");
 
+fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
+    if !src.exists() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_contents(&src_path, &dst_path)?;
+        } else {
+            if let Some(parent) = dst_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn android_source_path(package_root: &Path, rel: &str, legacy: &str) -> PathBuf {
+    let canonical = package_root.join("src").join("android").join(rel);
+    if canonical.exists() {
+        return canonical;
+    }
+
+    let legacy = package_root.join(legacy);
+    if legacy.exists() {
+        legacy
+    } else {
+        canonical
+    }
+}
+
+fn has_android_source(package_root: &Path, rel: &str, legacy: &str) -> bool {
+    android_source_path(package_root, rel, legacy).exists()
+}
+
 pub fn prepare(env: &BuildEnv) -> Result<()> {
     let config = env.config().android();
     if config.wry {
         let package = config.manifest.package.as_ref().unwrap();
         let wry = env.platform_dir().join("wry");
         std::fs::create_dir_all(&wry)?;
-        if !env.cargo().package_root().join("kotlin").exists() {
+        if !has_android_source(env.cargo().package_root(), "kotlin", "kotlin") {
             let main_activity = format!(
                 r#"
                     package {}
@@ -38,11 +79,13 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
     let gradle = platform_dir.join("gradle");
     let app = gradle.join("app");
     let main = app.join("src").join("main");
+    let java = main.join("java");
     let kotlin = main.join("kotlin");
     let jnilibs = main.join("jniLibs");
     let res = main.join("res");
     let assets = main.join("assets");
 
+    std::fs::create_dir_all(&java)?;
     std::fs::create_dir_all(&kotlin)?;
     if assets.exists() {
         std::fs::remove_dir_all(&assets)?;
@@ -66,6 +109,12 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
     manifest.platform_build_version_code = None;
     manifest.platform_build_version_name = None;
     manifest.application.debuggable = None;
+    if !manifest.application.services.is_empty()
+        || has_android_source(env.cargo().package_root(), "java", "java")
+        || has_android_source(env.cargo().package_root(), "kotlin", "kotlin")
+    {
+        manifest.application.has_code = Some(true);
+    }
 
     let mut dependencies = String::new();
     for dep in &config.dependencies {
@@ -162,19 +211,23 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
         quick_xml::se::to_string(&manifest)?,
     )?;
 
-    let srcs = [
-        env.cargo().package_root().join("kotlin"),
+    copy_dir_contents(
+        &android_source_path(env.cargo().package_root(), "java", "java"),
+        &java,
+    )?;
+
+    let kotlin_srcs = [
+        android_source_path(env.cargo().package_root(), "kotlin", "kotlin"),
         env.platform_dir().join("wry"),
     ];
-    for src in srcs {
-        if !src.exists() {
-            continue;
-        }
-        for entry in std::fs::read_dir(src)? {
-            let entry = entry?;
-            std::fs::copy(entry.path(), kotlin.join(entry.file_name()))?;
-        }
+    for src in kotlin_srcs {
+        copy_dir_contents(&src, &kotlin)?;
     }
+
+    copy_dir_contents(
+        &android_source_path(env.cargo().package_root(), "res", "android-res"),
+        &res,
+    )?;
 
     for (target, lib) in libraries {
         let name = lib.file_name().context("invalid path")?;

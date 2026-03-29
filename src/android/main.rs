@@ -1,5 +1,6 @@
 use crate::{
     android::{
+        accessibility::{register_event_loop_proxy, AppUserEvent},
         app::build::PolarBearApp,
         utils::{
             application_context::ApplicationContext,
@@ -62,10 +63,11 @@ fn android_main(android_app: AndroidApp) {
     run_in_jvm(enable_fullscreen_immersive_mode, android_app.clone());
     run_in_jvm(keep_screen_on, android_app.clone());
 
-    let event_loop = EventLoop::builder()
+    let event_loop = EventLoop::<AppUserEvent>::with_user_event()
         .with_android_app(android_app.clone())
         .build()
         .expect("Failed to create event loop");
+    register_event_loop_proxy(event_loop.create_proxy());
 
     // ControlFlow::Poll continuously runs the event loop, even if the OS hasn't
     // dispatched any events. This is ideal for games and similar applications.
