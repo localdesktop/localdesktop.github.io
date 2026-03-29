@@ -1,7 +1,7 @@
 use crate::{
     android::{
-        app::build::PolarBearApp,
         accessibility::{register_event_loop_proxy, AppUserEvent},
+        app::build::PolarBearApp,
         utils::{
             application_context::ApplicationContext,
             fullscreen_immersive::{enable_fullscreen_immersive_mode, keep_screen_on},

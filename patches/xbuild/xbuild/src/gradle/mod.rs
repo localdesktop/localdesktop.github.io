@@ -32,15 +32,31 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+fn android_source_path(package_root: &Path, rel: &str, legacy: &str) -> PathBuf {
+    let canonical = package_root.join("src").join("android").join(rel);
+    if canonical.exists() {
+        return canonical;
+    }
+
+    let legacy = package_root.join(legacy);
+    if legacy.exists() {
+        legacy
+    } else {
+        canonical
+    }
+}
+
+fn has_android_source(package_root: &Path, rel: &str, legacy: &str) -> bool {
+    android_source_path(package_root, rel, legacy).exists()
+}
+
 pub fn prepare(env: &BuildEnv) -> Result<()> {
     let config = env.config().android();
-    let android_src = env.cargo().package_root().join("src").join("android");
-    let custom_kotlin = android_src.join("kotlin");
     if config.wry {
         let package = config.manifest.package.as_ref().unwrap();
         let wry = env.platform_dir().join("wry");
         std::fs::create_dir_all(&wry)?;
-        if !custom_kotlin.exists() {
+        if !has_android_source(env.cargo().package_root(), "kotlin", "kotlin") {
             let main_activity = format!(
                 r#"
                     package {}
@@ -63,11 +79,13 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
     let gradle = platform_dir.join("gradle");
     let app = gradle.join("app");
     let main = app.join("src").join("main");
+    let java = main.join("java");
     let kotlin = main.join("kotlin");
     let jnilibs = main.join("jniLibs");
     let res = main.join("res");
     let assets = main.join("assets");
 
+    std::fs::create_dir_all(&java)?;
     std::fs::create_dir_all(&kotlin)?;
     if assets.exists() {
         std::fs::remove_dir_all(&assets)?;
@@ -79,9 +97,6 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
 
     let config = env.config().android();
     let mut manifest = config.manifest.clone();
-    let android_src = env.cargo().package_root().join("src").join("android");
-    let custom_kotlin = android_src.join("kotlin");
-    let custom_res = android_src.join("res");
 
     let package = manifest.package.take().unwrap_or_default();
     let target_sdk = manifest.sdk.target_sdk_version.take().unwrap();
@@ -94,7 +109,10 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
     manifest.platform_build_version_code = None;
     manifest.platform_build_version_name = None;
     manifest.application.debuggable = None;
-    if !manifest.application.services.is_empty() || custom_kotlin.exists() {
+    if !manifest.application.services.is_empty()
+        || has_android_source(env.cargo().package_root(), "java", "java")
+        || has_android_source(env.cargo().package_root(), "kotlin", "kotlin")
+    {
         manifest.application.has_code = Some(true);
     }
 
@@ -193,15 +211,23 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
         quick_xml::se::to_string(&manifest)?,
     )?;
 
+    copy_dir_contents(
+        &android_source_path(env.cargo().package_root(), "java", "java"),
+        &java,
+    )?;
+
     let kotlin_srcs = [
-        custom_kotlin,
+        android_source_path(env.cargo().package_root(), "kotlin", "kotlin"),
         env.platform_dir().join("wry"),
     ];
     for src in kotlin_srcs {
         copy_dir_contents(&src, &kotlin)?;
     }
 
-    copy_dir_contents(&custom_res, &res)?;
+    copy_dir_contents(
+        &android_source_path(env.cargo().package_root(), "res", "android-res"),
+        &res,
+    )?;
 
     for (target, lib) in libraries {
         let name = lib.file_name().context("invalid path")?;

@@ -278,5 +278,8 @@ fn centroid(
     let (sx, sy) = points
         .values()
         .fold((0.0, 0.0), |(sx, sy), p| (sx + p.x, sy + p.y));
-    PhysicalPosition { x: sx / n, y: sy / n }
+    PhysicalPosition {
+        x: sx / n,
+        y: sy / n,
+    }
 }

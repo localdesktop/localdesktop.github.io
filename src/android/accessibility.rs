@@ -8,10 +8,7 @@ use jni::{
     sys::{jboolean, jint, jlong, JNI_FALSE, JNI_TRUE},
     JNIEnv,
 };
-use winit::{
-    event::ElementState,
-    event_loop::EventLoopProxy,
-};
+use winit::{event::ElementState, event_loop::EventLoopProxy};
 
 #[derive(Clone, Copy, Debug)]
 pub enum AppUserEvent {
@@ -85,12 +82,7 @@ fn should_ignore_keycode(key_code: jint) -> bool {
     )
 }
 
-fn enqueue_key_event(
-    action: jint,
-    key_code: jint,
-    scan_code: jint,
-    event_time_ms: jlong,
-) -> bool {
+fn enqueue_key_event(action: jint, key_code: jint, scan_code: jint, event_time_ms: jlong) -> bool {
     if should_ignore_keycode(key_code) {
         return false;
     }
