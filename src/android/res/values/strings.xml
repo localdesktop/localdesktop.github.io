@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="keyboard_service_label">Local Desktop Physical Keyboard</string>
+    <string name="keyboard_service_label">Local Desktop</string>
     <string name="accessibility_description_text">Enable this only if Android intercepts your physical keyboard shortcuts before they reach the Linux desktop session. Local Desktop uses it to forward hardware key events and does not inspect window content.</string>
 </resources>
