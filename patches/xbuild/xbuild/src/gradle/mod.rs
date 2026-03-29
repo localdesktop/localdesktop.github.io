@@ -34,11 +34,13 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
 
 pub fn prepare(env: &BuildEnv) -> Result<()> {
     let config = env.config().android();
+    let android_src = env.cargo().package_root().join("src").join("android");
+    let custom_kotlin = android_src.join("kotlin");
     if config.wry {
         let package = config.manifest.package.as_ref().unwrap();
         let wry = env.platform_dir().join("wry");
         std::fs::create_dir_all(&wry)?;
-        if !env.cargo().package_root().join("kotlin").exists() {
+        if !custom_kotlin.exists() {
             let main_activity = format!(
                 r#"
                     package {}
@@ -77,6 +79,9 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
 
     let config = env.config().android();
     let mut manifest = config.manifest.clone();
+    let android_src = env.cargo().package_root().join("src").join("android");
+    let custom_kotlin = android_src.join("kotlin");
+    let custom_res = android_src.join("res");
 
     let package = manifest.package.take().unwrap_or_default();
     let target_sdk = manifest.sdk.target_sdk_version.take().unwrap();
@@ -89,8 +94,7 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
     manifest.platform_build_version_code = None;
     manifest.platform_build_version_name = None;
     manifest.application.debuggable = None;
-    if !manifest.application.services.is_empty() || env.cargo().package_root().join("kotlin").exists()
-    {
+    if !manifest.application.services.is_empty() || custom_kotlin.exists() {
         manifest.application.has_code = Some(true);
     }
 
@@ -190,14 +194,14 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
     )?;
 
     let kotlin_srcs = [
-        env.cargo().package_root().join("kotlin"),
+        custom_kotlin,
         env.platform_dir().join("wry"),
     ];
     for src in kotlin_srcs {
         copy_dir_contents(&src, &kotlin)?;
     }
 
-    copy_dir_contents(&env.cargo().package_root().join("android-res"), &res)?;
+    copy_dir_contents(&custom_res, &res)?;
 
     for (target, lib) in libraries {
         let name = lib.file_name().context("invalid path")?;
