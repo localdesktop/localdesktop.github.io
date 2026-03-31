@@ -381,5 +381,6 @@ static const Sysnum sysnums_i386[] = {
 	[ 381 ] = PR_pkey_alloc,
 	[ 382 ] = PR_pkey_free,
 	[ 383 ] = PR_statx,
+	[ 435 ] = PR_clone3,
 	[ 439 ] = PR_faccessat2,
 };

@@ -156,6 +156,7 @@ impl ArchProcess {
         }
         process
             .arg("LANG=C.UTF-8")
+            .arg("TERM=xterm-256color")
             .arg("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:/system/bin:/system/xbin")
             .arg("TMPDIR=/tmp")
             .arg(format!("USER={}", user))
@@ -167,6 +168,7 @@ impl ArchProcess {
         } else {
             process
                 .arg("runuser")
+                .arg("--pty")
                 .arg("-u")
                 .arg(user)
                 .arg("--")

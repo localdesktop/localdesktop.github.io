@@ -345,7 +345,7 @@ static FilteredSysnum proot_sysnums[] = {
 	{ PR_execve,		FILTER_SYSEXIT },
 	{ PR_execveat,		FILTER_SYSEXIT },
 	{ PR_faccessat,		0 },
-	{ PR_faccessat2,	0 },
+	{ PR_faccessat2,	FILTER_SYSEXIT },
 	{ PR_fchdir,		FILTER_SYSEXIT },
 	{ PR_fchmodat,		0 },
 	{ PR_fchownat,		0 },

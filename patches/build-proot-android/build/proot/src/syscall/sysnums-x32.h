@@ -273,6 +273,7 @@ static const Sysnum sysnums_x32[] = {
 	[ 309 ] = PR_getcpu,
 	[ 312 ] = PR_kcmp,
 	[ 316 ] = PR_renameat2,
+	[ 435 ] = PR_clone3,
 	[ 512 ] = PR_rt_sigaction,
 	[ 513 ] = PR_rt_sigreturn,
 	[ 514 ] = PR_ioctl,
