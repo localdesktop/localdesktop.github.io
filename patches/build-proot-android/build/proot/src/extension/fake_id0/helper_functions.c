@@ -13,6 +13,7 @@
 #include "extension/fake_id0/helper_functions.h"
 
 #define META_TAG ".proot-meta-file."
+#define META_SUFFIX ".meta"
 
 #define OWNER_PERMS	 0
 #define GROUP_PERMS	 1
@@ -292,12 +293,16 @@ int get_meta_path(char orig_path[PATH_MAX], char meta_path[PATH_MAX])
 	if(strcmp(meta_path, "/") != 0)
 		strcat(meta_path, "/");
 
-	if(strlen(meta_path) + strlen(filename) + strlen(META_TAG) >= PATH_MAX)
+	if(strlen(meta_path) + strlen(META_TAG) + strlen(filename) + strlen(META_SUFFIX) >= PATH_MAX)
 		return -ENAMETOOLONG;
 
-	/* Insert the meta_tag between the path and its final component. */
+	/* Insert the meta_tag between the path and its final component,
+	 * and append META_SUFFIX so the meta file does not inherit the
+	 * original file's extension (e.g. ".hook") which can confuse
+	 * tools that scan directories by extension (pacman/libalpm). */
 	strcat(meta_path, META_TAG);
 	strcat(meta_path, filename);
+	strcat(meta_path, META_SUFFIX);
 	return 0;
 }
 

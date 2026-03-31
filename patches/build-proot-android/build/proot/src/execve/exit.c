@@ -224,9 +224,14 @@ static int transfer_load_script(Tracee *tracee)
 
 	/* A padding will be appended at the end of the load script
 	 * (a.k.a "strings area") to ensure this latter is aligned to
-	 * a word boundary, for sake of performance.  */
+	 * a word boundary, for the sake of performance
+	 * (or 16 bytes, since AArch64 needs SP 16-bytes-aligned). */
 	padding_size = (stack_pointer - string1_size - string2_size - string3_size)
+#ifdef ARCH_ARM64
+		        % 16;
+#else
 			% sizeof_word(tracee);
+#endif
 
 	strings_size = string1_size + string2_size + string3_size + padding_size;
 	string1_address = stack_pointer - strings_size;

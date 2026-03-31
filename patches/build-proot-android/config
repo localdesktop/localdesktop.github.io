@@ -1,4 +1,7 @@
 TALLOC_V='2.4.3'
+PROOT_REPO='https://github.com/termux/proot.git'
+PROOT_VERSION='master'
+PROOT_COMMIT='ab2e3464d04483b98a0614b470f3f8950d5a6468'
 
 # `pre5' is for Android API < 21 where we can't _FILE_OFFSET_BITS=64 at least
 
@@ -13,7 +16,15 @@ PKG_DIR="$BASE_DIR/packages"
 mkdir -p "$PKG_DIR"
 
 NDK="$ANDROID_NDK_HOME"
-TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/darwin-x86_64"
+case "$(uname -s)" in
+	Linux*) TOOLCHAIN_HOST='linux-x86_64' ;;
+	Darwin*) TOOLCHAIN_HOST='darwin-x86_64' ;;
+	*)
+		echo "Unsupported host OS: $(uname -s)" >&2
+		exit 1
+		;;
+esac
+TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/$TOOLCHAIN_HOST"
 
 set-arch() {
 	MARCH="${1%%-*}"

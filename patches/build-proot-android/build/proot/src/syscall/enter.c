@@ -616,6 +616,23 @@ int translate_syscall_enter(Tracee *tracee)
 		if (peek_reg(tracee, CURRENT, SYSARG_2) == TCSETS + 2 /* + TCSAFLUSH */) {
 			poke_reg(tracee, SYSARG_2, TCSETS + TCSANOW);
 		}
+
+		if (peek_reg(tracee, CURRENT, SYSARG_2) == TCGETS2) {
+			poke_reg(tracee, SYSARG_2, TCGETS);
+		}
+
+		if (peek_reg(tracee, CURRENT, SYSARG_2) == TCSETS2) {
+			poke_reg(tracee, SYSARG_2, TCSETS);
+		}
+
+		if (peek_reg(tracee, CURRENT, SYSARG_2) == TCSETSW2) {
+			poke_reg(tracee, SYSARG_2, TCSETSW);
+		}
+
+		if (peek_reg(tracee, CURRENT, SYSARG_2) == TCSETSF2) {
+			poke_reg(tracee, SYSARG_2, TCSETSF);
+		}
+
 		break;
 #endif
 	
@@ -637,6 +654,13 @@ int translate_syscall_enter(Tracee *tracee)
 			 * https://github.com/php/php-src/blob/26c432d850c153aaf79a1b24e4753bc0533e02b0/ext/opcache/zend_shared_alloc.c#L91
 			 */
 			if (0 == strcmp(memfd_name, "opcache_lock")) {
+				status = -EACCES;
+			}
+			/* apk-tools v3 use memfd_create + execveat, which is not supported under PRoot
+			 * https://github.com/termux/proot-distro/issues/595#issuecomment-3705344471
+			 * https://git.alpinelinux.org/apk-tools/tree/src/package.c?h=v3.0.3#n737
+			 */
+			if (0 == strncmp(memfd_name, "lib/apk/exec/", 13)) {
 				status = -EACCES;
 			}
 			break;

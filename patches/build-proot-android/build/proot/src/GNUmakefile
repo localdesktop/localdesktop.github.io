@@ -199,16 +199,14 @@ cli/%-licenses.o: licenses cli/cli.o
 ######################################################################
 # Build rules for the loader
 
-
-# Patch: Remove -Ttext to avoid huge loader binaries
 define build_loader
 LOADER$1_OBJECTS = loader/loader$1.o loader/assembly$1.o
 
 $(eval $(call define_from_arch.h,$1,LOADER_ARCH_CFLAGS))
+$(eval $(call define_from_arch.h,$1,LOADER_ADDRESS))
 
 LOADER_CFLAGS$1  += -fPIC -ffreestanding $(LOADER_ARCH_CFLAGS$1)
-# Remove -Ttext=$(LOADER_ADDRESS$1) to avoid huge binaries
-LOADER_LDFLAGS$1 += -static -nostdlib -Wl$(BUILD_ID_NONE),-z,noexecstack
+LOADER_LDFLAGS$1 += -static -nostdlib -Wl$(BUILD_ID_NONE),-Ttext=$(LOADER_ADDRESS$1),--rosegment,-z,noexecstack
 
 loader/loader$1.o: loader/loader.c
 	@mkdir -p $$(dir $$@)

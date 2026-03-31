@@ -7,4 +7,7 @@ shopt -s nullglob
 
 cd "$BUILD_DIR"
 
-git clone git@github.com:termux/proot.git
+git clone "$PROOT_REPO" proot
+git -C proot checkout "$PROOT_COMMIT"
+
+echo "Fetched termux/proot $PROOT_VERSION ($PROOT_COMMIT)"
