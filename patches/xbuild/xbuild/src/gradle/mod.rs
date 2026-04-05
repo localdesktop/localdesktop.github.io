@@ -92,7 +92,19 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
     }
     std::fs::create_dir_all(&assets)?;
     std::fs::write(gradle.join("build.gradle"), BUILD_GRADLE)?;
-    std::fs::write(gradle.join("gradle.properties"), GRADLE_PROPERTIES)?;
+    // On Android hosts (e.g. Termux), AGP bundles an x86_64 Linux aapt2 that cannot
+    // run on ARM64. If a native aapt2 is available in PATH, override the bundled one.
+    let mut gradle_props = GRADLE_PROPERTIES.to_vec();
+    if cfg!(target_os = "android") {
+        if let Ok(aapt2_path) = which::which("aapt2") {
+            let override_line = format!(
+                "\n# Termux: use native ARM64 aapt2 instead of the x86_64 binary bundled in AGP\nandroid.aapt2FromMavenOverride={}\n",
+                aapt2_path.display()
+            );
+            gradle_props.extend_from_slice(override_line.as_bytes());
+        }
+    }
+    std::fs::write(gradle.join("gradle.properties"), &gradle_props)?;
     std::fs::write(gradle.join("settings.gradle"), SETTINGS_GRADLE)?;
 
     let config = env.config().android();
