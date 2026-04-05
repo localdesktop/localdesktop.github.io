@@ -9,7 +9,7 @@ use crate::{
         utils::application_context::get_application_context,
         utils::ndk::run_in_jvm,
     },
-    core::config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT},
+    core::config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, VERSION},
 };
 use jni::objects::JObject;
 use jni::sys::_jobject;
@@ -782,6 +782,46 @@ fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
     None
 }
 
+/// Path of the file that records the last version that completed setup successfully.
+const SETUP_VERSION_SENTINEL: &str = concat!(
+    // ARCH_FS_ROOT is not a const expr usable in concat!, so we hardcode it here.
+    // It matches the value of config::ARCH_FS_ROOT for non-test builds.
+    "/data/data/app.polarbear/files/arch",
+    "/.setup_version"
+);
+
+/// If the stored setup version differs from the current app version, delete
+/// the stage sentinels that guard "already done" checks so that those stages
+/// are forced to re-run on this launch.
+///
+/// Stages that always run (returning `None` immediately) are unaffected.
+/// Stages with their own idempotency guards are reset:
+///   - `simulate_linux_sysdata_stage`  →  guarded by `proc/.version`
+///
+/// `install_dependencies` is self-healing: its guard is `pacman -Q <pkg>`,
+/// so adding a package to `default_check` already forces reinstallation.
+fn invalidate_setup_if_outdated() {
+    let stored = fs::read_to_string(SETUP_VERSION_SENTINEL).unwrap_or_default();
+    if stored.trim() == VERSION {
+        return;
+    }
+    log::info!(
+        "Setup version mismatch (stored={:?}, current={}): invalidating stage sentinels",
+        stored.trim(),
+        VERSION
+    );
+    // Reset simulate_linux_sysdata_stage sentinel
+    let _ = fs::remove_file(Path::new(ARCH_FS_ROOT).join("proc/.version"));
+}
+
+/// Write the current app version to the setup sentinel so future launches
+/// know that setup completed successfully for this version.
+fn mark_setup_complete() {
+    if let Err(e) = fs::write(SETUP_VERSION_SENTINEL, VERSION) {
+        log::warn!("Failed to write setup version sentinel: {}", e);
+    }
+}
+
 pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let (sender, receiver) = mpsc::channel();
     let progress = Arc::new(Mutex::new(0));
@@ -800,6 +840,10 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             error: ErrorVariant::Unsupported,
         });
     }
+
+    // Invalidate stage sentinels when the app version changed so that
+    // updated setup logic is re-applied even on an already-installed device.
+    invalidate_setup_if_outdated();
 
     let options = SetupOptions {
         android_app,
@@ -864,6 +908,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
 
                     // All stages are done, we need to replace the WebviewBackend with the WaylandBackend
                     // Or, easier, just restart the whole app
+                    mark_setup_complete();
                     *progress.lock().unwrap() = 100;
                     sender_clone
                         .send(SetupMessage::Progress(
@@ -883,6 +928,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     };
 
     if fully_installed {
+        mark_setup_complete();
         PolarBearBackend::Wayland(WaylandBackend {
             compositor: Compositor::build().expect("Failed to build compositor"),
             graphic_renderer: None,
