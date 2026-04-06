@@ -2,18 +2,57 @@ name: Auto bump version from PR labels
 
 on:
   pull_request:
-    types: [closed]
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+      - ready_for_review
+      - closed
     branches:
       - main
 
 permissions:
-  contents: write
   pull-requests: read
 
 jobs:
-  bump-version:
-    if: github.event.pull_request.merged == true
+  validate-release-label:
+    name: Validate Release Label
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
+
+    steps:
+      - name: Require exactly one release label
+        env:
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
+        run: |
+          python <<'PY'
+          import json
+          import os
+
+          release_labels = ['release:major', 'release:minor', 'release:patch']
+          labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
+          selected = [label for label in release_labels if label in labels]
+
+          if len(selected) != 1:
+              print('PRs to main must have exactly one release label:')
+              print('  - release:major')
+              print('  - release:minor')
+              print('  - release:patch')
+              print(f'Found: {selected or "none"}')
+              raise SystemExit(1)
+
+          print(f'Using release label: {selected[0]}')
+          PY
+
+  bump-version:
+    name: Bump Version
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
 
     steps:
       - name: Decide bump level from PR labels
@@ -25,14 +64,17 @@ jobs:
           import json
           import os
 
+          release_labels = ['release:major', 'release:minor', 'release:patch']
           labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
+          selected = [label for label in release_labels if label in labels]
 
-          if 'release:major' in labels:
-              level = 'major'
-          elif 'release:minor' in labels:
-              level = 'minor'
-          else:
-              level = 'patch'
+          if len(selected) != 1:
+              raise SystemExit(
+                  'Expected exactly one release label: '
+                  'release:major, release:minor, or release:patch'
+              )
+
+          level = selected[0].split(':', 1)[1]
 
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
               f.write(f'level={level}\n')
