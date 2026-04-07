@@ -12,20 +12,49 @@ on:
       - closed
     branches:
       - main
-    paths-ignore:
-      - gh-pages/**
 
 permissions:
   pull-requests: read
 
 jobs:
+  classify-pr:
+    name: Classify PR
+    runs-on: ubuntu-latest
+    outputs:
+      gh_pages_only: ${{ steps.filter.outputs.gh_pages_only }}
+
+    steps:
+      - name: Detect gh-pages-only changes
+        id: filter
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+
+            const ghPagesOnly =
+              files.length > 0 &&
+              files.every((file) => file.filename.startsWith("gh-pages/"));
+
+            core.setOutput("gh_pages_only", ghPagesOnly ? "true" : "false");
+
   validate-release-label:
     name: Validate Release Label
+    needs: classify-pr
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
 
     steps:
+      - name: Skip label validation for gh-pages-only PRs
+        if: needs.classify-pr.outputs.gh_pages_only == 'true'
+        run: echo "gh-pages-only PR; no release label required."
+
       - name: Require exactly one release label
+        if: needs.classify-pr.outputs.gh_pages_only != 'true'
         env:
           LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
         run: |
@@ -54,7 +83,8 @@ jobs:
 
   bump-version:
     name: Bump Version
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true
+    needs: classify-pr
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.gh_pages_only != 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: write
