@@ -31,15 +31,19 @@ jobs:
           import json
           import os
 
-          release_labels = ['release:major', 'release:minor', 'release:patch']
+          release_labels = [
+              'release:breaking',
+              'release:feature',
+              'release:bugfix',
+          ]
           labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
           selected = [label for label in release_labels if label in labels]
 
           if len(selected) != 1:
               print('PRs to main must have exactly one release label:')
-              print('  - release:major')
-              print('  - release:minor')
-              print('  - release:patch')
+              print('  - release:breaking')
+              print('  - release:feature')
+              print('  - release:bugfix')
               print(f'Found: {selected or "none"}')
               raise SystemExit(1)
 
@@ -65,17 +69,21 @@ jobs:
           import json
           import os
 
-          release_labels = ['release:major', 'release:minor', 'release:patch']
+          release_labels = {
+              'release:breaking': 'major',
+              'release:feature': 'minor',
+              'release:bugfix': 'patch',
+          }
           labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
           selected = [label for label in release_labels if label in labels]
 
           if len(selected) != 1:
               raise SystemExit(
                   'Expected exactly one release label: '
-                  'release:major, release:minor, or release:patch'
+                  'release:breaking, release:feature, or release:bugfix'
               )
 
-          level = selected[0].split(':', 1)[1]
+          level = release_labels[selected[0]]
 
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
               f.write(f'level={level}\n')
@@ -95,17 +103,44 @@ jobs:
           python <<'PY'
           import os
           import re
+          import subprocess
           from pathlib import Path
 
           level = os.environ['BUMP_LEVEL']
           path = Path('Cargo.toml')
           text = path.read_text(encoding='utf-8')
 
+          def parse_version(raw):
+              match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', raw.strip())
+              if not match:
+                  return None
+              return tuple(map(int, match.groups()))
+
           match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', text, re.M)
           if not match:
               raise SystemExit('Could not find version in Cargo.toml')
 
-          major, minor, patch = map(int, match.groups())
+          manifest_version = tuple(map(int, match.groups()))
+
+          tags = subprocess.run(
+              ['git', 'tag', '--list', 'v*.*.*', '--sort=-v:refname'],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.splitlines()
+
+          latest_tag_version = None
+          for tag in tags:
+              parsed = parse_version(tag)
+              if parsed is not None:
+                  latest_tag_version = parsed
+                  break
+
+          base_version = manifest_version
+          if latest_tag_version is not None:
+              base_version = max(manifest_version, latest_tag_version)
+
+          major, minor, patch = base_version
 
           if level == 'major':
               major += 1
@@ -127,6 +162,8 @@ jobs:
           )
 
           path.write_text(new_text, encoding='utf-8')
+          print(f'Base version: {".".join(map(str, base_version))}')
+          print(f'New version: {new_version}')
 
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
               f.write(f'new_version={new_version}\n')
@@ -137,12 +174,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml
-          git commit -m "chore: bump version to v${{ steps.bump.outputs.new_version }}"
+          git commit -m "chore: prepare release v${{ steps.bump.outputs.new_version }}"
 
       - name: Create and push tag
         run: |
           git tag "v${{ steps.bump.outputs.new_version }}"
-          git push origin HEAD:main --follow-tags
+          git push origin "refs/tags/v${{ steps.bump.outputs.new_version }}"
 
       - name: Trigger build workflow
         env:
