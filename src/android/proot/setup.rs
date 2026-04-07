@@ -632,6 +632,92 @@ fn update_openbox_theme(fs_root: &Path, theme_name: &str, scale: i32) {
     fs::write(&user_theme, content).expect("Failed to write openbox theme file");
 }
 
+fn setup_fake_bwrap(_: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let wrapper_path = fs_root.join("usr/local/bin/bwrap");
+
+    // bwrap (Bubblewrap) requires Linux user namespaces (CLONE_NEWUSER) which are
+    // blocked by Android SELinux. We replace it with a shim that strips all
+    // namespace/sandbox flags and directly exec's the target binary.
+    // This unblocks glycin-svg (used by Onboard) which sandbox-loads SVG files via bwrap.
+    let wrapper = r#"#!/bin/sh
+# bwrap shim for proot/Android: namespaces are unavailable, exec directly.
+# Strips all bwrap sandbox/namespace/bind flags, then exec's the target binary.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        # Three-argument flags (flag + src/key + dest/value)
+        --ro-bind|--bind|--dev-bind|--bind-try|--ro-bind-try|--dev-bind-try|\
+        --file|--bind-data|--ro-bind-data|--symlink|\
+        --setenv|--chmod) shift 3 ;;
+        # Two-argument flags (flag + single arg)
+        --tmpfs|--proc|--dir|\
+        --unsetenv|--perms|--cap-add|--cap-drop|\
+        --seccomp|--add-seccomp-fd|--info-fd|--json-status-fd|\
+        --block-fd|--userns-block-fd|--userns|--userns2|\
+        --pidns|--chdir|--dev|--mqueue) shift 2 ;;
+        # Zero-argument flags
+        --unshare-all|--unshare-user|--unshare-user-try|--unshare-pid|\
+        --unshare-ipc|--unshare-net|--unshare-uts|--unshare-cgroup|\
+        --unshare-cgroup-try|--share-net|--remount-ro|\
+        --as-pid-1|--die-with-parent|--new-session|--clearenv) shift ;;
+        --) shift; break ;;
+        *) break ;;
+    esac
+done
+exec "$@"
+"#;
+
+    let _ = fs::create_dir_all(
+        wrapper_path
+            .parent()
+            .expect("Failed to read bwrap wrapper parent directory"),
+    );
+    fs::write(&wrapper_path, wrapper).expect("Failed to write bwrap wrapper");
+    fs::set_permissions(&wrapper_path, fs::Permissions::from_mode(0o755))
+        .expect("Failed to mark bwrap wrapper executable");
+
+    None
+}
+
+fn setup_onboard_signal_fix(_: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let wrapper_path = fs_root.join("usr/local/bin/onboard");
+
+    // proot intercepts fstat() on socket fds and follows /proc/self/fd/N which points
+    // to "socket:[inode]" — not a real path. Python 3.14's signal.set_wakeup_fd()
+    // calls fstat(fd) to validate the wakeup socket, which fails with ENOENT under proot.
+    // We install a wrapper at /usr/local/bin/onboard (higher PATH priority than /usr/sbin)
+    // that monkey-patches signal.set_wakeup_fd to swallow OSError before launching the
+    // real Onboard binary.
+    let wrapper = r#"#!/usr/bin/python3
+# Onboard wrapper for proot/Android: patches signal.set_wakeup_fd to handle
+# OSError (ENOENT) caused by proot's fstat translation on socket file descriptors.
+import signal as _signal
+_orig_swf = _signal.set_wakeup_fd
+def _safe_swf(fd, **kwargs):
+    try:
+        return _orig_swf(fd, **kwargs)
+    except OSError:
+        return -1
+_signal.set_wakeup_fd = _safe_swf
+
+import runpy, sys
+sys.argv[0] = '/usr/sbin/onboard'
+runpy.run_path('/usr/sbin/onboard', run_name='__main__')
+"#;
+
+    let _ = fs::create_dir_all(
+        wrapper_path
+            .parent()
+            .expect("Failed to read onboard wrapper parent directory"),
+    );
+    fs::write(&wrapper_path, wrapper).expect("Failed to write onboard wrapper");
+    fs::set_permissions(&wrapper_path, fs::Permissions::from_mode(0o755))
+        .expect("Failed to mark onboard wrapper executable");
+
+    None
+}
+
 fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let android_app = options.android_app.clone();
@@ -812,8 +898,10 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(install_dependencies),         // Step 3. Install dependencies
         Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
         Box::new(setup_qterminal_wrapper), // Step 5. Ensure qterminal launches interactive bash
-        Box::new(setup_lxqt_scaling),      // Step 6. Setup LXQt HiDPI scaling
-        Box::new(fix_xkb_symlink),         // Step 7. Fix xkb symlink (last)
+        Box::new(setup_fake_bwrap),           // Step 6. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
+        Box::new(setup_onboard_signal_fix), // Step 7. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
+        Box::new(setup_lxqt_scaling),       // Step 8. Setup LXQt HiDPI scaling
+        Box::new(fix_xkb_symlink),          // Step 9. Fix xkb symlink (last)
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {

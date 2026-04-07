@@ -1,0 +1,152 @@
+name: Auto bump version from PR labels
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+      - ready_for_review
+      - closed
+    branches:
+      - main
+
+permissions:
+  pull-requests: read
+
+jobs:
+  validate-release-label:
+    name: Validate Release Label
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require exactly one release label
+        env:
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
+        run: |
+          python <<'PY'
+          import json
+          import os
+
+          release_labels = ['release:major', 'release:minor', 'release:patch']
+          labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
+          selected = [label for label in release_labels if label in labels]
+
+          if len(selected) != 1:
+              print('PRs to main must have exactly one release label:')
+              print('  - release:major')
+              print('  - release:minor')
+              print('  - release:patch')
+              print(f'Found: {selected or "none"}')
+              raise SystemExit(1)
+
+          print(f'Using release label: {selected[0]}')
+          PY
+
+  bump-version:
+    name: Bump Version
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: read
+
+    steps:
+      - name: Decide bump level from PR labels
+        id: level
+        env:
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
+        run: |
+          python <<'PY'
+          import json
+          import os
+
+          release_labels = ['release:major', 'release:minor', 'release:patch']
+          labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
+          selected = [label for label in release_labels if label in labels]
+
+          if len(selected) != 1:
+              raise SystemExit(
+                  'Expected exactly one release label: '
+                  'release:major, release:minor, or release:patch'
+              )
+
+          level = selected[0].split(':', 1)[1]
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write(f'level={level}\n')
+          PY
+
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Bump version in Cargo.toml
+        id: bump
+        env:
+          BUMP_LEVEL: ${{ steps.level.outputs.level }}
+        run: |
+          python <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          level = os.environ['BUMP_LEVEL']
+          path = Path('Cargo.toml')
+          text = path.read_text(encoding='utf-8')
+
+          match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', text, re.M)
+          if not match:
+              raise SystemExit('Could not find version in Cargo.toml')
+
+          major, minor, patch = map(int, match.groups())
+
+          if level == 'major':
+              major += 1
+              minor = 0
+              patch = 0
+          elif level == 'minor':
+              minor += 1
+              patch = 0
+          else:
+              patch += 1
+
+          new_version = f'{major}.{minor}.{patch}'
+          new_text = re.sub(
+              r'^version\s*=\s*"\d+\.\d+\.\d+"',
+              f'version = "{new_version}"',
+              text,
+              count=1,
+              flags=re.M,
+          )
+
+          path.write_text(new_text, encoding='utf-8')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write(f'new_version={new_version}\n')
+          PY
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml
+          git commit -m "chore: bump version to v${{ steps.bump.outputs.new_version }}"
+
+      - name: Create and push tag
+        run: |
+          git tag "v${{ steps.bump.outputs.new_version }}"
+          git push origin HEAD:main --follow-tags
+
+      - name: Trigger build workflow
+        env:
+          TAG: v${{ steps.bump.outputs.new_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run build.yml --ref "$TAG"
