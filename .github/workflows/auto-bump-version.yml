@@ -1,7 +1,7 @@
 name: Auto bump version from PR labels
 
 on:
-  pull_request:
+  pull_request_target:
     types:
       - opened
       - reopened
@@ -51,6 +51,7 @@ jobs:
     if: github.event.action == 'closed' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
       pull-requests: read
 
@@ -138,11 +139,14 @@ jobs:
           git add Cargo.toml
           git commit -m "chore: bump version to v${{ steps.bump.outputs.new_version }}"
 
-      - name: Push commit
-        run: |
-          git push origin HEAD:main
-
       - name: Create and push tag
         run: |
           git tag "v${{ steps.bump.outputs.new_version }}"
-          git push origin "v${{ steps.bump.outputs.new_version }}"
+          git push origin HEAD:main --follow-tags
+
+      - name: Trigger build workflow
+        env:
+          TAG: v${{ steps.bump.outputs.new_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run build.yml --ref "$TAG"
