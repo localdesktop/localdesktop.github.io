@@ -123,8 +123,12 @@ impl ArchProcess {
             .arg("--bind=/proc")
             .arg("--bind=/sys")
             .arg(format!("--bind={}/tmp:/dev/shm", config::ARCH_FS_ROOT))
-            .arg("--bind=/dev/pts:/dev/pts")
-            .arg("--bind=/dev/ptmx:/dev/ptmx");
+            // /dev/pts and /dev/ptmx are already covered by --bind=/dev above.
+            // The explicit sub-binds added in commit 61d9079 were redundant and caused
+            // proot to double-translate PTY ioctls (TIOCGPTN/TIOCSPTLCK/TIOCSWINSZ),
+            // breaking terminal initialisation and keyboard arrow keys inside QTerminal.
+            // We only need /dev/tty explicitly for processes that open it by path.
+            .arg("--bind=/dev/tty:/dev/tty");
 
         if context.permission_all_files_access {
             process
