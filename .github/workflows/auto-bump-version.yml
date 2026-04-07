@@ -12,6 +12,8 @@ on:
       - closed
     branches:
       - main
+    paths-ignore:
+      - gh-pages/**
 
 permissions:
   pull-requests: read
