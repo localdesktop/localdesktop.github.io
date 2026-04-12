@@ -21,8 +21,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Gradle 8.14.3
         uses: gradle/actions/setup-gradle@v4

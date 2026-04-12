@@ -1,4 +1,4 @@
-name: Auto bump version from PR labels
+name: Manage releases from PR labels
 
 on:
   pull_request_target:
@@ -13,7 +13,11 @@ on:
     branches:
       - main
 
+env:
+  RELEASE_BRANCH: ci/release
+
 permissions:
+  contents: read
   pull-requests: read
 
 jobs:
@@ -21,26 +25,32 @@ jobs:
     name: Classify PR
     runs-on: ubuntu-latest
     outputs:
-      gh_pages_only: ${{ steps.filter.outputs.gh_pages_only }}
+      gh_pages_only: ${{ steps.classify.outputs.gh_pages_only }}
+      release_pr: ${{ steps.classify.outputs.release_pr }}
 
     steps:
-      - name: Detect gh-pages-only changes
-        id: filter
+      - name: Classify PR
+        id: classify
         uses: actions/github-script@v7
         with:
           script: |
+            const pr = context.payload.pull_request;
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
+              pull_number: pr.number,
               per_page: 100,
             });
 
             const ghPagesOnly =
               files.length > 0 &&
               files.every((file) => file.filename.startsWith("gh-pages/"));
+            const isReleasePr =
+              pr.head.repo.full_name === `${context.repo.owner}/${context.repo.repo}` &&
+              pr.head.ref === process.env.RELEASE_BRANCH;
 
             core.setOutput("gh_pages_only", ghPagesOnly ? "true" : "false");
+            core.setOutput("release_pr", isReleasePr ? "true" : "false");
 
   validate-release-label:
     name: Validate Release Label
@@ -49,12 +59,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Skip label validation for gh-pages-only PRs
-        if: needs.classify-pr.outputs.gh_pages_only == 'true'
-        run: echo "gh-pages-only PR; no release label required."
+      - name: Skip label validation for exempt PRs
+        if: needs.classify-pr.outputs.gh_pages_only == 'true' || needs.classify-pr.outputs.release_pr == 'true'
+        run: echo "Release label validation skipped for exempt PR."
 
       - name: Require exactly one release label
-        if: needs.classify-pr.outputs.gh_pages_only != 'true'
+        if: needs.classify-pr.outputs.gh_pages_only != 'true' && needs.classify-pr.outputs.release_pr != 'true'
         env:
           LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
         run: |
@@ -81,15 +91,14 @@ jobs:
           print(f'Using release label: {selected[0]}')
           PY
 
-  bump-version:
-    name: Bump Version
+  prepare-release-pr:
+    name: Prepare Release PR
     needs: classify-pr
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.gh_pages_only != 'true'
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.gh_pages_only != 'true' && needs.classify-pr.outputs.release_pr != 'true'
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: write
-      pull-requests: read
+      pull-requests: write
 
     steps:
       - name: Decide bump level from PR labels
@@ -126,21 +135,46 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.PAT }}
 
-      - name: Bump version in Cargo.toml
-        id: bump
+      - name: Find open release PR
+        id: release_pr
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT }}
+          script: |
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              base: "main",
+              head: `${context.repo.owner}:${process.env.RELEASE_BRANCH}`,
+              per_page: 1,
+            });
+
+            const pr = prs[0];
+            core.setOutput("exists", pr ? "true" : "false");
+            core.setOutput("number", pr ? String(pr.number) : "");
+            core.setOutput("body", pr?.body || "");
+
+      - name: Fetch release branch
+        run: git fetch origin "${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}" || true
+
+      - name: Determine release version
+        id: version
         env:
-          BUMP_LEVEL: ${{ steps.level.outputs.level }}
+          CURRENT_BUMP_LEVEL: ${{ steps.level.outputs.level }}
+          RELEASE_PR_EXISTS: ${{ steps.release_pr.outputs.exists }}
         run: |
           python <<'PY'
           import os
           import re
           import subprocess
-          from pathlib import Path
 
-          level = os.environ['BUMP_LEVEL']
-          path = Path('Cargo.toml')
-          text = path.read_text(encoding='utf-8')
+          release_branch = os.environ['RELEASE_BRANCH']
+          current_level = os.environ['CURRENT_BUMP_LEVEL']
+          release_pr_exists = os.environ['RELEASE_PR_EXISTS'] == 'true'
+          level_priority = {'patch': 1, 'minor': 2, 'major': 3}
 
           def parse_version(raw):
               match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', raw.strip())
@@ -148,9 +182,36 @@ jobs:
                   return None
               return tuple(map(int, match.groups()))
 
-          match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', text, re.M)
+          def bump(version, level):
+              major, minor, patch = version
+              if level == 'major':
+                  return (major + 1, 0, 0)
+              if level == 'minor':
+                  return (major, minor + 1, 0)
+              return (major, minor, patch + 1)
+
+          def detect_pending_level(base_version, release_version):
+              if release_version[0] > base_version[0]:
+                  return 'major'
+              if release_version[0] == base_version[0] and release_version[1] > base_version[1]:
+                  return 'minor'
+              if (
+                  release_version[0] == base_version[0]
+                  and release_version[1] == base_version[1]
+                  and release_version[2] > base_version[2]
+              ):
+                  return 'patch'
+              return None
+
+          manifest_raw = subprocess.run(
+              ['git', 'show', 'origin/main:Cargo.toml'],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout
+          match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', manifest_raw, re.M)
           if not match:
-              raise SystemExit('Could not find version in Cargo.toml')
+              raise SystemExit('Could not find version in Cargo.toml on main')
 
           manifest_version = tuple(map(int, match.groups()))
 
@@ -172,89 +233,196 @@ jobs:
           if latest_tag_version is not None:
               base_version = max(manifest_version, latest_tag_version)
 
-          major, minor, patch = base_version
+          effective_level = current_level
+          if release_pr_exists:
+              try:
+                  release_manifest = subprocess.run(
+                      ['git', 'show', f'origin/{release_branch}:Cargo.toml'],
+                      check=True,
+                      capture_output=True,
+                      text=True,
+                  ).stdout
+                  release_match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', release_manifest, re.M)
+                  existing_release_version = tuple(map(int, release_match.groups())) if release_match else None
+              except subprocess.CalledProcessError:
+                  existing_release_version = None
 
-          if level == 'major':
-              major += 1
-              minor = 0
-              patch = 0
-          elif level == 'minor':
-              minor += 1
-              patch = 0
-          else:
-              patch += 1
+              if existing_release_version is not None:
+                  pending_level = detect_pending_level(base_version, existing_release_version)
+                  if pending_level and level_priority[pending_level] > level_priority[effective_level]:
+                      effective_level = pending_level
 
-          new_version = f'{major}.{minor}.{patch}'
-          new_text = re.sub(
-              r'^version\s*=\s*"\d+\.\d+\.\d+"',
-              f'version = "{new_version}"',
-              text,
-              count=1,
-              flags=re.M,
-          )
-
-          path.write_text(new_text, encoding='utf-8')
+          new_version = '.'.join(map(str, bump(base_version, effective_level)))
           print(f'Base version: {".".join(map(str, base_version))}')
+          print(f'Release bump level: {effective_level}')
           print(f'New version: {new_version}')
 
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
               f.write(f'new_version={new_version}\n')
+              f.write(f'bump_level={effective_level}\n')
           PY
+
+      - name: Reset release branch to main
+        run: git checkout -B "$RELEASE_BRANCH" origin/main
+
+      - name: Apply release version
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.new_version }}
+        run: |
+          python <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          release_version = os.environ['RELEASE_VERSION']
+
+          cargo_toml = Path('Cargo.toml')
+          cargo_toml_text = cargo_toml.read_text(encoding='utf-8')
+          cargo_toml_text, toml_replacements = re.subn(
+              r'^version\s*=\s*"\d+\.\d+\.\d+"',
+              f'version = "{release_version}"',
+              cargo_toml_text,
+              count=1,
+              flags=re.M,
+          )
+          if toml_replacements != 1:
+              raise SystemExit('Failed to update version in Cargo.toml')
+          cargo_toml.write_text(cargo_toml_text, encoding='utf-8')
+
+          cargo_lock = Path('Cargo.lock')
+          cargo_lock_text = cargo_lock.read_text(encoding='utf-8')
+          cargo_lock_text, lock_replacements = re.subn(
+              r'(\[\[package\]\]\nname = "localdesktop"\nversion = ")\d+\.\d+\.\d+(")',
+              rf'\g<1>{release_version}\2',
+              cargo_lock_text,
+              count=1,
+          )
+          if lock_replacements != 1:
+              raise SystemExit('Failed to update localdesktop package version in Cargo.lock')
+          cargo_lock.write_text(cargo_lock_text, encoding='utf-8')
+          PY
+
+      - name: Commit release branch
+        id: commit
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.new_version }}
+        run: |
+          if git rev-parse --verify "origin/${RELEASE_BRANCH}" >/dev/null 2>&1 && git diff --quiet "origin/${RELEASE_BRANCH}" --; then
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: prepare release v${RELEASE_VERSION}"
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push release branch
+        if: steps.commit.outputs.updated == 'true'
+        run: git push --force-with-lease origin "$RELEASE_BRANCH"
+
+      - name: Create or update release PR
+        env:
+          EXISTING_RELEASE_PR_NUMBER: ${{ steps.release_pr.outputs.number }}
+          EXISTING_RELEASE_PR_BODY: ${{ steps.release_pr.outputs.body }}
+          RELEASE_VERSION: ${{ steps.version.outputs.new_version }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT }}
+          script: |
+            const sourcePr = context.payload.pull_request;
+            const existingPrNumber = process.env.EXISTING_RELEASE_PR_NUMBER;
+            const marker = `<!-- release-source-pr:${sourcePr.number} -->`;
+            const header = `Release branch for \`v${process.env.RELEASE_VERSION}\`.\n\n## Included changes`;
+            const sourceDetails = (sourcePr.body || "").trim();
+            const entry = [
+              marker,
+              `### #${sourcePr.number} ${sourcePr.title}`,
+              ...(sourceDetails ? ["", sourceDetails] : []),
+            ].join("\n");
+
+            let entries = (process.env.EXISTING_RELEASE_PR_BODY || "")
+              .replace(/^Release branch for `v[^`]+`\.\n\n## Included changes\s*/m, "")
+              .trim();
+
+            if (!entries.includes(marker)) {
+              entries = entries ? `${entries}\n\n${entry}` : entry;
+            }
+
+            const body = `${header}\n\n${entries}\n`;
+            const title = `chore: prepare release v${process.env.RELEASE_VERSION}`;
+
+            if (existingPrNumber) {
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: Number(existingPrNumber),
+                title,
+                body,
+              });
+              return;
+            }
+
+            await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              head: process.env.RELEASE_BRANCH,
+              base: "main",
+              body,
+            });
+
+  publish-release-tag:
+    name: Publish Release Tag
+    needs: classify-pr
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.release_pr == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.PAT }}
+
+      - name: Extract version
+        id: version
+        run: echo "value=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].version')" >> "$GITHUB_OUTPUT"
 
       - name: Prepare release notes
         id: notes
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require("fs");
-            const path = require("path");
-
-            const pr = context.payload.pull_request;
-            const prBody = (pr.body || "").trim();
-            const prTitle = (pr.title || "").trim();
-            let notes = prBody;
-
-            if (!notes) {
-              const commits = await github.paginate(github.rest.pulls.listCommits, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: pr.number,
-                per_page: 100,
-              });
-
-              const lastCommit = commits[commits.length - 1];
-              const lastCommitMessage = (lastCommit?.commit?.message || "").trim();
-              const [, ...rest] = lastCommitMessage.split(/\r?\n/);
-              const lastCommitBody = rest.join("\n").trim();
-
-              if (lastCommitBody) {
-                notes = lastCommitMessage;
-              } else if (prTitle) {
-                notes = prTitle;
-              } else if (lastCommitMessage) {
-                notes = lastCommitMessage;
-              }
-            }
-
-            const notesPath = path.join(process.env.RUNNER_TEMP, "release-notes.md");
-            fs.writeFileSync(notesPath, `${notes}\n`, "utf8");
-            core.setOutput("path", notesPath);
-
-      - name: Commit version bump
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml
-          git commit -m "chore: prepare release v${{ steps.bump.outputs.new_version }}"
+          python <<'PY'
+          import os
+          from pathlib import Path
+
+          notes = (os.environ.get('PR_BODY') or '').strip()
+          if not notes:
+              notes = (os.environ.get('PR_TITLE') or '').strip()
+
+          notes_path = Path(os.environ['RUNNER_TEMP']) / 'release-notes.md'
+          notes_path.write_text(f'{notes}\n', encoding='utf-8')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write(f'path={notes_path}\n')
+          PY
 
       - name: Create and push tag
-        run: |
-          git tag -a "v${{ steps.bump.outputs.new_version }}" -F "${{ steps.notes.outputs.path }}"
-          git push origin "refs/tags/v${{ steps.bump.outputs.new_version }}"
-
-      - name: Trigger build workflow
         env:
-          TAG: v${{ steps.bump.outputs.new_version }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.version.outputs.value }}
         run: |
-          gh workflow run build.yml --ref "$TAG"
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -F "${{ steps.notes.outputs.path }}"
+          git push origin "refs/tags/$TAG"
