@@ -35,16 +35,43 @@ jobs:
 
       - name: Extract release notes
         id: release_notes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+
+            const tag = process.env.GITHUB_REF_NAME || context.ref.replace(/^refs\/tags\//, "");
+            let notes = "";
+
+            try {
+              const ref = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${tag}`,
+              });
+
+              if (ref.data.object.type === "tag") {
+                const tagObject = await github.rest.git.getTag({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag_sha: ref.data.object.sha,
+                });
+                notes = (tagObject.data.message || "").trim();
+              }
+            } catch (error) {
+              core.warning(`Could not load release notes from tag ${tag}: ${error.message}`);
+            }
+
+            const notesPath = path.join(process.env.RUNNER_TEMP, "release-notes.md");
+            fs.writeFileSync(notesPath, notes ? `${notes}\n` : "", "utf8");
+            core.setOutput("found", notes ? "true" : "false");
+            core.setOutput("path", notesPath);
+
+      - name: Fallback release notes to commit message
+        if: steps.release_notes.outputs.found != 'true'
         run: |
-          TAG="${GITHUB_REF_NAME:-${GITHUB_REF#refs/tags/}}"
-          NOTES_PATH="$RUNNER_TEMP/release-notes.md"
-          git for-each-ref "refs/tags/$TAG" --format='%(contents)' > "$NOTES_PATH"
-          if [ ! -s "$NOTES_PATH" ]; then
-            git log -1 --pretty=%B > "$NOTES_PATH"
-          fi
-          {
-            echo "path=$NOTES_PATH"
-          } >> "$GITHUB_OUTPUT"
+          git log -1 --pretty=%B > "${{ steps.release_notes.outputs.path }}"
 
       - name: Setup signing keystore
         run: |

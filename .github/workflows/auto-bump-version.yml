@@ -203,31 +203,42 @@ jobs:
 
       - name: Prepare release notes
         id: notes
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          python <<'PY'
-          import os
-          import subprocess
-          from pathlib import Path
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const path = require("path");
 
-          pr_body = (os.environ.get("PR_BODY") or "").strip()
-          if pr_body:
-              notes = pr_body
-          else:
-              notes = subprocess.run(
-                  ["git", "log", "-1", "--pretty=%B"],
-                  check=True,
-                  capture_output=True,
-                  text=True,
-              ).stdout.strip()
+            const pr = context.payload.pull_request;
+            const prBody = (pr.body || "").trim();
+            const prTitle = (pr.title || "").trim();
+            let notes = prBody;
 
-          notes_path = Path(os.environ["RUNNER_TEMP"]) / "release-notes.md"
-          notes_path.write_text(notes + "\n", encoding="utf-8")
+            if (!notes) {
+              const commits = await github.paginate(github.rest.pulls.listCommits, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100,
+              });
 
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-              f.write(f"path={notes_path}\n")
-          PY
+              const lastCommit = commits[commits.length - 1];
+              const lastCommitMessage = (lastCommit?.commit?.message || "").trim();
+              const [, ...rest] = lastCommitMessage.split(/\r?\n/);
+              const lastCommitBody = rest.join("\n").trim();
+
+              if (lastCommitBody) {
+                notes = lastCommitMessage;
+              } else if (prTitle) {
+                notes = prTitle;
+              } else if (lastCommitMessage) {
+                notes = lastCommitMessage;
+              }
+            }
+
+            const notesPath = path.join(process.env.RUNNER_TEMP, "release-notes.md");
+            fs.writeFileSync(notesPath, `${notes}\n`, "utf8");
+            core.setOutput("path", notesPath);
 
       - name: Commit version bump
         run: |
