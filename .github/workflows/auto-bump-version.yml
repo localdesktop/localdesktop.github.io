@@ -201,6 +201,34 @@ jobs:
               f.write(f'new_version={new_version}\n')
           PY
 
+      - name: Prepare release notes
+        id: notes
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+          pr_body = (os.environ.get("PR_BODY") or "").strip()
+          if pr_body:
+              notes = pr_body
+          else:
+              notes = subprocess.run(
+                  ["git", "log", "-1", "--pretty=%B"],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              ).stdout.strip()
+
+          notes_path = Path(os.environ["RUNNER_TEMP"]) / "release-notes.md"
+          notes_path.write_text(notes + "\n", encoding="utf-8")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"path={notes_path}\n")
+          PY
+
       - name: Commit version bump
         run: |
           git config user.name "github-actions[bot]"
@@ -210,7 +238,7 @@ jobs:
 
       - name: Create and push tag
         run: |
-          git tag "v${{ steps.bump.outputs.new_version }}"
+          git tag -a "v${{ steps.bump.outputs.new_version }}" -F "${{ steps.notes.outputs.path }}"
           git push origin "refs/tags/v${{ steps.bump.outputs.new_version }}"
 
       - name: Trigger build workflow

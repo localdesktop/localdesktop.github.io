@@ -16,6 +16,12 @@ Before you can use this feature, you must grant "All files access" permission to
 The exact location of this setting varies by Android version and device manufacturer. Search for "All files access" in your Settings app if you can't find it.
 :::
 
+This permission is optional. Local Desktop still runs without it, but Android
+shared storage will not be available inside Linux.
+
+For a detailed explanation of why this permission is needed, see
+[Android Storage Access](/android-storage-access).
+
 ![Storage Setup](/img/storage-setup.webp)
 
 ## Usage
@@ -25,4 +31,3 @@ You can access your Android storage from within Linux at:
 - `~/Android`
 
 ![Storage Usage](/img/storage-usage.webp)
-
