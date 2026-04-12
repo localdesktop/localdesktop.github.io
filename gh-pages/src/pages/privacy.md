@@ -7,7 +7,7 @@ slug: /privacy
 
 # Privacy Policy
 
-_Last updated: April 9, 2026_
+_Last updated: July 10, 2025_
 
 Thank you for using **Local Desktop** ("we", "our", "us"). This privacy policy explains how we collect, use, and protect information related to your use of our app. We are committed to protecting your privacy and ensuring transparency about our practices.
 
@@ -15,39 +15,20 @@ Thank you for using **Local Desktop** ("we", "our", "us"). This privacy policy e
 
 ## 1. Information We Collect
 
-Local Desktop does not ask for your name, email address, contacts, camera,
-microphone, or precise location.
+Local Desktop **does not collect or request any personal or sensitive user data**, such as your name, email, location, camera, contacts, or storage content.
 
-However, Local Desktop can request Android's special "All files access"
-permission when you want to share files between Android and the Linux
-environment running inside the app. If you enable that feature, Linux programs
-running inside Local Desktop can read and write files from Android shared
-storage through normal filesystem paths.
+However, we use a third-party crash reporting and logging service called **Sentry**, which automatically gathers diagnostic data when the app encounters an error. This may include:
 
-Local Desktop itself does not continuously scan, index, or upload your shared
-storage. Shared-storage access happens on-device so the Android storage mount
-feature can work.
-
-We also use a third-party crash reporting and logging service called
-**Sentry**, which automatically gathers diagnostic data when the app encounters
-an error. This may include:
-
-- Device information, such as OS version and model
+- Device information (such as OS version and model)
 - Application state and logs
-- IP address, used to group errors geographically
-- Debugging context, such as usernames, filesystem paths, or command output if
-  they appear in application logs
+- IP address (used to group errors geographically)
+- Debugging context (such as username, if your system environment provides one)
 
 This information is used **solely to help us improve app stability and performance**.
 
 ---
 
-## 2. How We Use Data
-
-Local Desktop uses Android storage permissions only to provide the optional
-"share files between Android and Linux" feature. This allows Linux apps inside
-Local Desktop to open, edit, import, and export files stored on your Android
-device.
+## 2. How We Use Your Data
 
 The diagnostic data we receive from Sentry is used for:
 
@@ -55,24 +36,17 @@ The diagnostic data we receive from Sentry is used for:
 - Identifying and fixing bugs and crashes
 - Improving the overall reliability of Local Desktop
 
-We do **not** use storage access or diagnostic data for advertising, marketing,
-or user profiling.
+We do **not** use this data for advertising, marketing, or user profiling.
 
 ---
 
 ## 3. Data Sharing
 
-We do **not sell or share your files or personal data** to third parties.
+We do **not sell or share any personal data** to third parties.
 
-Diagnostic data is processed by **Sentry**, a trusted crash monitoring service,
-under their privacy terms and policies. This data is not used for advertising
-or shared beyond its intended debugging purposes.
+Diagnostic data is processed by **Sentry**, a trusted crash monitoring service, under their privacy terms and policies. This data is not used for advertising or shared beyond its intended debugging purposes.
 
 Learn more about [Sentry's privacy policy](https://sentry.io/privacy/).
-
-If you run third-party Linux applications inside Local Desktop, those
-applications may process or transmit files according to their own behavior and
-your own actions. That behavior is outside the scope of Local Desktop itself.
 
 ---
 
@@ -97,9 +71,6 @@ You may have rights to:
 - Request access to any data associated with your usage
 - Request deletion of such data
 - Ask for clarification about our data handling practices
-
-You can also revoke Android's "All files access" permission for Local Desktop
-at any time from Android Settings.
 
 To exercise these rights, please contact us at the email below.
 
