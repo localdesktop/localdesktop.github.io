@@ -21,6 +21,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Gradle 8.14.3
         uses: gradle/actions/setup-gradle@v4
@@ -30,6 +32,19 @@ jobs:
       - name: Extract version
         id: extract_version
         run: echo "version=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].version')" >> "$GITHUB_OUTPUT"
+
+      - name: Extract release notes
+        id: release_notes
+        run: |
+          TAG="${GITHUB_REF_NAME:-${GITHUB_REF#refs/tags/}}"
+          NOTES_PATH="$RUNNER_TEMP/release-notes.md"
+          git for-each-ref "refs/tags/$TAG" --format='%(contents)' > "$NOTES_PATH"
+          if [ ! -s "$NOTES_PATH" ]; then
+            git log -1 --pretty=%B > "$NOTES_PATH"
+          fi
+          {
+            echo "path=$NOTES_PATH"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Setup signing keystore
         run: |
@@ -97,6 +112,7 @@ jobs:
           token: ${{ secrets.PAT }}
           name: Local Desktop v${{ steps.extract_version.outputs.version }}
           tag_name: v${{ steps.extract_version.outputs.version }}
+          body_path: ${{ steps.release_notes.outputs.path }}
           files: |
             target/x/localdesktop-${{ steps.extract_version.outputs.version }}.apk
             target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.apk
