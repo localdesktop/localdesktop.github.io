@@ -31,6 +31,46 @@ jobs:
         id: extract_version
         run: echo "version=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].version')" >> "$GITHUB_OUTPUT"
 
+      - name: Extract release notes
+        id: release_notes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+
+            const tag = process.env.GITHUB_REF_NAME || context.ref.replace(/^refs\/tags\//, "");
+            let notes = "";
+
+            try {
+              const ref = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${tag}`,
+              });
+
+              if (ref.data.object.type === "tag") {
+                const tagObject = await github.rest.git.getTag({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag_sha: ref.data.object.sha,
+                });
+                notes = (tagObject.data.message || "").trim();
+              }
+            } catch (error) {
+              core.warning(`Could not load release notes from tag ${tag}: ${error.message}`);
+            }
+
+            const notesPath = path.join(process.env.RUNNER_TEMP, "release-notes.md");
+            fs.writeFileSync(notesPath, notes ? `${notes}\n` : "", "utf8");
+            core.setOutput("found", notes ? "true" : "false");
+            core.setOutput("path", notesPath);
+
+      - name: Fallback release notes to commit message
+        if: steps.release_notes.outputs.found != 'true'
+        run: |
+          git log -1 --pretty=%B > "${{ steps.release_notes.outputs.path }}"
+
       - name: Setup signing keystore
         run: |
           mkdir -p target/x/release/android/gradle/app
@@ -97,6 +137,7 @@ jobs:
           token: ${{ secrets.PAT }}
           name: Local Desktop v${{ steps.extract_version.outputs.version }}
           tag_name: v${{ steps.extract_version.outputs.version }}
+          body_path: ${{ steps.release_notes.outputs.path }}
           files: |
             target/x/localdesktop-${{ steps.extract_version.outputs.version }}.apk
             target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.apk
