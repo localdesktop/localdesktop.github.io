@@ -4215,8 +4215,123 @@ fn main() {
 
 #[cfg(target_os = "android")]
 fn main() {
-    if let Err(err) = apk::build() {
-        eprintln!("{err:?}");
-        std::process::exit(1);
+    // Prefer xbuild: produces an APK consistent with builds on other platforms.
+    // Fall back to the pure-Rust builder only when xbuild is not installed.
+    if !try_xbuild() {
+        if let Err(err) = apk::build() {
+            eprintln!("{err:?}");
+            std::process::exit(1);
+        }
     }
+}
+
+/// Invokes `x build` (xbuild) if it is installed. Returns `true` when xbuild
+/// ran (regardless of outcome) so the caller skips the pure-Rust fallback.
+#[cfg(target_os = "android")]
+fn try_xbuild() -> bool {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .unwrap_or_else(|_| std::env::current_dir().unwrap().to_string_lossy().to_string());
+
+    // The sdkmanager bundled with xbuild is x86_64-only and cannot run on ARM64.
+    // Download build-tools;34.0.0 via the pure-Rust android_sdkmanager crate instead.
+    let android_home = std::env::var("ANDROID_HOME")
+        .unwrap_or_else(|_| format!("{}/.cache/x/Android.sdk", std::env::var("HOME").unwrap_or_default()));
+    // Pre-download SDK components via the pure-Rust crate (no license check, ARM64-compatible).
+    // This prevents AGP from trying to download them via the x86_64-only sdkmanager.
+    let sdk_root = PathBuf::from(&android_home);
+    if !sdk_root.join("build-tools").join("34.0.0").exists() {
+        println!("Downloading build-tools;34.0.0 into {}...", android_home);
+        android_sdkmanager::download_and_extract_packages(
+            &android_home,
+            android_sdkmanager::HostOs::Linux,
+            &["build-tools;34.0.0"],
+            None,
+        );
+    }
+    if let Some(target_sdk) = read_target_sdk_version(&manifest_dir) {
+        let platform_pkg = format!("platforms;android-{}", target_sdk);
+        // Check source.properties to detect a complete install — android.jar alone is not enough
+        if !sdk_root.join("platforms").join(format!("android-{}", target_sdk)).join("source.properties").exists() {
+            println!("Downloading {} into {}...", platform_pkg, android_home);
+            android_sdkmanager::download_and_extract_packages(
+                &android_home,
+                android_sdkmanager::HostOs::Linux,
+                &[platform_pkg.as_str()],
+                None,
+            );
+        }
+    }
+
+    // Prefer the absolute path so that xbuild is found even when ~/.cargo/bin
+    // is not in PATH (common on Termux where the shell profile is not sourced
+    // by subprocesses started from cargo run).
+    let cargo_home = std::env::var("CARGO_HOME")
+        .unwrap_or_else(|_| format!("{}/.cargo", std::env::var("HOME").unwrap_or_default()));
+    let x_bin_full = PathBuf::from(&cargo_home).join("bin/x");
+    let x_bin = if x_bin_full.exists() {
+        x_bin_full.to_str().unwrap_or("x").to_string()
+    } else {
+        "x".to_string()
+    };
+
+    let status = Command::new(&x_bin)
+        .args(["build", "--release", "--platform", "android", "--arch", "arm64", "--format", "apk"])
+        // MALLOC_TAG_LEVEL=0 prevents lld from crashing due to Android pointer tagging
+        .env("MALLOC_TAG_LEVEL", "0")
+        .env("ANDROID_HOME", &android_home)
+        .status();
+
+    match status {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // xbuild not installed — install it from the vendored patches then retry
+            println!("xbuild not found — installing from patches/xbuild/xbuild...");
+            let xbuild_path = PathBuf::from(&manifest_dir).join("patches/xbuild/xbuild");
+            let install = Command::new("cargo")
+                .args(["install", "--path"])
+                .arg(&xbuild_path)
+                .env("MALLOC_TAG_LEVEL", "0")
+                .status();
+            match install {
+                Ok(s) if s.success() => {
+                    let retry = Command::new(x_bin_full.to_str().unwrap_or("x"))
+                        .args(["build", "--release", "--platform", "android", "--arch", "arm64", "--format", "apk"])
+                        .env("MALLOC_TAG_LEVEL", "0")
+                        .env("ANDROID_HOME", &android_home)
+                        .status();
+                    match retry {
+                        Ok(s) if s.success() => true,
+                        Ok(s) => { eprintln!("xbuild exited with status {s}"); std::process::exit(s.code().unwrap_or(1)); }
+                        Err(e) => { eprintln!("failed to run xbuild after install: {e}"); std::process::exit(1); }
+                    }
+                }
+                Ok(s) => { eprintln!("xbuild install failed with status {s}"); std::process::exit(s.code().unwrap_or(1)); }
+                Err(e) => { eprintln!("failed to install xbuild: {e}"); std::process::exit(1); }
+            }
+        }
+        Err(e) => {
+            eprintln!("failed to run xbuild: {e}");
+            std::process::exit(1);
+        }
+        Ok(s) if !s.success() => {
+            eprintln!("xbuild exited with status {s}");
+            std::process::exit(s.code().unwrap_or(1));
+        }
+        Ok(_) => true,
+    }
+}
+
+/// Reads `target_sdk_version` from `manifest.yaml` in the project root.
+/// Returns `None` if the file cannot be read or the field is absent.
+#[cfg(target_os = "android")]
+fn read_target_sdk_version(manifest_dir: &str) -> Option<u32> {
+    use std::path::PathBuf;
+    let path = PathBuf::from(manifest_dir).join("manifest.yaml");
+    let content = std::fs::read_to_string(path).ok()?;
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
+    yaml["android"]["manifest"]["sdk"]["target_sdk_version"]
+        .as_u64()
+        .and_then(|v| v.try_into().ok())
 }

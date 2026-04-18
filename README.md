@@ -21,10 +21,11 @@ _Proof of Concept: A Pixel Tablet running the XFCE desktop environment inside a 
 #### Termux
 
 You can build the Local Desktop APK directly on your Android device. This is simple because no cross-compilation is needed. However, we only ship prebuilt libs for arm64, so this option only works on ARM64.
-Make sure you have Rust installed in Termux:
+
+Install the required Termux packages:
 
 ```
-pkg i rust
+pkg i rust openjdk-17 gradle ndk-multilib aapt2
 ```
 
 Then run `cargo run` in the project folder:
@@ -32,6 +33,14 @@ Then run `cargo run` in the project folder:
 ```bash
 cargo run
 ```
+
+The first run will automatically install xbuild (the patched build toolchain) and download the Android SDK build-tools. Subsequent runs skip those steps.
+
+> **Faster iteration:** `cargo run` compiles the project twice — once for the host and once for the APK. For quicker rebuilds during development, use the script directly after the first setup:
+> ```bash
+> ./build-termux.sh
+> ```
+> This skips the host compilation and invokes xbuild directly.
 
 After the build succeeds, you will find `localdesktop.apk` in the current folder. You can install it with `termux-open localdesktop.apk`, but in some cases you may need to `mv localdesktop.apk ~/storage/downloads` and install it from there. Make sure you have run `termux-setup-storage` before moving it outside Termux.
 
