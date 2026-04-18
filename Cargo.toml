@@ -3,6 +3,7 @@ name = "localdesktop"
 version = "1.5.17"
 edition = "2021"
 build = "build.rs"
+default-run = "build_apk"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
