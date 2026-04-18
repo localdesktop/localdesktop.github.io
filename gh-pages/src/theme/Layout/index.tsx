@@ -24,7 +24,7 @@ export default function LayoutWrapper(props: Props): ReactNode {
       {!noAdsense && (
         <Head>
           <script
-            src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4231427019106835"
+            src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8496762857844623"
             type="text/javascript"
             crossOrigin="anonymous"
             async
