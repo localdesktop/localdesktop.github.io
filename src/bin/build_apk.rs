@@ -4277,14 +4277,8 @@ fn try_xbuild() -> bool {
         "x".to_string()
     };
 
-    let status = Command::new(&x_bin)
-        .args(["build", "--release", "--platform", "android", "--arch", "arm64", "--format", "apk"])
-        // MALLOC_TAG_LEVEL=0 prevents lld from crashing due to Android pointer tagging
-        .env("MALLOC_TAG_LEVEL", "0")
-        .env("ANDROID_HOME", &android_home)
-        .status();
-
-    match status {
+    let result = run_xbuild(&x_bin, &android_home);
+    match result {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // xbuild not installed — install it from the vendored patches then retry
             println!("xbuild not found — installing from patches/xbuild/xbuild...");
@@ -4296,14 +4290,10 @@ fn try_xbuild() -> bool {
                 .status();
             match install {
                 Ok(s) if s.success() => {
-                    let retry = Command::new(x_bin_full.to_str().unwrap_or("x"))
-                        .args(["build", "--release", "--platform", "android", "--arch", "arm64", "--format", "apk"])
-                        .env("MALLOC_TAG_LEVEL", "0")
-                        .env("ANDROID_HOME", &android_home)
-                        .status();
+                    let retry = run_xbuild(x_bin_full.to_str().unwrap_or("x"), &android_home);
                     match retry {
-                        Ok(s) if s.success() => true,
-                        Ok(s) => { eprintln!("xbuild exited with status {s}"); std::process::exit(s.code().unwrap_or(1)); }
+                        Ok((s, _)) if s.success() => true,
+                        Ok((s, output)) => { check_for_license_error(&output); eprintln!("xbuild exited with status {s}"); std::process::exit(s.code().unwrap_or(1)); }
                         Err(e) => { eprintln!("failed to run xbuild after install: {e}"); std::process::exit(1); }
                     }
                 }
@@ -4315,11 +4305,74 @@ fn try_xbuild() -> bool {
             eprintln!("failed to run xbuild: {e}");
             std::process::exit(1);
         }
-        Ok(s) if !s.success() => {
+        Ok((s, output)) if !s.success() => {
+            check_for_license_error(&output);
             eprintln!("xbuild exited with status {s}");
             std::process::exit(s.code().unwrap_or(1));
         }
         Ok(_) => true,
+    }
+}
+
+/// Runs xbuild, streaming stdout+stderr to the terminal in real time while
+/// also capturing the combined output for post-failure analysis.
+#[cfg(target_os = "android")]
+fn run_xbuild(x_bin: &str, android_home: &str) -> std::io::Result<(std::process::ExitStatus, String)> {
+    use std::io::{BufRead, BufReader};
+    use std::process::Command;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    let mut child = Command::new(x_bin)
+        .args(["build", "--release", "--platform", "android", "--arch", "arm64", "--format", "apk"])
+        .env("MALLOC_TAG_LEVEL", "0")
+        .env("ANDROID_HOME", android_home)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    let captured = Arc::new(Mutex::new(String::new()));
+
+    let stdout = child.stdout.take().unwrap();
+    let cap_out = Arc::clone(&captured);
+    let t_out = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().filter_map(|l: std::io::Result<String>| l.ok()) {
+            println!("{}", line);
+            cap_out.lock().unwrap().push_str(&line);
+            cap_out.lock().unwrap().push('\n');
+        }
+    });
+
+    let stderr = child.stderr.take().unwrap();
+    let cap_err = Arc::clone(&captured);
+    let t_err = thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().filter_map(|l: std::io::Result<String>| l.ok()) {
+            eprintln!("{}", line);
+            cap_err.lock().unwrap().push_str(&line);
+            cap_err.lock().unwrap().push('\n');
+        }
+    });
+
+    let status = child.wait()?;
+    let _ = t_out.join();
+    let _ = t_err.join();
+
+    let output = Arc::try_unwrap(captured).unwrap().into_inner().unwrap();
+    Ok((status, output))
+}
+
+/// After an xbuild failure, checks whether the captured output mentions an SDK
+/// license error. If so, prints a targeted hint: the bundled license hashes
+/// may be stale and can be overridden via environment variables.
+#[cfg(target_os = "android")]
+fn check_for_license_error(output: &str) {
+    if output.contains("licences have not been accepted") {
+        eprintln!(
+            "\nHint: the Android SDK license hashes bundled in xbuild may be outdated.\n\
+             Refresh them by running `sdkmanager --licenses` on a PC and setting:\n\
+             \x20 ANDROID_SDK_LICENSE=<contents of $ANDROID_HOME/licenses/android-sdk-license>\n\
+             \x20 ANDROID_SDK_PREVIEW_LICENSE=<contents of $ANDROID_HOME/licenses/android-sdk-preview-license>"
+        );
     }
 }
 
