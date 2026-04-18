@@ -51,7 +51,7 @@ pub enum Platform {
 
 impl Platform {
     pub fn host() -> Result<Self> {
-        Ok(if cfg!(target_os = "linux") {
+        Ok(if cfg!(target_os = "linux") || cfg!(target_os = "android") {
             Platform::Linux
         } else if cfg!(target_os = "macos") {
             Platform::Macos
