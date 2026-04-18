@@ -39,6 +39,7 @@ pub enum SetupMessage {
 pub struct SetupOptions {
     pub android_app: AndroidApp,
     pub mpsc_sender: Sender<SetupMessage>,
+    pub progress: Arc<Mutex<u16>>,
 }
 
 /// Setup is a process that should be done **only once** when the user installed the app.
@@ -50,6 +51,123 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 /// Thus, it should return a finished status if the task is done, so that the setup process can move on to the next stage.
 /// Otherwise, it should return a `JoinHandle`, so that the setup process can wait for the task to finish, but not block the main thread so that the setup progress can be reported to the user.
 type StageOutput = Option<JoinHandle<()>>;
+
+fn set_progress(progress: &Arc<Mutex<u16>>, value: u16) {
+    let mut progress = progress.lock().unwrap();
+    *progress = (*progress).max(value.min(100));
+}
+
+const PACMAN_PRE_HOOK_END_PROGRESS: u16 = 5;
+const PACMAN_PACKAGE_END_PROGRESS: u16 = 90;
+const PACMAN_POST_HOOK_END_PROGRESS: u16 = 99;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PacmanHookPhase {
+    PreTransaction,
+    PostTransaction,
+}
+
+#[derive(Debug)]
+struct PacmanProgressLine<'a> {
+    current: u64,
+    total: u64,
+    action: &'a str,
+}
+
+#[derive(Debug)]
+struct PacmanProgressTracker {
+    hook_phase: Option<PacmanHookPhase>,
+}
+
+impl PacmanProgressTracker {
+    fn new() -> Self {
+        Self { hook_phase: None }
+    }
+
+    fn update(&mut self, line: &str) -> Option<u16> {
+        let line = line.trim_start();
+        if line.starts_with(":: Running pre-transaction hooks...") {
+            self.hook_phase = Some(PacmanHookPhase::PreTransaction);
+            return None;
+        }
+        if line.starts_with(":: Running post-transaction hooks...") {
+            self.hook_phase = Some(PacmanHookPhase::PostTransaction);
+            return Some(PACMAN_PACKAGE_END_PROGRESS);
+        }
+
+        let progress = parse_pacman_progress_line(line)?;
+        if is_pacman_package_action(progress.action) {
+            self.hook_phase = None;
+            return Some(scale_progress(
+                progress.current,
+                progress.total,
+                PACMAN_PRE_HOOK_END_PROGRESS,
+                PACMAN_PACKAGE_END_PROGRESS,
+            ));
+        }
+
+        match self.hook_phase {
+            Some(PacmanHookPhase::PreTransaction) => Some(scale_progress(
+                progress.current,
+                progress.total,
+                0,
+                PACMAN_PRE_HOOK_END_PROGRESS,
+            )),
+            Some(PacmanHookPhase::PostTransaction) => Some(scale_progress(
+                progress.current,
+                progress.total,
+                PACMAN_PACKAGE_END_PROGRESS,
+                PACMAN_POST_HOOK_END_PROGRESS,
+            )),
+            None => None,
+        }
+    }
+}
+
+fn scale_progress(current: u64, total: u64, start: u16, end: u16) -> u16 {
+    if total == 0 {
+        return start;
+    }
+
+    let start = start.min(100) as u64;
+    let end = end.min(100).max(start as u16) as u64;
+    let span = end.saturating_sub(start);
+    let current = current.min(total);
+
+    (start + current * span / total) as u16
+}
+
+fn is_pacman_package_action(action: &str) -> bool {
+    [
+        "installing ",
+        "upgrading ",
+        "reinstalling ",
+        "downgrading ",
+        "removing ",
+    ]
+    .iter()
+    .any(|prefix| action.starts_with(prefix))
+}
+
+fn parse_pacman_progress_line(line: &str) -> Option<PacmanProgressLine<'_>> {
+    let line = line.trim_start();
+    let line = line.strip_prefix('(')?;
+    let (current, rest) = line.split_once('/')?;
+    let current = current.trim().parse::<u64>().ok()?;
+    let total_end = rest.find(')')?;
+    let total = rest[..total_end].trim().parse::<u64>().ok()?;
+    let action = rest[total_end + 1..].trim_start();
+
+    if current == 0 || total == 0 {
+        return None;
+    }
+
+    Some(PacmanProgressLine {
+        current: current.min(total),
+        total,
+        action,
+    })
+}
 
 fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     let context = get_application_context();
@@ -209,10 +327,8 @@ fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
 }
 
 fn install_dependencies(options: &SetupOptions) -> StageOutput {
-    let SetupOptions {
-        mpsc_sender,
-        android_app: _,
-    } = options;
+    let mpsc_sender = options.mpsc_sender.clone();
+    let progress = options.progress.clone();
 
     let context = get_application_context();
     let CommandConfig {
@@ -236,10 +352,11 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
         return None;
     }
 
-    let mpsc_sender = mpsc_sender.clone();
     return Some(thread::spawn(move || {
         const MAX_INSTALL_ATTEMPTS: usize = 10;
-
+        // Reserve the visible global progress bar for pacman package installation.
+        // Keep the last 1% for the final installation-complete event so the UI
+        // does not announce success before the trailing setup steps finish.
         // Install dependencies until `check` succeeds.
         for attempt in 1..=MAX_INSTALL_ATTEMPTS {
             let output = ArchProcess {
@@ -253,11 +370,17 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
                 "{}",
                 String::from_utf8_lossy(&output.stderr)
             );
+            let pacman_progress = Arc::new(Mutex::new(PacmanProgressTracker::new()));
+            let progress = progress.clone();
             let sender = mpsc_sender.clone();
             ArchProcess {
                 command: install.clone(),
                 user: None,
                 log: Some(Arc::new(move |it| {
+                    let next_progress = pacman_progress.lock().unwrap().update(&it);
+                    if let Some(next_progress) = next_progress {
+                        set_progress(&progress, next_progress);
+                    }
                     sender
                         .send(SetupMessage::Progress(it))
                         .expect("Failed to send log message");
@@ -890,18 +1013,19 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let options = SetupOptions {
         android_app,
         mpsc_sender: sender.clone(),
+        progress: progress.clone(),
     };
 
     let stages: Vec<SetupStage> = vec![
-        Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (extract)
-        Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
-        Box::new(install_dependencies),         // Step 3. Install dependencies
-        Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
-        Box::new(setup_qterminal_wrapper), // Step 5. Ensure qterminal launches interactive bash
-        Box::new(setup_fake_bwrap),           // Step 6. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
-        Box::new(setup_onboard_signal_fix), // Step 7. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
-        Box::new(setup_lxqt_scaling),       // Step 8. Setup LXQt HiDPI scaling
-        Box::new(fix_xkb_symlink),          // Step 9. Fix xkb symlink (last)
+        Box::new(setup_arch_fs),
+        Box::new(simulate_linux_sysdata_stage),
+        Box::new(install_dependencies),
+        Box::new(setup_firefox_config),
+        Box::new(setup_qterminal_wrapper),
+        Box::new(setup_fake_bwrap),
+        Box::new(setup_onboard_signal_fix),
+        Box::new(setup_lxqt_scaling),
+        Box::new(fix_xkb_symlink),
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
@@ -923,10 +1047,6 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
                 let progress_clone = progress.clone();
                 let sender_clone = sender.clone();
                 thread::spawn(move || {
-                    let progress = progress_clone;
-                    let progress_value = ((i) as u16 * 100 / stages.len() as u16) as u16;
-                    *progress.lock().unwrap() = progress_value;
-
                     // Wait for the current stage to finish
                     if let Err(e) = handle.join() {
                         handle_stage_error(e, &sender_clone);
@@ -934,25 +1054,18 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
                     }
 
                     // Process the remaining stages in the same loop
-                    for (j, next_stage) in stages.iter().enumerate().skip(i + 1) {
-                        let progress_value = ((j) as u16 * 100 / stages.len() as u16) as u16;
-                        *progress.lock().unwrap() = progress_value;
+                    for next_stage in stages.iter().skip(i + 1) {
                         if let Some(next_handle) = next_stage(&options) {
                             if let Err(e) = next_handle.join() {
                                 handle_stage_error(e, &sender_clone);
                                 return;
                             }
-
-                            // Increment progress and send it
-                            let next_progress_value =
-                                ((j + 1) as u16 * 100 / stages.len() as u16) as u16;
-                            *progress.lock().unwrap() = next_progress_value;
                         }
                     }
 
                     // All stages are done, we need to replace the WebviewBackend with the WaylandBackend
                     // Or, easier, just restart the whole app
-                    *progress.lock().unwrap() = 100;
+                    *progress_clone.lock().unwrap() = 100;
                     sender_clone
                         .send(SetupMessage::Progress(
                             "Installation finished, please restart the app".to_string(),
