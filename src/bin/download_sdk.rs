@@ -9,7 +9,10 @@ fn main() {
     let build_tools_dir = sdk_dir.join("build-tools").join("34.0.0");
 
     if build_tools_dir.exists() {
-        println!("build-tools;34.0.0 already present at {}", build_tools_dir.display());
+        println!(
+            "build-tools;34.0.0 already present at {}",
+            build_tools_dir.display()
+        );
         return;
     }
 

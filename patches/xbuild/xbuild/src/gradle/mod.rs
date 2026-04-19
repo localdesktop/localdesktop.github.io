@@ -4,10 +4,28 @@ use apk::Target;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// Android SDK license hashes required by AGP on first build.
+//
+// These are SHA-1 hashes of the license texts that `sdkmanager --licenses` writes
+// automatically in GUI environments. On Termux (ARM64) the official sdkmanager binary
+// is x86_64-only, so we write the files directly instead.
+//
+// Source: https://developer.android.com/studio/intro/update#download-with-gradle
+// To refresh: run `sdkmanager --licenses` on a PC and copy the contents of
+// $ANDROID_HOME/licenses/android-sdk-license and android-sdk-preview-license,
+// or override via the ANDROID_SDK_LICENSE / ANDROID_SDK_PREVIEW_LICENSE env vars.
+static ANDROID_SDK_LICENSE: &str =
+    "24333f8a63b6825ea9c5514f83c2829b004d1fee\n\
+     8933bad161af4178b1185d1a37fbf41ea5269c55\n\
+     d56f5187479451eabf01fb78af6dfcb131a6481e\n";
+
+static ANDROID_SDK_PREVIEW_LICENSE: &str = "84831b9409646a918e30573bab4c9c91346d8abd\n";
+
 static BUILD_GRADLE: &[u8] = include_bytes!("./build.gradle");
 static GRADLE_PROPERTIES: &[u8] = include_bytes!("./gradle.properties");
 static SETTINGS_GRADLE: &[u8] = include_bytes!("./settings.gradle");
 static IC_LAUNCHER: &[u8] = include_bytes!("./ic_launcher.xml");
+
 
 fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
     if !src.exists() {
@@ -102,6 +120,25 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
                 aapt2_path.display()
             );
             gradle_props.extend_from_slice(override_line.as_bytes());
+        }
+        // Disable AGP's SDK component validation: the official sdkmanager is x86_64-only
+        // on Android, so SDK components are pre-downloaded via android_sdkmanager instead.
+        gradle_props.extend_from_slice(b"\n# Termux: skip SDK license/component validation\nandroid.sdk.channel=0\n");
+        // Write local.properties with sdk.dir so Gradle can locate the Android SDK.
+        // Gradle does not read ANDROID_HOME directly; it requires sdk.dir in this file.
+        if let Ok(sdk_dir) = std::env::var("ANDROID_HOME") {
+            std::fs::write(
+                gradle.join("local.properties"),
+                format!("sdk.dir={}\n", sdk_dir),
+            )?;
+            let licenses_dir = std::path::Path::new(&sdk_dir).join("licenses");
+            let _ = std::fs::create_dir_all(&licenses_dir);
+            let sdk_license = std::env::var("ANDROID_SDK_LICENSE")
+                .unwrap_or_else(|_| ANDROID_SDK_LICENSE.to_string());
+            let sdk_preview_license = std::env::var("ANDROID_SDK_PREVIEW_LICENSE")
+                .unwrap_or_else(|_| ANDROID_SDK_PREVIEW_LICENSE.to_string());
+            let _ = std::fs::write(licenses_dir.join("android-sdk-license"), sdk_license);
+            let _ = std::fs::write(licenses_dir.join("android-sdk-preview-license"), sdk_preview_license);
         }
     }
     std::fs::write(gradle.join("gradle.properties"), &gradle_props)?;

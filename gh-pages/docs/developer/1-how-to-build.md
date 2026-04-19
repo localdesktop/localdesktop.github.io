@@ -35,7 +35,24 @@ Then you will find the APK file in `target/x/release/android/localdesktop.apk`.
 
 ### Can I build on Termux?
 
-No. `xbuild` requires `rustup`, which, at the time of writing, is not available on Termux.
+Yes.
+
+For the simplest path, install Rust in Termux and run:
+
+```bash
+pkg i rust
+cargo run
+```
+
+This uses the built-in Rust APK builder and writes `localdesktop.apk` in the project root.
+
+If you want to use the patched `xbuild` pipeline on Termux, run:
+
+```bash
+bash scripts/build-termux.sh
+```
+
+This writes the APK to `target/x/release/android/localdesktop.apk`.
 
 ### Can I build on Termux & `proot-distro`?
 
