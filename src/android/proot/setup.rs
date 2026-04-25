@@ -19,7 +19,7 @@ use std::{
     fs::{self, File},
     io::{Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         mpsc::{self, Sender},
         Arc, Mutex,
@@ -718,6 +718,44 @@ runpy.run_path('/usr/sbin/onboard', run_name='__main__')
     None
 }
 
+fn user_home_dirs(fs_root: &Path) -> Vec<PathBuf> {
+    let mut homes = vec![fs_root.join("root")];
+    if let Ok(entries) = fs::read_dir(fs_root.join("home")) {
+        homes.extend(entries.filter_map(|entry| {
+            let path = entry.ok()?.path();
+            path.is_dir().then_some(path)
+        }));
+    }
+    homes
+}
+
+fn proot_metadata_path(path: &Path) -> Option<PathBuf> {
+    let file_name = path.file_name()?.to_string_lossy();
+    Some(path.with_file_name(format!(".proot-meta-file.{}.meta", file_name)))
+}
+
+fn write_proot_mode(path: &Path, mode: u32) {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode & 0o777))
+        .expect("Failed to set file permissions");
+
+    if let Some(metadata_path) = proot_metadata_path(path) {
+        let (uid, gid) = fs::read_to_string(&metadata_path)
+            .ok()
+            .and_then(|content| {
+                let mut lines = content.lines();
+                lines.next()?;
+                Some((
+                    lines.next().unwrap_or("0").to_string(),
+                    lines.next().unwrap_or("0").to_string(),
+                ))
+            })
+            .unwrap_or_else(|| ("0".to_string(), "0".to_string()));
+
+        fs::write(&metadata_path, format!("{:o}\n{}\n{}\n", mode, uid, gid))
+            .expect("Failed to write PRoot metadata");
+    }
+}
+
 fn disable_lxqt_powermanagement(_: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let powermanagement_hidden = r#"[Desktop Entry]
@@ -726,15 +764,7 @@ Name=LXQt Power Management
 Hidden=true
 "#;
 
-    let mut homes = vec![fs_root.join("root")];
-    if let Ok(entries) = fs::read_dir(fs_root.join("home")) {
-        homes.extend(entries.filter_map(|entry| {
-            let path = entry.ok()?.path();
-            path.is_dir().then_some(path)
-        }));
-    }
-
-    for home in homes {
+    for home in user_home_dirs(fs_root) {
         let autostart_dir = home.join(".config/autostart");
         let _ = fs::create_dir_all(&autostart_dir);
         fs::write(
@@ -748,6 +778,136 @@ Hidden=true
     if system_autostart.exists() {
         fs::write(&system_autostart, powermanagement_hidden)
             .expect("Failed to disable system lxqt-powermanagement autostart");
+    }
+
+    None
+}
+
+fn guest_home_path(fs_root: &Path, home: &Path) -> Option<String> {
+    let relative = home.strip_prefix(fs_root).ok()?;
+    Some(format!("/{}", relative.to_string_lossy()))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn setup_pcmanfm_lxqt_settings(home: &Path) {
+    let settings_path = home.join(".config/pcmanfm-qt/lxqt/settings.conf");
+    let _ = fs::create_dir_all(
+        settings_path
+            .parent()
+            .expect("Failed to read PCManFM-Qt settings directory"),
+    );
+
+    let content = fs::read_to_string(&settings_path).unwrap_or_default();
+    let content = update_ini_section(&content, "Behavior", &[("QuickExec", "true".to_string())]);
+    let content = update_ini_section(
+        &content,
+        "Desktop",
+        &[("DesktopShortcuts", "Home,Computer,Network".to_string())],
+    );
+    fs::write(&settings_path, content).expect("Failed to write PCManFM-Qt settings");
+}
+
+fn trust_lxqt_desktop_shortcuts(user: Option<String>, guest_paths: &[String]) {
+    let mut commands = Vec::new();
+    for path in guest_paths {
+        for attr in ["metadata::trust", "metadata::trusted"] {
+            commands.push(format!(
+                "gio set -t string {} {} true >/dev/null 2>&1 || true",
+                shell_quote(path),
+                attr
+            ));
+        }
+    }
+
+    let command = format!(
+        "dbus-run-session sh -c {}",
+        shell_quote(&commands.join("; "))
+    );
+    let output = ArchProcess {
+        command,
+        user,
+        log: None,
+    }
+    .run();
+
+    if !output.status.success() {
+        log::warn!(
+            "Failed to trust LXQt desktop shortcuts: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+fn setup_lxqt_desktop_shortcuts(_: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+
+    for home in user_home_dirs(fs_root) {
+        setup_pcmanfm_lxqt_settings(&home);
+
+        let desktop_dir = home.join("Desktop");
+        let _ = fs::create_dir_all(&desktop_dir);
+
+        let home_name = home
+            .file_name()
+            .map(|it| it.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "root".to_string());
+        let guest_home = guest_home_path(fs_root, &home).unwrap_or_else(|| "/root".to_string());
+        let guest_desktop = format!("{}/Desktop", guest_home);
+
+        let entries = [
+            (
+                "computer.desktop",
+                r#"[Desktop Entry]
+Type=Application
+Name=Computer
+Icon=computer
+Exec=pcmanfm-qt computer:///
+Terminal=false
+"#
+                .to_string(),
+            ),
+            (
+                "network.desktop",
+                r#"[Desktop Entry]
+Type=Application
+Name=Network
+Icon=folder-network
+Exec=pcmanfm-qt network:///
+Terminal=false
+"#
+                .to_string(),
+            ),
+            (
+                "user-home.desktop",
+                format!(
+                    r#"[Desktop Entry]
+Type=Application
+Name={}
+Icon=user-home
+Exec=pcmanfm-qt {}
+Terminal=false
+"#,
+                    home_name, guest_home
+                ),
+            ),
+        ];
+
+        for (name, content) in entries {
+            let path = desktop_dir.join(name);
+            fs::write(&path, content).expect("Failed to write LXQt desktop shortcut");
+            write_proot_mode(&path, 0o100755);
+        }
+
+        let guest_paths = [
+            format!("{}/computer.desktop", guest_desktop),
+            format!("{}/network.desktop", guest_desktop),
+            format!("{}/user-home.desktop", guest_desktop),
+        ];
+        let user = (guest_home != "/root").then_some(home_name);
+        trust_lxqt_desktop_shortcuts(user, &guest_paths);
     }
 
     None
@@ -923,8 +1083,9 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(setup_fake_bwrap), // Step 6. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
         Box::new(setup_onboard_signal_fix), // Step 7. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
         Box::new(disable_lxqt_powermanagement), // Step 8. Disable LXQt power manager in PRoot
-        Box::new(setup_lxqt_scaling),       // Step 9. Setup LXQt HiDPI scaling
-        Box::new(fix_xkb_symlink),          // Step 10. Fix xkb symlink (last)
+        Box::new(setup_lxqt_desktop_shortcuts), // Step 9. Trust default LXQt desktop shortcuts
+        Box::new(setup_lxqt_scaling),       // Step 10. Setup LXQt HiDPI scaling
+        Box::new(fix_xkb_symlink),          // Step 11. Fix xkb symlink (last)
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
