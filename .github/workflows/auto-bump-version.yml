@@ -264,9 +264,9 @@ jobs:
           git add Cargo.toml Cargo.lock
 
           if [ -n "$CURRENT_BUMP_LEVEL" ]; then
-            COMMIT_MESSAGE="chore(release): set version to v${DESIRED_VERSION}"
+            COMMIT_MESSAGE="chore: set version to v${DESIRED_VERSION}"
           else
-            COMMIT_MESSAGE="chore(release): reset version to v${DESIRED_VERSION}"
+            COMMIT_MESSAGE="chore: reset version to v${DESIRED_VERSION}"
           fi
 
           git commit -m "$COMMIT_MESSAGE"
