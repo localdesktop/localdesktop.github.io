@@ -718,6 +718,41 @@ runpy.run_path('/usr/sbin/onboard', run_name='__main__')
     None
 }
 
+fn disable_lxqt_powermanagement(_: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let powermanagement_hidden = r#"[Desktop Entry]
+Type=Application
+Name=LXQt Power Management
+Hidden=true
+"#;
+
+    let mut homes = vec![fs_root.join("root")];
+    if let Ok(entries) = fs::read_dir(fs_root.join("home")) {
+        homes.extend(entries.filter_map(|entry| {
+            let path = entry.ok()?.path();
+            path.is_dir().then_some(path)
+        }));
+    }
+
+    for home in homes {
+        let autostart_dir = home.join(".config/autostart");
+        let _ = fs::create_dir_all(&autostart_dir);
+        fs::write(
+            autostart_dir.join("lxqt-powermanagement.desktop"),
+            powermanagement_hidden,
+        )
+        .expect("Failed to disable lxqt-powermanagement autostart");
+    }
+
+    let system_autostart = fs_root.join("etc/xdg/autostart/lxqt-powermanagement.desktop");
+    if system_autostart.exists() {
+        fs::write(&system_autostart, powermanagement_hidden)
+            .expect("Failed to disable system lxqt-powermanagement autostart");
+    }
+
+    None
+}
+
 fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let android_app = options.android_app.clone();
@@ -783,19 +818,6 @@ fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
         &[("window_manager", "openbox".to_string())],
     );
     fs::write(&session_path, session_out).expect("Failed to write session.conf");
-
-    // lxqt-powermanagement frequently crashes in a PRoot container due to missing
-    // host power-management interfaces. Disable its autostart by default.
-    let autostart_dir = fs_root.join("root/.config/autostart");
-    let _ = fs::create_dir_all(&autostart_dir);
-    let powermanagement_override = autostart_dir.join("lxqt-powermanagement.desktop");
-    let powermanagement_hidden = r#"[Desktop Entry]
-Type=Application
-Name=LXQt Power Management
-Hidden=true
-"#;
-    fs::write(&powermanagement_override, powermanagement_hidden)
-        .expect("Failed to disable lxqt-powermanagement autostart");
 
     let openbox_user_rc = fs_root.join("root/.config/openbox/rc.xml");
     let openbox_system_rc = fs_root.join("etc/xdg/openbox/rc.xml");
@@ -898,10 +920,11 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(install_dependencies),         // Step 3. Install dependencies
         Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
         Box::new(setup_qterminal_wrapper), // Step 5. Ensure qterminal launches interactive bash
-        Box::new(setup_fake_bwrap),           // Step 6. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
+        Box::new(setup_fake_bwrap), // Step 6. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
         Box::new(setup_onboard_signal_fix), // Step 7. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
-        Box::new(setup_lxqt_scaling),       // Step 8. Setup LXQt HiDPI scaling
-        Box::new(fix_xkb_symlink),          // Step 9. Fix xkb symlink (last)
+        Box::new(disable_lxqt_powermanagement), // Step 8. Disable LXQt power manager in PRoot
+        Box::new(setup_lxqt_scaling),       // Step 9. Setup LXQt HiDPI scaling
+        Box::new(fix_xkb_symlink),          // Step 10. Fix xkb symlink (last)
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
