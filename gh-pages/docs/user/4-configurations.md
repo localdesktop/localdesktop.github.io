@@ -24,6 +24,23 @@ Some important notes:
 
 We might draw a table or have a mechanism to generate the config schema automatically here. But for now, please check the code for the schema: [localdesktop/src/utils/config.rs#L32-L88](https://github.com/localdesktop/localdesktop.github.io/blob/a581c45943fcfd97d1292ed1847f5a1556de4632/src/utils/config.rs#L32-L88).
 
+### Experimental Turnip / Mesa config
+
+Local Desktop can pass a user-provided Mesa Turnip Vulkan ICD into the Linux session. This is an advanced opt-in setting for users who already have a compatible Turnip/Mesa build inside the Arch filesystem.
+
+```toml title="/etc/localdesktop/localdesktop.toml"
+[graphics]
+turnip_path = "/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+turnip_library_path = "/usr/lib"
+turnip_use_zink = false
+```
+
+- `turnip_path` is the path to the Vulkan ICD JSON inside the Linux filesystem. Local Desktop exports it as both `VK_ICD_FILENAMES` and `VK_DRIVER_FILES`.
+- `turnip_library_path` is optional. Use it when the ICD JSON points at driver libraries outside the normal Linux linker paths.
+- `turnip_use_zink` is optional and disabled by default. When enabled, Local Desktop asks Mesa to run OpenGL through Zink on top of Vulkan by exporting `MESA_LOADER_DRIVER_OVERRIDE=zink` and `GALLIUM_DRIVER=zink`.
+
+These settings do not bundle a GPU driver or replace Local Desktop's Android EGL renderer. They only make it easier to test compatible Turnip/Mesa builds from inside the Linux desktop session.
+
 ## Special `try_*` configs
 
 Some configs are so important that a misconfiguration can leave you stuck on a black screen. So we support a special `try_*` variant of each config. These configs have **higher priority**, but only get applied **once**.

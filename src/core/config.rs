@@ -36,6 +36,9 @@ pub struct LocalConfig {
     /// => So make sure that every config group has a `#[serde(default)]` attribute to avoid invalid sections breaking unrelated parts of the config.
     #[serde(default)]
     pub command: CommandConfig,
+
+    #[serde(default)]
+    pub graphics: GraphicsConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -83,6 +86,46 @@ impl Default for CommandConfig {
             install: default_install(),
             launch: default_launch(),
         }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct GraphicsConfig {
+    #[serde(default)]
+    pub turnip_path: String,
+    #[serde(default)]
+    pub turnip_library_path: String,
+    #[serde(default)]
+    pub turnip_use_zink: bool,
+}
+
+impl GraphicsConfig {
+    pub fn env_vars(&self) -> Vec<(String, String)> {
+        let mut env = Vec::new();
+        let turnip_path = self.turnip_path.trim();
+        let turnip_library_path = self.turnip_library_path.trim();
+
+        if !turnip_path.is_empty() {
+            env.push(("VK_ICD_FILENAMES".to_string(), turnip_path.to_string()));
+            env.push(("VK_DRIVER_FILES".to_string(), turnip_path.to_string()));
+        }
+
+        if !turnip_library_path.is_empty() {
+            env.push((
+                "LD_LIBRARY_PATH".to_string(),
+                format!("{}:/usr/local/lib:/usr/lib", turnip_library_path),
+            ));
+        }
+
+        if self.turnip_use_zink {
+            env.push((
+                "MESA_LOADER_DRIVER_OVERRIDE".to_string(),
+                "zink".to_string(),
+            ));
+            env.push(("GALLIUM_DRIVER".to_string(), "zink".to_string()));
+        }
+
+        env
     }
 }
 
@@ -203,6 +246,7 @@ mod tests {
                 assert_eq!(config.command.check, "check-cmd");
                 assert_eq!(config.command.install, "install-cmd");
                 assert_eq!(config.command.launch, "launch-cmd");
+                assert!(config.graphics.turnip_path.is_empty());
             },
         );
     }
@@ -226,6 +270,37 @@ mod tests {
                 assert_eq!(config.user.username, "testuser");
                 assert_eq!(config.command.check, "try-check");
                 assert_eq!(config.command.install, "install-cmd")
+            },
+        );
+    }
+
+    #[test]
+    fn should_handle_graphics_configs() {
+        with_config_file(
+            r#"
+                [graphics]
+                turnip_path = "/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+                turnip_library_path = "/opt/turnip/lib"
+                turnip_use_zink = true
+            "#,
+            |full_config_path| {
+                let config = parse_config(full_config_path);
+                assert_eq!(
+                    config.graphics.turnip_path,
+                    "/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+                );
+                assert_eq!(config.graphics.turnip_library_path, "/opt/turnip/lib");
+                assert!(config.graphics.turnip_use_zink);
+
+                let env = config.graphics.env_vars();
+                assert!(env.contains(&(
+                    "VK_ICD_FILENAMES".to_string(),
+                    "/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json".to_string()
+                )));
+                assert!(env.contains(&(
+                    "MESA_LOADER_DRIVER_OVERRIDE".to_string(),
+                    "zink".to_string()
+                )));
             },
         );
     }

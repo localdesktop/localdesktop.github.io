@@ -225,6 +225,7 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
         ArchProcess {
             command: check.clone(),
             user: None,
+            env: vec![],
             log: None,
         }
         .run()
@@ -245,6 +246,7 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
             let output = ArchProcess {
                 command: "rm -f /var/lib/pacman/db.lck".into(),
                 user: None,
+                env: vec![],
                 log: None,
             }
             .run();
@@ -257,6 +259,7 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
             ArchProcess {
                 command: install.clone(),
                 user: None,
+                env: vec![],
                 log: Some(Arc::new(move |it| {
                     sender
                         .send(SetupMessage::Progress(it))
@@ -898,7 +901,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(install_dependencies),         // Step 3. Install dependencies
         Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
         Box::new(setup_qterminal_wrapper), // Step 5. Ensure qterminal launches interactive bash
-        Box::new(setup_fake_bwrap),           // Step 6. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
+        Box::new(setup_fake_bwrap), // Step 6. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
         Box::new(setup_onboard_signal_fix), // Step 7. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
         Box::new(setup_lxqt_scaling),       // Step 8. Setup LXQt HiDPI scaling
         Box::new(fix_xkb_symlink),          // Step 9. Fix xkb symlink (last)
