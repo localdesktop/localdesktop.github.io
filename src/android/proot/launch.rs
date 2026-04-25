@@ -30,22 +30,26 @@ pub fn launch() {
         ArchProcess {
             command: "rm -f /tmp/.X1-lock".into(),
             user: None,
+            env: vec![],
             log: None,
         }
         .run();
         ArchProcess {
             command: "rm -f /tmp/.X11-unix/X1".into(),
             user: None,
+            env: vec![],
             log: None,
         }
         .run();
 
         let local_config = get_application_context().local_config;
         let username = local_config.user.username;
+        let graphics_env = local_config.graphics.env_vars();
 
         ArchProcess {
             command: local_config.command.launch,
             user: Some(username),
+            env: graphics_env,
             log: Some(Arc::new(|it| log::trace!("{}", it))),
         }
         .run();

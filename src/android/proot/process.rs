@@ -22,6 +22,7 @@ const SUPPORT_CHECK_BINARY: &str = "ld-linux-aarch64.so.1";
 pub struct ArchProcess {
     pub command: String,
     pub user: Option<String>,
+    pub env: Vec<(String, String)>,
     pub log: Option<Log>,
 }
 
@@ -165,6 +166,10 @@ impl ArchProcess {
             .arg("TMPDIR=/tmp")
             .arg(format!("USER={}", user))
             .arg(format!("LOGNAME={}", user));
+
+        for (key, value) in self.env {
+            process.arg(format!("{}={}", key, value));
+        }
 
         // user shell
         if user == "root" {
