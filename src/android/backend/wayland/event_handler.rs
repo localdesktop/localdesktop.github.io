@@ -1,6 +1,9 @@
-use crate::android::backend::wayland::{
-    compositor::{send_frames_surface_tree, ClientState, State},
-    CentralizedEvent, WaylandBackend,
+use crate::android::{
+    accessibility,
+    backend::wayland::{
+        compositor::{send_frames_surface_tree, ClientState, State},
+        CentralizedEvent, WaylandBackend,
+    },
 };
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
@@ -22,7 +25,7 @@ use smithay::{
     output::{Mode, Scale},
 };
 use std::sync::Arc;
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, ControlFlow};
 
 /**
  * As we currently use Xwayland, there is only 1 surface
@@ -42,74 +45,12 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
             event_loop.exit();
         }
         CentralizedEvent::Redraw => {
-            if let Some(winit) = backend.graphic_renderer.as_mut() {
-                let size = winit.window_size();
-                let damage = Rectangle::from_size(size);
-                {
-                    let (renderer, mut framebuffer) = winit.bind().unwrap();
-
-                    let compositor = &mut backend.compositor;
-
-                    let elements = compositor
-                        .state
-                        .xdg_shell_state
-                        .toplevel_surfaces()
-                        .iter()
-                        .flat_map(|surface| {
-                            render_elements_from_surface_tree(
-                                renderer,
-                                surface.wl_surface(),
-                                (0, 0),
-                                1.0,
-                                1.0,
-                                Kind::Unspecified,
-                            )
-                        })
-                        .collect::<Vec<WaylandSurfaceRenderElement<GlesRenderer>>>();
-
-                    let mut frame = renderer
-                        .render(&mut framebuffer, size, Transform::Flipped180)
-                        .unwrap();
-                    frame
-                        .clear(Color32F::new(0.1, 0.0, 0.0, 1.0), &[damage])
-                        .unwrap();
-                    draw_render_elements(&mut frame, 1.0, &elements, &[damage]).unwrap();
-                    // We rely on the nested compositor to do the sync for us
-                    let _ = frame.finish().unwrap();
-
-                    for surface in compositor.state.xdg_shell_state.toplevel_surfaces() {
-                        send_frames_surface_tree(
-                            surface.wl_surface(),
-                            compositor.start_time.elapsed().as_millis() as u32,
-                        );
-                    }
-
-                    if let Some(stream) = compositor
-                        .listener
-                        .accept()
-                        .expect("Failed to accept listener")
-                    {
-                        let client = compositor
-                            .display
-                            .handle()
-                            .insert_client(stream, Arc::new(ClientState::default()))
-                            .unwrap();
-                        compositor.clients.push(client);
-                    }
-
-                    compositor
-                        .display
-                        .dispatch_clients(&mut compositor.state)
-                        .expect("Failed to dispatch clients");
-                    compositor
-                        .display
-                        .flush_clients()
-                        .expect("Failed to flush clients");
-                }
-
-                // It is important that all events on the display have been dispatched and flushed to clients before
-                // swapping buffers because this operation may block.
-                winit.submit(Some(&[damage])).unwrap();
+            if let Err(error) = redraw(backend) {
+                log::error!("Redraw failed; dropping renderer until next resume: {error}");
+                backend.graphic_renderer = None;
+                accessibility::set_runtime_active(false);
+                event_loop.set_control_flow(ControlFlow::Wait);
+                return;
             }
 
             // Redraw the application.
@@ -125,12 +66,9 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
             // You only need to call this if you've determined that you need to redraw in
             // applications which do not always need to. Applications that redraw continuously
             // can render here instead.
-            backend
-                .graphic_renderer
-                .as_ref()
-                .unwrap()
-                .window()
-                .request_redraw();
+            if let Some(winit) = backend.graphic_renderer.as_ref() {
+                winit.window().request_redraw();
+            }
         }
         CentralizedEvent::Input(event) => match event {
             InputEvent::Keyboard { event } => {
@@ -317,4 +255,87 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
         }
         _ => (),
     }
+}
+
+fn redraw(backend: &mut WaylandBackend) -> Result<(), String> {
+    let Some(winit) = backend.graphic_renderer.as_mut() else {
+        return Ok(());
+    };
+
+    let size = winit.window_size();
+    let damage = Rectangle::from_size(size);
+    {
+        let (renderer, mut framebuffer) = winit
+            .bind()
+            .map_err(|error| format!("Failed to bind EGL surface: {error}"))?;
+
+        let compositor = &mut backend.compositor;
+
+        let elements = compositor
+            .state
+            .xdg_shell_state
+            .toplevel_surfaces()
+            .iter()
+            .flat_map(|surface| {
+                render_elements_from_surface_tree(
+                    renderer,
+                    surface.wl_surface(),
+                    (0, 0),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                )
+            })
+            .collect::<Vec<WaylandSurfaceRenderElement<GlesRenderer>>>();
+
+        let mut frame = renderer
+            .render(&mut framebuffer, size, Transform::Flipped180)
+            .map_err(|error| format!("Failed to render frame: {error:?}"))?;
+        frame
+            .clear(Color32F::new(0.1, 0.0, 0.0, 1.0), &[damage])
+            .map_err(|error| format!("Failed to clear frame: {error:?}"))?;
+        draw_render_elements(&mut frame, 1.0, &elements, &[damage])
+            .map_err(|error| format!("Failed to draw render elements: {error:?}"))?;
+        // We rely on the nested compositor to do the sync for us.
+        let _ = frame
+            .finish()
+            .map_err(|error| format!("Failed to finish frame: {error:?}"))?;
+
+        for surface in compositor.state.xdg_shell_state.toplevel_surfaces() {
+            send_frames_surface_tree(
+                surface.wl_surface(),
+                compositor.start_time.elapsed().as_millis() as u32,
+            );
+        }
+
+        match compositor.listener.accept() {
+            Ok(Some(stream)) => match compositor
+                .display
+                .handle()
+                .insert_client(stream, Arc::new(ClientState::default()))
+            {
+                Ok(client) => compositor.clients.push(client),
+                Err(error) => log::error!("Failed to insert Wayland client: {error}"),
+            },
+            Ok(None) => {}
+            Err(error) => log::error!("Failed to accept Wayland client: {error}"),
+        }
+
+        compositor
+            .display
+            .dispatch_clients(&mut compositor.state)
+            .map_err(|error| format!("Failed to dispatch clients: {error}"))?;
+        compositor
+            .display
+            .flush_clients()
+            .map_err(|error| format!("Failed to flush clients: {error}"))?;
+    }
+
+    // It is important that all events on the display have been dispatched and flushed to clients
+    // before swapping buffers because this operation may block.
+    winit
+        .submit(Some(&[damage]))
+        .map_err(|error| format!("Failed to submit frame: {error}"))?;
+
+    Ok(())
 }

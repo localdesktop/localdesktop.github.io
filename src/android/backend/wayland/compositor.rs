@@ -32,7 +32,7 @@ use smithay::{
 use smithay::{
     input::pointer::PointerHandle,
     reexports::wayland_server::{
-        backend::{ClientData, ClientId, DisconnectReason},
+        backend::{ClientData, ClientId, DisconnectReason, GlobalId},
         protocol::{wl_buffer, wl_surface::WlSurface},
         Client, ListeningSocket,
     },
@@ -50,6 +50,7 @@ pub struct Compositor {
     pub touch: TouchHandle<State>,
     pub pointer: PointerHandle<State>,
     pub output: Option<Output>,
+    pub output_global: Option<GlobalId>,
 }
 
 pub struct State {
@@ -227,6 +228,7 @@ impl Compositor {
             touch,
             pointer,
             output: None,
+            output_global: None,
         })
     }
 }

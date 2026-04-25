@@ -152,7 +152,9 @@ unsafe impl EGLNativeSurface for AndroidNativeSurface {
             self.handle.a_native_window.as_ptr(),
             std::ptr::null(),
         );
-        assert!(!surface.is_null());
+        if surface.is_null() {
+            return Err(smithay::backend::egl::EGLError::BadSurface);
+        }
         Ok(surface)
     }
 }
@@ -194,58 +196,58 @@ fn create_egl_display(
 /// trait, from a given [`WindowAttributes`] struct, as well as given
 /// [`GlAttributes`] for further customization of the rendering pipeline and a
 /// corresponding [`WinitEventLoop`].
-pub fn bind(event_loop: &ActiveEventLoop) -> WinitGraphicsBackend<GlesRenderer> {
+pub fn bind(event_loop: &ActiveEventLoop) -> Result<WinitGraphicsBackend<GlesRenderer>, String> {
     #[allow(deprecated)]
     let window = Arc::new(
         event_loop
             .create_window(WindowAttributes::default())
-            .expect("Failed to create window"),
+            .map_err(|error| format!("Failed to create window: {error}"))?,
     );
 
-    let handle = window.window_handle().map(|handle| handle.as_raw());
+    let handle = window
+        .window_handle()
+        .map(|handle| handle.as_raw())
+        .map_err(|error| format!("Failed to get window handle: {error}"))?;
     let (display, context, surface) = match handle {
-        Ok(RawWindowHandle::AndroidNdk(handle)) => {
-            let display = create_egl_display(handle);
-            let display = match display {
-                Ok(display) => display,
-                Err(error) => {
-                    panic!("Failed to create EGLDisplay: {:?}", error)
-                }
-            };
+        RawWindowHandle::AndroidNdk(handle) => {
+            let display = create_egl_display(handle)
+                .map_err(|error| format!("Failed to create EGLDisplay: {error:?}"))?;
 
-            let context =
-                create_egl_context(&display).unwrap_or_else(|message| panic!("{}", message));
+            let context = create_egl_context(&display)?;
+            let pixel_format = context
+                .pixel_format()
+                .ok_or_else(|| "EGL context did not expose a pixel format".to_string())?;
 
             let surface = unsafe {
                 EGLSurface::new(
                     &display,
-                    context.pixel_format().unwrap(),
+                    pixel_format,
                     context.config_id(),
                     AndroidNativeSurface { handle },
                 )
-                .expect("Failed to create EGLSurface")
+                .map_err(|error| format!("Failed to create EGLSurface: {error}"))?
             };
 
             let _ = context.unbind();
             (display, context, surface)
         }
-        Ok(platform) => panic!("Unsupported platform: {:?}", platform),
-        Err(error) => panic!("Failed to get window handle: {:?}", error),
+        platform => return Err(format!("Unsupported platform: {:?}", platform)),
     };
 
-    let renderer = unsafe { GlesRenderer::new(context) }.expect("Failed to create GLES Renderer");
+    let renderer = unsafe { GlesRenderer::new(context) }
+        .map_err(|error| format!("Failed to create GLES Renderer: {error}"))?;
     let damage_tracking = display.supports_damage();
 
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
-    WinitGraphicsBackend {
+    Ok(WinitGraphicsBackend {
         window: window.clone(),
         _display: display,
         egl_surface: surface,
         damage_tracking,
         bind_size: None,
         renderer,
-    }
+    })
 }
 
 /// Errors thrown by the `winit` backends
