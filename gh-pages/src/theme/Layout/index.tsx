@@ -12,17 +12,20 @@ export default function LayoutWrapper(props: Props): ReactNode {
   const routes = useRouteContext();
   const location = useLocation();
 
-  const pathname = location.pathname.replace(/\/$/, ""); // strip the trailing /
+  const pathname = location.pathname.replace(/\/$/, "") || "/";
   const noAdsense =
-    typeof window === "undefined" || // SSG
-    window.self !== window.top || // in iframe
-    ["", "/privacy", "/support-us"].includes(pathname) || // excluded pages
+    (typeof window !== "undefined" && window.self !== window.top) || // in iframe
+    ["/privacy", "/support-us"].includes(pathname) || // excluded pages
     routes.plugin.name === "native"; // 404 pages
 
   return (
     <>
       {!noAdsense && (
         <Head>
+          <meta
+            name="google-adsense-account"
+            content="ca-pub-8496762857844623"
+          />
           <script
             src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8496762857844623"
             type="text/javascript"
