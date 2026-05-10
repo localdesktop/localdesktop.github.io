@@ -1,102 +1,120 @@
 ---
 id: privacy-policy
 title: Privacy Policy
-description: Privacy policy for Local Desktop
+description: Privacy policy for the Local Desktop app and website
 slug: /privacy
 ---
 
 # Privacy Policy
 
-_Last updated: July 10, 2025_
+_Last updated: May 9, 2026_
 
-Thank you for using **Local Desktop** ("we", "our", "us"). This privacy policy explains how we collect, use, and protect information related to your use of our app. We are committed to protecting your privacy and ensuring transparency about our practices.
+Thank you for using **Local Desktop** ("we", "our", "us"). This privacy policy explains how we handle information related to:
+
+- the **Local Desktop app**
+- the **Local Desktop website** at `https://localdesktop.github.io`
+
+We are committed to being transparent about what we collect and why.
 
 ---
 
-## 1. Information We Collect
+## 1. Local Desktop App
 
-Local Desktop **does not collect or request any personal or sensitive user data**, such as your name, email, location, camera, contacts, or storage content.
+The Local Desktop app **does not ask for or intentionally collect personal information** such as your name, email address, location, contacts, camera data, or the contents of your files.
 
-However, we use a third-party crash reporting and logging service called **Sentry**, which automatically gathers diagnostic data when the app encounters an error. This may include:
+However, we use **Sentry** for crash reporting and diagnostics. When the app encounters an error, Sentry may collect technical information such as:
 
 - Device information (such as OS version and model)
 - Application state and logs
 - IP address (used to group errors geographically)
 - Debugging context (such as username, if your system environment provides one)
 
-This information is used **solely to help us improve app stability and performance**.
+We use this information **only to investigate crashes, diagnose bugs, and improve app stability and performance**.
 
 ---
 
-## 2. How We Use Your Data
+## 2. Local Desktop Website
 
-The diagnostic data we receive from Sentry is used for:
+The Local Desktop website uses the following third-party services:
 
-- Monitoring application performance
-- Identifying and fixing bugs and crashes
-- Improving the overall reliability of Local Desktop
+- **Google Analytics** to understand general website usage, such as page views and traffic patterns
+- **Microsoft Clarity** to understand how visitors interact with pages, such as clicks, scrolling, and navigation behavior
+- **Google AdSense** code and account verification tags to connect the site to AdSense and, if approved, support ad serving
 
-We do **not** use this data for advertising, marketing, or user profiling.
-
----
-
-## 3. Data Sharing
-
-We do **not sell or share any personal data** to third parties.
-
-Diagnostic data is processed by **Sentry**, a trusted crash monitoring service, under their privacy terms and policies. This data is not used for advertising or shared beyond its intended debugging purposes.
-
-Learn more about [Sentry's privacy policy](https://sentry.io/privacy/).
+These services may collect information such as IP address, browser type, device information, referrer information, and on-site interaction data. They may also use cookies or similar technologies, subject to their own policies and your browser settings.
 
 ---
 
-## 4. Children’s Privacy
+## 3. How We Use Information
 
-Local Desktop is **not specifically targeted at children**, but we are committed to complying with regulations that protect children's privacy.
+We use app and website information to:
 
-We do not knowingly collect personal data from children under the age of 13. If you believe we have unintentionally collected such information, please contact us and we will promptly delete it.
+- monitor reliability and performance
+- diagnose crashes and fix bugs
+- understand how people use the website
+- improve documentation, content, and user experience
+- connect the site to AdSense and comply with AdSense requirements
 
----
-
-## 5. Data Retention
-
-We retain crash and diagnostic data only as long as necessary to fulfill its purpose — to improve the app’s reliability. You may request the removal of any associated data by contacting us.
-
----
-
-## 6. Your Rights and Choices
-
-You may have rights to:
-
-- Request access to any data associated with your usage
-- Request deletion of such data
-- Ask for clarification about our data handling practices
-
-To exercise these rights, please contact us at the email below.
+We do **not sell your personal data**.
 
 ---
 
-## 7. Security
+## 4. Third-Party Services
 
-We take appropriate security measures to safeguard diagnostic data and limit access only to those who need it to improve the app.
+Some information is processed by third-party service providers that operate these services on our behalf or as independent controllers under their own terms:
+
+- [Sentry Privacy Policy](https://sentry.io/privacy/)
+- [Google Privacy Policy](https://policies.google.com/privacy)
+- [Microsoft Privacy Statement](https://privacy.microsoft.com/)
+
+Please review those policies for more details about how they handle data.
 
 ---
 
-## 8. Contact Us
+## 5. Children’s Privacy
+
+Local Desktop is **not specifically directed at children**. We do not knowingly collect personal information from children under 13. If you believe we have unintentionally collected such information, please contact us and we will address it promptly.
+
+---
+
+## 6. Data Retention
+
+We retain technical and diagnostic information only for as long as reasonably necessary for the purposes described above, including troubleshooting, analytics, and site operations.
+
+Retention periods may vary depending on the third-party service involved.
+
+---
+
+## 7. Your Rights and Choices
+
+Depending on where you live, you may have rights to request access, correction, deletion, or clarification regarding data associated with you.
+
+You may also limit some website tracking through your browser settings, cookie controls, or third-party privacy tools.
+
+To make a privacy-related request, contact us using the email below.
+
+---
+
+## 8. Security
+
+We take reasonable measures to protect information and limit access to people who need it for maintenance, support, and improvement of Local Desktop.
+
+---
+
+## 9. Contact Us
 
 If you have questions or concerns about this privacy policy, please reach out:
 
-📧 **hongphat.js@gmail.com**
-🌐 **https://localdesktop.github.io/privacy**
+- **Email:** [hongphat.js@gmail.com](mailto:hongphat.js@gmail.com)
+- **Website:** [https://localdesktop.github.io/privacy](https://localdesktop.github.io/privacy)
 
 ---
 
-## 9. Updates to This Policy
+## 10. Updates to This Policy
 
 We may update this policy from time to time. Changes will be posted at:
 
-🔗 **https://localdesktop.github.io/privacy**
+- [https://localdesktop.github.io/privacy](https://localdesktop.github.io/privacy)
 
-We encourage you to review this page periodically for any updates.
-
+We encourage you to review this page periodically for updates.
 ---

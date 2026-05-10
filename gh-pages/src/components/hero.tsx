@@ -22,7 +22,7 @@ export default function Hero() {
           </Link>
           <Link
             className="button button--secondary button--lg"
-            to={`${config.customFields.repositoryUrl}//stargazers`}
+            to={`${config.customFields.repositoryUrl}/stargazers`}
           >
             ⭐️ Star us on GitHub
           </Link>
