@@ -2,7 +2,7 @@
 
 Local Desktop helps you run a desktop Linux environment on your Android device.
 
-**Note**: It is expected that you already have a usable desktop experience, i.e., a large enough display (tablet or DEX), a physical keyboard, and optionally a mouse/trackpad. **Polar Bear aims to bridge the gap between the two platforms, not trying to "simulate" the desktop experience by introducing inconvenient interactions**.
+**Note**: It is expected that you already have a usable desktop experience, i.e., a large enough display (tablet or DEX), a physical keyboard, and optionally a mouse/trackpad. **Local Desktop aims to bridge the gap between the two platforms, not trying to "simulate" the desktop experience by introducing inconvenient interactions**.
 
 ## How it works
 
