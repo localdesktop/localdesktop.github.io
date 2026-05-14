@@ -2,6 +2,7 @@
 title: Googlebook makes Local Desktop more useful 💻
 authors: teddy
 tags: [for-user, android, linux, googlebook, local-desktop]
+image: /img/blog/googlebook-cast-my-apps.webp
 ---
 
 [Googlebook](https://googlebook.google/) is coming in fall 2026. Google calls it a new kind of laptop designed for Gemini Intelligence, with features like Magic Pointer, Cast My Apps, and Quick Access. In plain words: **Android is moving toward laptops**.
