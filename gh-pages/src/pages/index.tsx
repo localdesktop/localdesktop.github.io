@@ -6,89 +6,76 @@ import Layout from "@theme/Layout";
 import config from "@site/docusaurus.config";
 import type { Feed, Item } from "../types";
 
-type Stage = {
-  label: string;
-  mission: string;
+type BlogPost = {
   title: string;
-  body: string;
-  facts: string[];
-  action: {
-    label: string;
-    to: string;
-  };
+  summary: string;
+  url: string;
+  date: string;
+  image: string;
 };
 
-const stages: Stage[] = [
+const FALLBACK_POSTS: BlogPost[] = [
   {
-    label: "Base Camp",
-    mission: "Wake the workstation",
-    title: "Linux desktop power, launched from Android.",
-    body: "Guide the polar bear through a tiny arctic command center and discover how Local Desktop turns phones and tablets into practical Linux work machines.",
-    facts: ["Rootless Android app", "Desktop Linux environment", "Made for touch, keyboard, and larger screens"],
-    action: {
-      label: "Download APK",
-      to: config.customFields.downloadUrl as string,
-    },
+    title: "Googlebook makes Local Desktop more useful",
+    summary: "A look at how Android desktop hardware makes local Linux workflows more practical.",
+    url: "/blog/2026/05/13/googlebook-and-local-desktop",
+    date: "2026-05-13",
+    image: "/img/blog/googlebook-cast-my-apps.webp",
   },
   {
-    label: "No Root Ice",
-    mission: "Cross without root",
-    title: "No root access. No separate companion machine.",
-    body: "Local Desktop keeps setup approachable: one app starts the environment and brings the desktop session to your Android device.",
-    facts: ["Standalone launcher", "One-tap start path", "Works with everyday Android devices"],
-    action: {
-      label: "Getting Started",
-      to: "/docs/user/getting-started",
-    },
+    title: "A Big Thank You to Our New Contributors",
+    summary: "Recent contributor work, project momentum, and what changed in Local Desktop.",
+    url: "/blog/2026/04/07/thank-you-new-contributors",
+    date: "2026-04-07",
+    image: "/img/blog/thank-you-new-contributors.png",
   },
   {
-    label: "Wayland Cave",
-    mission: "Light the display",
-    title: "Native Rust and Wayland pieces keep the path lean.",
-    body: "The project avoids a typical VNC-first feel by leaning on native code and Wayland, reducing avoidable display overhead.",
-    facts: ["Rust core", "Wayland protocol", "Built for lower overhead than remote-desktop style paths"],
-    action: {
-      label: "How It Works",
-      to: "/docs/developer/how-it-works",
-    },
-  },
-  {
-    label: "Open Floe",
-    mission: "Share the map",
-    title: "Free and open-source, with developer docs included.",
-    body: "Read the code, build it locally, inspect the Android and Linux integration, and help shape the next version of mobile desktop computing.",
-    facts: ["FOSS project", "Public source code", "Build and developer manuals"],
-    action: {
-      label: "Star on GitHub",
-      to: `${config.customFields.repositoryUrl}/stargazers`,
-    },
-  },
-  {
-    label: "Tablet Ridge",
-    mission: "Dock the screen",
-    title: "Android hardware is ready for more desktop-grade work.",
-    body: "Large tablets, keyboard cases, external displays, and Android desktop mode point toward a future where local Linux workflows fit in your bag.",
-    facts: ["Coding on Android", "Image editing and debugging", "Local web servers and desktop apps"],
-    action: {
-      label: "Compatibility",
-      to: "/docs/user/app-compatibility/gimp",
-    },
-  },
-  {
-    label: "Signal Tower",
-    mission: "Catch the news",
-    title: "Follow releases, compatibility work, and project notes.",
-    body: "The project news feed covers release notes, contributor updates, technical decisions, and the broader roadmap for Linux desktop support on Android.",
-    facts: ["Release notes", "Contributor updates", "Technical posts"],
-    action: {
-      label: "Read News",
-      to: "/blog",
-    },
+    title: "Anyone Can Code",
+    summary: "Project notes on coding from Android, modern tooling, and building in public.",
+    url: "/blog/2026/02/28/anyone-can-code",
+    date: "2026-02-28",
+    image: "/img/blog/anyone-can-code.webp",
   },
 ];
 
+const POST_IMAGE_BY_SLUG: Record<string, string> = {
+  "googlebook-and-local-desktop": "/img/blog/googlebook-cast-my-apps.webp",
+  "thank-you-new-contributors": "/img/blog/thank-you-new-contributors.png",
+  "anyone-can-code": "/img/blog/anyone-can-code.webp",
+  "thank-you-for-1000-github-stars": "/img/blog/personal-pain.jpg",
+  "kde-support": "/img/kde.webp",
+  "built-in-gui-linux-support-on-android-canary": "/img/blog/codex-on-termux.webp",
+};
+
+const specs = [
+  ["runtime", "Android + Linux"],
+  ["display", "Wayland-first"],
+  ["access", "rootless"],
+  ["core", "Rust"],
+];
+
+function stripHtml(value?: string) {
+  return (value || "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+}
+
+function postSlug(url: string) {
+  return url.split("/").filter(Boolean).pop() || "";
+}
+
+function normalizePost(post: Item, fallback: BlogPost): BlogPost {
+  const slug = postSlug(post.url);
+
+  return {
+    title: post.title || fallback.title,
+    summary: stripHtml(post.summary || post.content_html).slice(0, 150) || fallback.summary,
+    url: post.url || fallback.url,
+    date: String(post.date_modified || fallback.date).slice(0, 10),
+    image: POST_IMAGE_BY_SLUG[slug] || fallback.image,
+  };
+}
+
 function useLatestPosts() {
-  const [posts, setPosts] = useState<Item[]>([]);
+  const [posts, setPosts] = useState<BlogPost[]>(FALLBACK_POSTS);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,13 +83,19 @@ function useLatestPosts() {
     fetch("/blog/feed.json")
       .then<Feed>((res) => res.json())
       .then((data) => {
-        if (!cancelled) {
-          setPosts(data.items?.slice(0, 3) || []);
+        if (cancelled) {
+          return;
         }
+
+        const latest = (data.items || [])
+          .slice(0, 3)
+          .map((post, index) => normalizePost(post, FALLBACK_POSTS[index] || FALLBACK_POSTS[0]));
+
+        setPosts(latest.length ? latest : FALLBACK_POSTS);
       })
       .catch(() => {
         if (!cancelled) {
-          setPosts([]);
+          setPosts(FALLBACK_POSTS);
         }
       });
 
@@ -114,16 +107,9 @@ function useLatestPosts() {
   return posts;
 }
 
-function PolarBearGame({ activeStage }: { activeStage: number }) {
+function TerminalScene() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const activeRef = useRef(activeStage);
   const pointerRef = useRef({ x: 0, y: 0 });
-  const hopRef = useRef(0);
-
-  useEffect(() => {
-    activeRef.current = activeStage;
-    hopRef.current = 1;
-  }, [activeStage]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -135,7 +121,29 @@ function PolarBearGame({ activeStage }: { activeStage: number }) {
     let frame = 0;
     let cleanup = () => {};
 
-    import("three").then((THREE) => {
+    import("three").then(async (THREE) => {
+      const { GLTFLoader } = await import("three/addons/loaders/GLTFLoader.js");
+      if (disposed) {
+        return;
+      }
+
+      const loader = new GLTFLoader();
+      const loadModel = (url: string) => new Promise<import("three").Group>((resolve) => {
+        loader.load(
+          url,
+          (gltf) => {
+            const group = new THREE.Group();
+            group.add(gltf.scene);
+            resolve(group);
+          },
+          undefined,
+          () => resolve(new THREE.Group()),
+        );
+      });
+
+      const androidModel = await loadModel("/models/android.glb");
+      const linuxModel = await loadModel("/models/linux.glb");
+
       if (disposed) {
         return;
       }
@@ -150,162 +158,66 @@ function PolarBearGame({ activeStage }: { activeStage: number }) {
       renderer.shadowMap.enabled = true;
 
       const scene = new THREE.Scene();
-      scene.fog = new THREE.Fog(0xdbeafe, 8, 22);
+      scene.fog = new THREE.Fog(0xdbeafe, 8, 28);
 
-      const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
-      camera.position.set(0, 4.6, 10.8);
-      camera.lookAt(0, 0.8, 0);
+      const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+      camera.position.set(0, 4.9, 10.6);
 
-      const world = new THREE.Group();
-      scene.add(world);
+      const root = new THREE.Group();
+      scene.add(root);
 
-      const materials = {
-        snow: new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.76 }),
-        ice: new THREE.MeshStandardMaterial({
-          color: 0xbde9ff,
-          emissive: 0x5cc8ff,
-          emissiveIntensity: 0.08,
-          roughness: 0.42,
-          metalness: 0.08,
-        }),
-        bear: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.68 }),
-        bearShade: new THREE.MeshStandardMaterial({ color: 0xd8e7ef, roughness: 0.78 }),
-        nose: new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.48 }),
-        red: new THREE.MeshStandardMaterial({
-          color: 0xff0000,
-          emissive: 0x9f0000,
-          emissiveIntensity: 0.1,
-          roughness: 0.44,
-        }),
-        teal: new THREE.MeshStandardMaterial({
-          color: 0x14b8a6,
-          emissive: 0x0f766e,
-          emissiveIntensity: 0.1,
-          roughness: 0.5,
-        }),
-        dark: new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.55 }),
-        screen: new THREE.MeshStandardMaterial({
-          color: 0x0f172a,
-          emissive: 0x1d4ed8,
-          emissiveIntensity: 0.38,
-          roughness: 0.22,
-        }),
-      };
+      const arctic = new THREE.Group();
+      root.add(arctic);
 
-      const ground = new THREE.Mesh(new THREE.CylinderGeometry(6.7, 7.6, 0.5, 10), materials.snow);
-      ground.position.y = -0.35;
-      ground.receiveShadow = true;
-      world.add(ground);
+      const walkers: Array<{
+        group: import("three").Group;
+        speed: number;
+        phase: number;
+        bob: number;
+        direction: 1 | -1;
+      }> = [];
 
-      const stageNodes: import("three").Mesh[] = [];
-      for (let i = 0; i < stages.length; i += 1) {
-        const angle = (i / stages.length) * Math.PI * 2 - Math.PI / 2;
-        const floe = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.82, 0.98, 0.18, 7),
-          i % 2 ? materials.ice : materials.snow,
-        );
-        floe.position.set(Math.cos(angle) * 4.35, -0.03, Math.sin(angle) * 3.4);
-        floe.rotation.y = angle * 0.7;
-        floe.castShadow = true;
-        floe.receiveShadow = true;
-        world.add(floe);
-        stageNodes.push(floe);
-
-        const marker = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.72, 8), materials.dark);
-        marker.position.set(floe.position.x, 0.48, floe.position.z);
-        marker.castShadow = true;
-        world.add(marker);
-
-        const flag = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.3, 0.04), materials.red);
-        flag.position.set(floe.position.x + 0.2, 0.72, floe.position.z);
-        flag.castShadow = true;
-        world.add(flag);
-      }
-
-      const bear = new THREE.Group();
-      bear.position.set(0, 0.18, 0.25);
-      world.add(bear);
-
-      const addPart = (
-        geometry: import("three").BufferGeometry,
-        material: import("three").Material,
-        position: [number, number, number],
-        scale: [number, number, number],
+      const addWalker = (
+        group: import("three").Group,
+        speed: number,
+        phase: number,
+        scale: number,
+        direction: 1 | -1,
       ) => {
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.set(...position);
-        mesh.scale.set(...scale);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        bear.add(mesh);
-        return mesh;
+        group.scale.setScalar(scale);
+        arctic.add(group);
+        walkers.push({ group, speed, phase, bob: 0.05 + scale * 0.04, direction });
       };
 
-      const bodyGeometry = new THREE.SphereGeometry(1, 12, 10);
-      addPart(bodyGeometry, materials.bear, [0, 0.68, 0], [1.38, 0.8, 0.78]);
-      addPart(bodyGeometry, materials.bearShade, [-0.18, 0.44, 0.15], [0.86, 0.46, 0.48]);
-      addPart(new THREE.SphereGeometry(0.68, 12, 10), materials.bear, [0.86, 1.28, 0.02], [0.92, 0.82, 0.78]);
-      addPart(new THREE.SphereGeometry(0.18, 10, 8), materials.bear, [1.08, 1.86, 0.44], [1, 1, 1]);
-      addPart(new THREE.SphereGeometry(0.18, 10, 8), materials.bear, [1.08, 1.86, -0.44], [1, 1, 1]);
-      addPart(new THREE.SphereGeometry(0.3, 10, 8), materials.bearShade, [1.5, 1.2, 0.02], [1.1, 0.7, 0.68]);
-      addPart(new THREE.SphereGeometry(0.1, 8, 6), materials.nose, [1.78, 1.22, 0.02], [1, 0.72, 0.8]);
-      addPart(new THREE.SphereGeometry(0.045, 8, 6), materials.nose, [1.42, 1.42, 0.28], [1, 1, 1]);
-      addPart(new THREE.SphereGeometry(0.045, 8, 6), materials.nose, [1.42, 1.42, -0.28], [1, 1, 1]);
+      const generateWalkers = () => {
+        const models = [
+          { model: androidModel, direction: 1 as const },
+          { model: linuxModel, direction: -1 as const },
+        ];
+        for (let i = 0; i < 55; i++) {
+          const { model, direction } = models[i % models.length];
+          const speed = 0.2 + Math.random() * 0.4;
+          const phase = Math.random() * Math.PI * 2;
+          addWalker(model.clone(), speed, phase, 0.5 + Math.random() * 0.5, direction);
+        }
+      };
+      generateWalkers();
 
-      for (const z of [-0.46, 0.46]) {
-        addPart(new THREE.SphereGeometry(0.32, 10, 8), materials.bear, [-0.76, 0.12, z], [1.25, 0.45, 0.72]);
-        addPart(new THREE.SphereGeometry(0.3, 10, 8), materials.bear, [0.62, 0.1, z], [1.18, 0.42, 0.7]);
-      }
-
-      const scarf = new THREE.Mesh(new THREE.TorusGeometry(0.44, 0.055, 8, 20), materials.red);
-      scarf.position.set(0.76, 1.17, 0.02);
-      scarf.rotation.set(Math.PI / 2, 0.18, 0);
-      scarf.scale.set(1.16, 0.82, 1);
-      scarf.castShadow = true;
-      bear.add(scarf);
-
-      const laptop = new THREE.Group();
-      laptop.position.set(-1.4, 0.5, -1.15);
-      laptop.rotation.set(-0.2, 0.75, 0);
-      world.add(laptop);
-      const base = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.08, 0.78), materials.dark);
-      const screen = new THREE.Mesh(new THREE.BoxGeometry(1.16, 0.78, 0.08), materials.screen);
-      screen.position.set(0, 0.43, -0.35);
-      screen.rotation.x = -0.25;
-      laptop.add(base, screen);
-
-      const terminalLines: import("three").Mesh[] = [];
-      for (let i = 0; i < 4; i += 1) {
-        const line = new THREE.Mesh(
-          new THREE.BoxGeometry(0.62 - i * 0.08, 0.035, 0.02),
-          i % 2 ? materials.ice : materials.teal,
-        );
-        line.position.set(-0.12, 0.52 - i * 0.13, -0.41);
-        laptop.add(line);
-        terminalLines.push(line);
-      }
-
-      const aurora = new THREE.Group();
-      aurora.position.set(0, 3.2, -5.6);
-      scene.add(aurora);
-      for (let i = 0; i < 5; i += 1) {
-        const ribbon = new THREE.Mesh(
-          new THREE.BoxGeometry(1.2, 0.08, 0.04),
-          i % 2 ? materials.teal : materials.ice,
-        );
-        ribbon.position.set(-2.4 + i * 1.2, Math.sin(i) * 0.22, 0);
-        ribbon.rotation.z = Math.sin(i * 1.3) * 0.38;
-        aurora.add(ribbon);
-      }
-
-      const ambient = new THREE.HemisphereLight(0xffffff, 0x8fb3c8, 2.4);
-      const key = new THREE.DirectionalLight(0xffffff, 2.8);
-      key.position.set(4, 7, 5);
+      const ambient = new THREE.HemisphereLight(0xffffff, 0x8fb3c8, 2.1);
+      const key = new THREE.DirectionalLight(0xffffff, 2.7);
+      key.position.set(4, 6.4, 4.8);
       key.castShadow = true;
       key.shadow.mapSize.set(1024, 1024);
-      const redBeacon = new THREE.PointLight(0xff0000, 2.5, 8);
-      redBeacon.position.set(-2.7, 2.1, 2.4);
-      scene.add(ambient, key, redBeacon);
+      const redBeacon = new THREE.PointLight(0xff0000, 7, 11);
+      redBeacon.position.set(-2.5, 1.3, 2.6);
+      const spotTarget = new THREE.Object3D();
+      spotTarget.position.set(0, -0.45, 0);
+      scene.add(spotTarget);
+      const spotlight = new THREE.SpotLight(0xffffff, 9, 16, Math.PI / 4.5, 0.62, 1.1);
+      spotlight.position.set(0, 5.2, 4.2);
+      spotlight.target = spotTarget;
+      spotlight.castShadow = true;
+      scene.add(ambient, key, redBeacon, spotlight);
 
       const resize = () => {
         const rect = canvas.getBoundingClientRect();
@@ -313,9 +225,9 @@ function PolarBearGame({ activeStage }: { activeStage: number }) {
         const height = Math.max(1, rect.height);
         renderer.setSize(width, height, false);
         camera.aspect = width / height;
-        camera.position.set(width < 720 ? 0 : 0.25, width < 720 ? 5.2 : 4.6, width < 720 ? 12.4 : 10.8);
-        camera.lookAt(0, 0.76, 0);
-        world.scale.setScalar(width < 520 ? 0.82 : 1);
+        camera.position.set(0, 5, 12);
+        camera.lookAt(0, 0, 0);
+        root.scale.setScalar(width < 520 ? 1.4 : 1.2);
         camera.updateProjectionMatrix();
       };
 
@@ -325,28 +237,20 @@ function PolarBearGame({ activeStage }: { activeStage: number }) {
 
       const animate = () => {
         const time = performance.now() * 0.001;
-        const stageAngle = (activeRef.current / stages.length) * Math.PI * 2;
-        const targetRotation = -stageAngle + Math.PI / 2 + pointerRef.current.x * 0.16;
-
-        world.rotation.y += (targetRotation - world.rotation.y) * 0.045;
-        aurora.rotation.z = Math.sin(time * 0.8) * 0.06;
-        redBeacon.intensity = 2 + Math.sin(time * 3) * 0.6;
-
-        hopRef.current *= 0.9;
-        bear.position.y = 0.18 + Math.abs(Math.sin(time * 2.6)) * 0.08 + hopRef.current * 0.45;
-        bear.rotation.y = Math.sin(time * 1.2) * 0.08 + pointerRef.current.x * 0.14;
-        bear.rotation.z = Math.sin(time * 2.1) * 0.025;
-
-        stageNodes.forEach((node, index) => {
-          const selected = index === activeRef.current;
-          const pulse = selected ? 1.08 + Math.sin(time * 4) * 0.05 : 1;
-          node.scale.set(pulse, selected ? 1.18 : 1, pulse);
-          node.position.y = (selected ? 0.04 : -0.03) + Math.sin(time * 1.5 + index) * 0.025;
+        root.rotation.y += (pointerRef.current.x * 0.12 + Math.sin(time * 0.22) * 0.05 - root.rotation.y) * 0.05;
+        arctic.rotation.y = Math.sin(time * 0.18) * 0.04;
+        walkers.forEach((walker, index) => {
+          const speed = walker.speed * 2.5;
+          const x = ((((time * speed * walker.direction) + walker.phase * 8) % 24) + 24) % 24 - 12;
+          const z = Math.sin(walker.phase + index) * 3;
+          walker.group.position.set(x, -0.76 + Math.abs(Math.sin(time * 5 + index)) * walker.bob, z);
+          walker.group.rotation.y = walker.direction === 1 ? -Math.PI / 2 : Math.PI / 2;
+          walker.group.rotation.z = Math.sin(time * 4 + index) * 0.045;
         });
-
-        terminalLines.forEach((line, index) => {
-          line.scale.x = 0.65 + Math.sin(time * 3 + index + activeRef.current) * 0.18;
-        });
+        redBeacon.intensity = 5.5 + Math.sin(time * 2.4) * 1.6;
+        spotlight.position.x = Math.sin(time * 0.8) * 2.2;
+        spotlight.position.z = 3.6 + Math.cos(time * 0.7) * 0.8;
+        spotlight.intensity = 7.5 + Math.sin(time * 2.8) * 1.4;
 
         renderer.render(scene, camera);
         frame = window.requestAnimationFrame(animate);
@@ -360,10 +264,7 @@ function PolarBearGame({ activeStage }: { activeStage: number }) {
         scene.traverse((object) => {
           const mesh = object as import("three").Mesh;
           mesh.geometry?.dispose();
-          const material = mesh.material as
-            | import("three").Material
-            | import("three").Material[]
-            | undefined;
+          const material = mesh.material as import("three").Material | import("three").Material[] | undefined;
           if (Array.isArray(material)) {
             material.forEach((item) => item.dispose());
           } else {
@@ -391,63 +292,26 @@ function PolarBearGame({ activeStage }: { activeStage: number }) {
     };
   }, []);
 
-  return <canvas ref={canvasRef} className="ldGameScene" aria-label="A playful 3D polar bear exploring Local Desktop features" />;
+  return <canvas ref={canvasRef} className="ldScene" aria-label="Animated arctic 3D scene with Android mascots and Linux penguins" />;
 }
 
 export default function Home(): ReactNode {
   const { siteConfig } = useDocusaurusContext();
-  const [activeStage, setActiveStage] = useState(0);
   const posts = useLatestPosts();
-  const stage = stages[activeStage];
-
-  useEffect(() => {
-    document.body.classList.add("ldGameBodyLock");
-
-    return () => {
-      document.body.classList.remove("ldGameBodyLock");
-    };
-  }, []);
-
-  const facts = useMemo(() => {
-    if (activeStage !== stages.length - 1 || !posts.length) {
-      return stage.facts;
-    }
-
-    return posts.map((post) => post.title);
-  }, [activeStage, posts, stage.facts]);
-
-  const moveStage = (offset: number) => {
-    setActiveStage((current) => (current + offset + stages.length) % stages.length);
-  };
-
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (["ArrowRight", "ArrowDown", "d", "D", "s", "S"].includes(event.key)) {
-      event.preventDefault();
-      moveStage(1);
-    }
-
-    if (["ArrowLeft", "ArrowUp", "a", "A", "w", "W"].includes(event.key)) {
-      event.preventDefault();
-      moveStage(-1);
-    }
-
-    const numeric = Number(event.key);
-    if (numeric >= 1 && numeric <= stages.length) {
-      setActiveStage(numeric - 1);
-    }
-  };
+  const featuredPost = posts[0];
+  const secondaryPosts = useMemo(() => posts.slice(1), [posts]);
 
   return (
     <Layout title="Home" description={siteConfig.tagline}>
       <Head>
         <meta
           name="description"
-          content="Play through Local Desktop, a rootless Linux desktop environment for Android phones and tablets."
+          content="Local Desktop helps you run a rootless desktop Linux environment on Android phones and tablets."
         />
         <meta property="og:title" content="Local Desktop | Linux on Android" />
         <meta
           property="og:description"
-          content="A playful polar-bear tour of Local Desktop, the rootless Linux desktop environment for Android."
+          content="A hacker-style landing page for Local Desktop, the rootless Linux desktop environment for Android."
         />
         <meta property="og:type" content="website" />
         <meta property="og:url" content="https://localdesktop.github.io/" />
@@ -474,90 +338,73 @@ export default function Home(): ReactNode {
         </script>
       </Head>
       <style>{homeStyles}</style>
-      <main
-        className="ldGame"
-        tabIndex={0}
-        onKeyDown={handleKeyDown}
-        aria-label="Playable Local Desktop homepage. Use arrow keys or WASD to change missions."
-      >
-        <PolarBearGame activeStage={activeStage} />
-        <div className="ldGameVignette" />
-
-        <section className="ldGameHero" aria-live="polite">
-          <p className="ldGameKicker">app.polarbear</p>
-          <h1>Local Desktop</h1>
-          <p>{siteConfig.tagline}</p>
-          <div className="ldGameActions">
-            <Link className="button button--primary" to={stage.action.to}>
-              {stage.action.label}
-            </Link>
-            <Link className="button button--secondary" to="/docs/user/getting-started">
-              User Manual
-            </Link>
+      <TerminalScene />
+      <main className="ldHome">
+        <section className="ldHero">
+          <div className="ldHeroCopy">
+            <p className="ldPrompt">app.polarbear</p>
+            <h1>Local Desktop</h1>
+            <p className="ldHeroText">{siteConfig.tagline}</p>
+            <div className="ldActions">
+              <Link className="button button--primary" to={config.customFields.downloadUrl as string}>
+                Download APK
+              </Link>
+              <Link className="button button--secondary" to="/docs/user/getting-started">
+                Read Manual
+              </Link>
+            </div>
           </div>
         </section>
 
-        <aside className="ldGameCard">
-          <div className="ldGameCardTop">
-            <span>Mission {activeStage + 1}</span>
-            <strong>{stage.label}</strong>
+        <section className="ldBlog" aria-labelledby="latest-news">
+          <div className="ldSectionHeader">
+            <h2 id="latest-news">Latest posts</h2>
+            <Link to="/blog">View all posts</Link>
           </div>
-          <h2>{stage.mission}</h2>
-          <p>{stage.title}</p>
-          <p>{stage.body}</p>
-          <div className="ldGameBadges">
-            {facts.map((fact) => (
-              <span key={fact}>{fact}</span>
-            ))}
+
+          <div className="ldPostGrid">
+            <Link className="ldFeaturedPost" to={featuredPost.url}>
+              <img src={featuredPost.image} alt="" loading="lazy" />
+              <div>
+                <span>{featuredPost.date}</span>
+                <h3>{featuredPost.title}</h3>
+                <p>{featuredPost.summary}</p>
+              </div>
+            </Link>
+
+            <div className="ldPostList">
+              {secondaryPosts.map((post) => (
+                <Link className="ldPostItem" to={post.url} key={post.url}>
+                  <img src={post.image} alt="" loading="lazy" />
+                  <div>
+                    <span>{post.date}</span>
+                    <h3>{post.title}</h3>
+                    <p>{post.summary}</p>
+                  </div>
+                </Link>
+              ))}
+            </div>
           </div>
-        </aside>
+        </section>
 
-        <nav className="ldGameControls" aria-label="Polar bear mission controls">
-          <button
-            type="button"
-            className="ldGameArrow"
-            onClick={() => moveStage(-1)}
-            aria-label="Previous mission"
-          >
-            <span aria-hidden="true">‹</span>
-          </button>
-          {stages.map((item, index) => (
-            <button
-              key={item.label}
-              type="button"
-              className={index === activeStage ? "isActive" : ""}
-              onClick={() => setActiveStage(index)}
-              aria-pressed={index === activeStage}
-            >
-              <span>{index + 1}</span>
-              {item.label}
-            </button>
+        <section className="ldSpecs" aria-label="Local Desktop technical profile">
+          {specs.map(([label, value]) => (
+            <div className="ldSpec" key={label}>
+              <span>{label}</span>
+              <strong>{value}</strong>
+            </div>
           ))}
-          <button
-            type="button"
-            className="ldGameArrow"
-            onClick={() => moveStage(1)}
-            aria-label="Next mission"
-          >
-            <span aria-hidden="true">›</span>
-          </button>
-        </nav>
+        </section>
 
-        <section className="ldGameSeo" aria-label="Local Desktop overview">
-          <h2>Local Desktop for Android</h2>
-          <p>{siteConfig.tagline}</p>
-          {stages.map((item) => (
-            <article key={item.label}>
-              <h3>{item.title}</h3>
-              <p>{item.body}</p>
-              <ul>
-                {item.facts.map((fact) => (
-                  <li key={fact}>{fact}</li>
-                ))}
-              </ul>
-              <Link to={item.action.to}>{item.action.label}</Link>
-            </article>
-          ))}
+        <section className="ldAbout">
+          <div>
+            <h2>Desktop Linux, running locally on Android hardware.</h2>
+          </div>
+          <p>
+            Local Desktop packages the rough pieces of an Android Linux workstation into one open-source app:
+            rootless setup, a desktop session, Wayland-oriented display work, and practical docs for people who
+            want to build, debug, and run real tools from a phone, tablet, or docked device.
+          </p>
         </section>
       </main>
     </Layout>
@@ -565,417 +412,332 @@ export default function Home(): ReactNode {
 }
 
 const homeStyles = `
-body.ldGameBodyLock {
-  overflow: hidden;
-}
-
-body:has(.ldGame) {
-  overflow: hidden;
-}
-
-body.ldGameBodyLock .footer {
-  display: none;
-}
-
-body:has(.ldGame) .footer {
-  display: none;
-}
-
-.ldGame {
-  position: relative;
-  height: calc(100dvh - var(--ifm-navbar-height));
-  min-height: 560px;
-  overflow: hidden;
+.ldHome {
+  --ld-red: #ff0000;
+  --ld-ink: #0f1117;
+  --ld-muted: rgba(15, 17, 23, 0.68);
+  --ld-panel: rgba(255, 255, 255, 0.78);
+  --ld-panel-strong: rgba(255, 255, 255, 0.94);
+  --ld-line: rgba(15, 17, 23, 0.14);
+  --ld-grid: rgba(255, 0, 0, 0.13);
+  min-height: 100vh;
   background:
-    radial-gradient(circle at 16% 20%, rgba(255, 0, 0, 0.16), transparent 28%),
-    radial-gradient(circle at 82% 68%, rgba(20, 184, 166, 0.24), transparent 28%),
-    linear-gradient(135deg, #f8fafc 0%, #dbeafe 48%, #f4f7f8 100%);
-  color: #111827;
-  isolation: isolate;
+    linear-gradient(var(--ld-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--ld-grid) 1px, transparent 1px),
+    radial-gradient(circle at 76% 16%, rgba(255, 0, 0, 0.16), transparent 34%),
+    linear-gradient(180deg, #ffffff 0%, #f5f5f5 48%, #eceff3 100%);
+  background-size: 34px 34px, 34px 34px, auto, auto;
+  color: var(--ld-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
-html[data-theme="dark"] .ldGame {
+html[data-theme="dark"] .ldHome {
+  --ld-ink: #f8fafc;
+  --ld-muted: rgba(248, 250, 252, 0.72);
+  --ld-panel: rgba(8, 10, 15, 0.72);
+  --ld-panel-strong: rgba(8, 10, 15, 0.92);
+  --ld-line: rgba(248, 250, 252, 0.16);
+  --ld-grid: rgba(255, 0, 0, 0.15);
   background:
-    radial-gradient(circle at 16% 20%, rgba(255, 0, 0, 0.18), transparent 30%),
-    radial-gradient(circle at 80% 72%, rgba(20, 184, 166, 0.18), transparent 28%),
-    linear-gradient(135deg, #020617 0%, #0f172a 54%, #111827 100%);
-  color: #f8fafc;
+    linear-gradient(var(--ld-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--ld-grid) 1px, transparent 1px),
+    radial-gradient(circle at 76% 16%, rgba(255, 0, 0, 0.24), transparent 34%),
+    linear-gradient(180deg, #050608 0%, #0b0d12 52%, #101318 100%);
 }
-
-.ldGame:focus {
-  outline: none;
-}
-
-.ldGameScene {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  width: 100%;
-  height: 100%;
-  touch-action: none;
-}
-
-.ldGameVignette {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  background:
-    linear-gradient(90deg, rgba(248, 250, 252, 0.96) 0%, rgba(248, 250, 252, 0.55) 36%, rgba(248, 250, 252, 0.04) 70%),
-    linear-gradient(0deg, rgba(248, 250, 252, 0.92) 0%, rgba(248, 250, 252, 0) 30%);
-  pointer-events: none;
-}
-
-html[data-theme="dark"] .ldGameVignette {
-  background:
-    linear-gradient(90deg, rgba(2, 6, 23, 0.94) 0%, rgba(2, 6, 23, 0.62) 34%, rgba(2, 6, 23, 0.06) 70%),
-    linear-gradient(0deg, rgba(2, 6, 23, 0.94) 0%, rgba(2, 6, 23, 0) 32%);
-}
-
-.ldGameHero {
-  position: relative;
-  z-index: 2;
+.ldHero {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  width: min(590px, calc(100% - 48px));
-  height: calc(100% - 122px);
-  margin-left: clamp(22px, 7vw, 104px);
-  padding-bottom: 28px;
+  gap: 32px;
+  width: min(1180px, calc(100% - 36px));
+  min-height: auto;
+  margin: 0 auto;
+  padding: clamp(20px, 4vw, 38px) 0 14px;
 }
 
-.ldGameKicker {
-  margin: 0 0 12px;
-  color: #ff0000;
-  font-size: 0.82rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.ldHeroCopy,
+.ldAbout,
+.ldBlog {
+  position: relative;
+  z-index: 1;
 }
 
-.ldGameHero h1 {
-  max-width: 9ch;
+.ldPrompt {
+  color: var(--ld-red);
+  font-size: 0.84rem;
+  font-weight: 800;
+  line-height: 1.45;
+  margin: 0 0 14px;
+}
+
+.ldHero h1,
+.ldAbout h2,
+.ldSectionHeader h2 {
   margin: 0;
-  color: inherit;
-  font-size: clamp(3.3rem, 9vw, 7.4rem);
-  line-height: 0.86;
+  color: var(--ld-ink);
+  font-family: inherit;
   letter-spacing: 0;
 }
 
-.ldGameHero p:not(.ldGameKicker) {
-  max-width: 540px;
-  margin: 20px 0 0;
-  color: rgba(17, 24, 39, 0.74);
-  font-size: clamp(1rem, 2vw, 1.2rem);
-  line-height: 1.5;
+.ldHero h1 {
+  max-width: 10.5ch;
+  font-size: clamp(3.3rem, 7vw, 5.8rem);
+  line-height: 0.86;
+  text-transform: uppercase;
+  text-shadow: 3px 3px 0 rgba(255, 0, 0, 0.18);
 }
 
-html[data-theme="dark"] .ldGameHero p:not(.ldGameKicker) {
-  color: rgba(248, 250, 252, 0.76);
+.ldHeroText {
+  max-width: 610px;
+  margin: 16px 0 0;
+  color: var(--ld-muted);
+  font-size: clamp(1rem, 2vw, 1.22rem);
+  line-height: 1.55;
 }
 
-.ldGameActions {
+.ldActions {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  margin-top: 24px;
+  margin-top: 18px;
 }
 
-.ldGame .button {
+.ldHome .button {
   border-radius: 8px;
-  font-weight: 850;
+  font-family: inherit;
+  font-weight: 900;
 }
 
-.ldGame .button--primary,
-.ldGame .button--primary:hover,
-.ldGame .button--primary:focus {
-  border-color: #ff0000;
-  background: #ff0000;
+.ldHome .button--primary,
+.ldHome .button--primary:hover,
+.ldHome .button--primary:focus {
+  border-color: var(--ld-red);
+  background: var(--ld-red);
   color: #ffffff;
 }
 
-.ldGame .button--secondary {
-  border-color: rgba(17, 24, 39, 0.14);
-  background: rgba(255, 255, 255, 0.72);
-  color: #111827;
+.ldHome .button--secondary {
+  border-color: var(--ld-line);
+  background: var(--ld-panel);
+  color: var(--ld-ink);
 }
 
-html[data-theme="dark"] .ldGame .button--secondary {
-  border-color: rgba(255, 255, 255, 0.16);
-  background: rgba(15, 23, 42, 0.66);
-  color: #f8fafc;
+.ldScene {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 0;
+  pointer-events: none;
 }
 
-.ldGameCard {
-  position: absolute;
-  right: clamp(18px, 5vw, 76px);
-  bottom: 104px;
-  z-index: 3;
-  width: min(420px, 37vw);
-  padding: 18px;
-  border: 1px solid rgba(17, 24, 39, 0.13);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.74);
-  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.16);
-  backdrop-filter: blur(18px);
+.ldSpecs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  width: min(1180px, calc(100% - 36px));
+  margin: clamp(28px, 5vw, 56px) auto 0;
+  border: 1px solid var(--ld-line);
+  background: var(--ld-line);
 }
 
-html[data-theme="dark"] .ldGameCard {
-  border-color: rgba(255, 255, 255, 0.14);
-  background: rgba(15, 23, 42, 0.62);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+.ldSpec {
+  padding: 20px;
+  background: var(--ld-panel-strong);
 }
 
-.ldGameCardTop {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: #ff0000;
-  font-size: 0.84rem;
+.ldSpec span,
+.ldPostGrid span {
+  display: block;
+  color: var(--ld-red);
+  font-size: 0.76rem;
   font-weight: 900;
   text-transform: uppercase;
 }
 
-.ldGameCard h2 {
-  margin: 10px 0 8px;
-  color: inherit;
-  font-size: clamp(1.28rem, 2.2vw, 1.75rem);
-  line-height: 1.06;
-}
-
-.ldGameCard p {
-  margin: 8px 0 0;
-  color: rgba(17, 24, 39, 0.74);
-  font-size: 0.96rem;
-  line-height: 1.42;
-}
-
-html[data-theme="dark"] .ldGameCard p {
-  color: rgba(248, 250, 252, 0.76);
-}
-
-.ldGameBadges {
-  display: grid;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.ldGameBadges span {
+.ldSpec strong {
   display: block;
-  padding: 8px 10px;
-  border: 1px solid rgba(17, 24, 39, 0.12);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.58);
-  color: rgba(17, 24, 39, 0.82);
-  font-size: 0.88rem;
-  line-height: 1.25;
+  margin-top: 8px;
+  color: var(--ld-ink);
+  font-size: clamp(1rem, 2vw, 1.3rem);
 }
 
-html[data-theme="dark"] .ldGameBadges span {
-  border-color: rgba(255, 255, 255, 0.13);
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(248, 250, 252, 0.82);
+.ldAbout,
+.ldBlog {
+  width: min(1180px, calc(100% - 36px));
+  margin: 0 auto;
+  padding: clamp(34px, 5vw, 58px) 0;
 }
 
-.ldGameControls {
-  position: absolute;
-  right: clamp(12px, 5vw, 76px);
-  bottom: 18px;
-  left: clamp(12px, 7vw, 104px);
-  z-index: 4;
+.ldAbout {
   display: grid;
-  grid-template-columns: 0.48fr repeat(6, minmax(0, 1fr)) 0.48fr;
-  gap: 8px;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1fr);
+  gap: clamp(24px, 5vw, 64px);
+  align-items: start;
 }
 
-.ldGameControls button {
-  min-width: 0;
-  height: 44px;
-  padding: 0 10px;
-  border: 1px solid rgba(17, 24, 39, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.68);
-  color: rgba(17, 24, 39, 0.76);
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.76rem;
+.ldAbout h2,
+.ldSectionHeader h2 {
+  font-size: clamp(2rem, 4vw, 4rem);
+  line-height: 0.98;
+}
+
+.ldAbout > p {
+  margin: 4px 0 0;
+  color: var(--ld-muted);
+  font-size: clamp(1rem, 1.6vw, 1.14rem);
+  line-height: 1.75;
+}
+
+.ldSectionHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 20px;
+  align-items: end;
+  margin-bottom: 24px;
+}
+
+.ldSectionHeader a {
+  color: var(--ld-red);
   font-weight: 900;
-  text-align: left;
-  backdrop-filter: blur(14px);
-  transition: transform 160ms ease, background 160ms ease, color 160ms ease;
 }
 
-.ldGameControls button:hover,
-.ldGameControls button:focus-visible,
-.ldGameControls button.isActive {
-  border-color: #ff0000;
-  background: #ff0000;
-  color: white;
-  transform: translateY(-2px);
+.ldPostGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr);
+  gap: 18px;
 }
 
-.ldGameControls button span {
-  margin-right: 7px;
-  opacity: 0.72;
-}
-
-.ldGameControls .ldGameArrow {
-  text-align: center;
-}
-
-.ldGameControls .ldGameArrow span {
-  margin-right: 0;
-  font-size: 1.65rem;
-  line-height: 1;
-  opacity: 1;
-}
-
-html[data-theme="dark"] .ldGameControls button {
-  border-color: rgba(255, 255, 255, 0.15);
-  background: rgba(15, 23, 42, 0.66);
-  color: rgba(248, 250, 252, 0.78);
-}
-
-.ldGameSeo {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
+.ldFeaturedPost,
+.ldPostItem {
+  border: 1px solid var(--ld-line);
+  border-radius: 8px;
+  background: var(--ld-panel-strong);
+  color: var(--ld-ink);
   overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: normal;
+  text-decoration: none;
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
 }
 
-@media (max-width: 1020px) {
-  .ldGame {
-    min-height: 640px;
+.ldFeaturedPost:hover,
+.ldPostItem:hover {
+  border-color: var(--ld-red);
+  color: var(--ld-ink);
+  text-decoration: none;
+  transform: translateY(-3px);
+  box-shadow: 0 20px 54px rgba(255, 0, 0, 0.16);
+}
+
+.ldFeaturedPost {
+  display: grid;
+  grid-template-rows: minmax(220px, 0.72fr) auto;
+}
+
+.ldFeaturedPost img,
+.ldPostItem img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #111827;
+}
+
+.ldFeaturedPost > div,
+.ldPostItem > div {
+  padding: 18px;
+}
+
+.ldFeaturedPost h3,
+.ldPostItem h3 {
+  margin: 10px 0 0;
+  color: var(--ld-ink);
+  font-family: inherit;
+  letter-spacing: 0;
+  line-height: 1.08;
+}
+
+.ldFeaturedPost h3 {
+  font-size: clamp(1.55rem, 2.8vw, 2.7rem);
+}
+
+.ldPostItem h3 {
+  font-size: 1.2rem;
+}
+
+.ldFeaturedPost p,
+.ldPostItem p {
+  margin: 12px 0 0;
+  color: var(--ld-muted);
+  line-height: 1.55;
+}
+
+.ldPostList {
+  display: grid;
+  gap: 18px;
+}
+
+.ldPostItem {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+}
+
+@media (max-width: 960px) {
+  .ldHero,
+  .ldAbout,
+  .ldPostGrid {
+    grid-template-columns: 1fr;
   }
 
-  .ldGameVignette {
-    background:
-      linear-gradient(180deg, rgba(248, 250, 252, 0.94) 0%, rgba(248, 250, 252, 0.42) 48%, rgba(248, 250, 252, 0.94) 100%);
+  .ldHero {
+    min-height: auto;
   }
 
-  html[data-theme="dark"] .ldGameVignette {
-    background:
-      linear-gradient(180deg, rgba(2, 6, 23, 0.92) 0%, rgba(2, 6, 23, 0.46) 48%, rgba(2, 6, 23, 0.92) 100%);
+  .ldScene {
+    height: 310px;
   }
 
-  .ldGameHero {
-    justify-content: flex-start;
-    width: calc(100% - 36px);
-    height: auto;
-    margin-left: 18px;
-    padding-top: clamp(18px, 4dvh, 44px);
+  .ldSpecs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .ldHero {
+    width: min(100% - 28px, 1180px);
+    padding-top: 22px;
   }
 
-  .ldGameHero h1 {
-    font-size: clamp(2.9rem, 12vw, 5.2rem);
+  .ldHero h1 {
+    font-size: clamp(2.8rem, 15vw, 4rem);
   }
 
-  .ldGameCard {
-    right: 18px;
-    bottom: 110px;
-    left: 18px;
-    width: auto;
+  .ldSpecs,
+  .ldAbout,
+  .ldBlog {
+    width: min(100% - 28px, 1180px);
+  }
+
+  .ldSpecs {
+    grid-template-columns: 1fr;
+  }
+
+  .ldSectionHeader {
+    grid-template-columns: 1fr;
+  }
+
+  .ldFeaturedPost {
+    grid-template-rows: 220px auto;
+  }
+
+  .ldPostItem {
+    grid-template-columns: 112px minmax(0, 1fr);
+  }
+
+  .ldPostItem > div {
     padding: 14px;
   }
 
-  .ldGameBadges {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .ldGameControls {
-    right: 12px;
-    left: 12px;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 560px) {
-  .ldGame {
-    min-height: 0;
-  }
-
-  .ldGameHero {
-    padding-top: 16px;
-  }
-
-  .ldGameKicker {
-    margin-bottom: 8px;
-    font-size: 0.72rem;
-  }
-
-  .ldGameHero h1 {
-    font-size: clamp(2.65rem, 15vw, 4.05rem);
-  }
-
-  .ldGameHero p:not(.ldGameKicker) {
-    display: -webkit-box;
-    margin-top: 10px;
-    overflow: hidden;
-    font-size: 0.94rem;
-    line-height: 1.38;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-  }
-
-  .ldGameActions {
-    gap: 8px;
-    margin-top: 12px;
-  }
-
-  .ldGameActions .button {
-    padding: 0.48rem 0.64rem;
-    font-size: 0.84rem;
-  }
-
-  .ldGameCard {
-    bottom: 100px;
-  }
-
-  .ldGameCardTop {
-    font-size: 0.72rem;
-  }
-
-  .ldGameCard h2 {
-    margin-top: 7px;
-    font-size: 1.08rem;
-  }
-
-  .ldGameCard p {
-    display: -webkit-box;
-    overflow: hidden;
-    font-size: 0.82rem;
-    line-height: 1.32;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-  }
-
-  .ldGameBadges {
-    grid-template-columns: 1fr;
-    gap: 6px;
-    margin-top: 9px;
-  }
-
-  .ldGameBadges span {
-    padding: 7px 8px;
-    font-size: 0.78rem;
-  }
-
-  .ldGameControls {
-    bottom: 14px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
-  }
-
-  .ldGameControls button {
-    height: 34px;
-    padding: 0 8px;
-    overflow: hidden;
-    font-size: 0.7rem;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .ldPostItem p {
+    display: none;
   }
 }
 `;
