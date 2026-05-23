@@ -27,6 +27,7 @@ export default function LayoutWrapper(props: Props): ReactNode {
   const pathname = location.pathname.replace(/\/$/, "") || "/";
   const isThinPage = THIN_PAGE_PATHS.has(pathname);
   const noAdsense =
+    (typeof window !== "undefined" && window.self !== window.top) ||
     ["/privacy", "/support-us"].includes(pathname) ||
     isThinPage ||
     routes.plugin.name === "native";
