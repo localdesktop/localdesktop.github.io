@@ -12,9 +12,9 @@ Local Desktop uses 3 commands to set up your desktop environment:
 
 ```toml title="/etc/localdesktop/localdesktop.toml"
 [command]
-check="pacman -Q xorg-xwayland && pacman -Qg xfce4 && pacman -Q onboard"
-install="stdbuf -oL pacman -Syu xorg-xwayland xfce4 onboard --noconfirm --noprogressbar"
-launch="XDG_RUNTIME_DIR=/tmp Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-launch startxfce4 2>&1"
+check="pacman -Q noto-fonts && pacman -Q xfce4-session && pacman -Q xfce4-panel && pacman -Q xfce4-settings && pacman -Q xfce4-terminal && pacman -Q thunar && pacman -Q xfdesktop && pacman -Q xfconf && pacman -Q labwc && pacman -Q wlr-randr && pacman -Q xorg-xwayland && pacman -Q xdg-desktop-portal && pacman -Q xdg-desktop-portal-gtk && pacman -Q onboard"
+install="stdbuf -oL pacman -Syu --needed --noconfirm --noprogressbar noto-fonts xfce4 labwc wlr-randr xorg-xwayland xdg-desktop-portal xdg-desktop-portal-gtk onboard"
+launch="XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=XFCE /usr/local/bin/startxfce4-localdesktop 2>&1"
 ```
 
 You can change these 3 commands to install and launch your custom desktop environment. Please share your successful setups with us and we can put them here to help others.
@@ -53,10 +53,12 @@ When `check` returns success, this command will be executed next. This is exactl
 This is the most important command to set up your preferred desktop environment. It is also the most complicated command, as it requires a good understanding of display server components. Some important notes:
 - When things go wrong, you must check the [logcat](/docs/developer/how-to-logcat) to view the logs.
 - If you don't see any error logs, try appending `2>&1` to redirect stderr to stdout.
-- It is possible to start a Wayland session instead of using Xwayland, but many important protocol objects are **incomplete**.
+- The default session is **Xfce on Wayland**. The built-in compositor listens on `/tmp/wayland-0`; the guest runs `startxfce4 --wayland`, which starts labwc as a nested compositor and connects to that socket. Setup also installs `/usr/local/bin/startxfce4-localdesktop` as a thin wrapper around `startxfce4 --wayland`.
 
 :::info Recipe
-Put important environment variables at the beginning of the command like `XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 ...`, then start Xwayland + an X11 session like this: `Xwayland -hidpi :1 2>&1 & startxfce4`, or a Wayland session like this: `startplasma-wayland`.
+Put important environment variables at the beginning of the command, for example `XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=XFCE ...`, then start a Wayland session such as `/usr/local/bin/startxfce4-localdesktop` or `startplasma-wayland`.
+
+For a legacy **X11 session via Xwayland**, start Xwayland first and point the desktop at `DISPLAY=:1`, for example: `Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-launch startxfce4 2>&1`.
 :::
 
 ## Config templates

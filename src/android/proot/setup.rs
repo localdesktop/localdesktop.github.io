@@ -19,7 +19,7 @@ use std::{
     fs::{self, File},
     io::{Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         mpsc::{self, Sender},
         Arc, Mutex,
@@ -318,30 +318,6 @@ defaultPref("security.sandbox.content.level", 0);
     None
 }
 
-fn setup_qterminal_wrapper(_: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
-
-    let wrapper_path = fs_root.join("usr/local/bin/qterminal");
-    let wrapper = r#"#!/bin/sh
-if [ "$#" -eq 0 ]; then
-  exec /usr/bin/qterminal -e /bin/bash -i
-fi
-
-exec /usr/bin/qterminal "$@"
-"#;
-
-    let _ = fs::create_dir_all(
-        wrapper_path
-            .parent()
-            .expect("Failed to read qterminal wrapper parent directory"),
-    );
-    fs::write(&wrapper_path, wrapper).expect("Failed to write qterminal wrapper");
-    fs::set_permissions(&wrapper_path, fs::Permissions::from_mode(0o755))
-        .expect("Failed to mark qterminal wrapper executable");
-
-    None
-}
-
 #[derive(Debug)]
 enum KvLine {
     Entry {
@@ -435,203 +411,6 @@ fn upsert_kv_file(path: &Path, delimiter: char, updates: &[(&str, String)]) {
     fs::write(path, content).expect("Failed to write key/value file");
 }
 
-fn update_ini_section(content: &str, section: &str, updates: &[(&str, String)]) -> String {
-    let mut out: Vec<String> = Vec::new();
-    let mut in_section = false;
-    let mut seen_section = false;
-    let mut seen_keys = vec![false; updates.len()];
-
-    for raw_line in content.lines() {
-        let trimmed = raw_line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            if in_section {
-                for (idx, (key, value)) in updates.iter().enumerate() {
-                    if !seen_keys[idx] {
-                        out.push(format!("{}={}", key, value));
-                    }
-                }
-            }
-            let name = trimmed[1..trimmed.len() - 1].trim();
-            in_section = name.eq_ignore_ascii_case(section);
-            if in_section {
-                seen_section = true;
-            }
-            out.push(raw_line.to_string());
-            continue;
-        }
-
-        if in_section
-            && !trimmed.is_empty()
-            && !trimmed.starts_with('#')
-            && !trimmed.starts_with(';')
-            && raw_line.contains('=')
-        {
-            if let Some((left, _)) = raw_line.split_once('=') {
-                let key = left.trim();
-                let mut replaced = false;
-                for (idx, (target_key, value)) in updates.iter().enumerate() {
-                    if key.eq_ignore_ascii_case(target_key) {
-                        let indent: String =
-                            raw_line.chars().take_while(|c| c.is_whitespace()).collect();
-                        out.push(format!("{}{}={}", indent, key, value));
-                        seen_keys[idx] = true;
-                        replaced = true;
-                        break;
-                    }
-                }
-                if replaced {
-                    continue;
-                }
-            }
-        }
-
-        out.push(raw_line.to_string());
-    }
-
-    if in_section {
-        for (idx, (key, value)) in updates.iter().enumerate() {
-            if !seen_keys[idx] {
-                out.push(format!("{}={}", key, value));
-            }
-        }
-    } else if !seen_section {
-        if !out.is_empty() {
-            out.push(String::new());
-        }
-        out.push(format!("[{}]", section));
-        for (key, value) in updates {
-            out.push(format!("{}={}", key, value));
-        }
-    }
-
-    let mut content = out.join("\n");
-    content.push('\n');
-    content
-}
-
-fn extract_attr_value(line: &str, attr: &str) -> Option<String> {
-    let needle = format!("{}=\"", attr);
-    let start = line.find(&needle)? + needle.len();
-    let rest = &line[start..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
-}
-
-fn extract_tag_value(line: &str, tag: &str) -> Option<String> {
-    let open = format!("<{}>", tag);
-    let close = format!("</{}>", tag);
-    let start = line.find(&open)? + open.len();
-    let end = line.find(&close)?;
-    if end < start {
-        return None;
-    }
-    Some(line[start..end].trim().to_string())
-}
-
-fn update_openbox_rc(content: &str, scale: i32, font_name: &str) -> (String, Option<String>) {
-    let active_size = 10 * scale;
-    let menu_size = 11 * scale;
-    let mut out: Vec<String> = Vec::new();
-    let mut in_font = false;
-    let mut in_theme = false;
-    let mut font_place: Option<String> = None;
-    let mut theme_name: Option<String> = None;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("<theme>") {
-            in_theme = true;
-            out.push(line.to_string());
-            continue;
-        }
-        if trimmed.starts_with("</theme>") {
-            in_theme = false;
-            out.push(line.to_string());
-            continue;
-        }
-
-        if trimmed.starts_with("<font") {
-            in_font = true;
-            font_place = extract_attr_value(trimmed, "place");
-            out.push(line.to_string());
-            continue;
-        }
-        if trimmed.starts_with("</font>") {
-            in_font = false;
-            font_place = None;
-            out.push(line.to_string());
-            continue;
-        }
-
-        if in_theme && !in_font && theme_name.is_none() {
-            if let Some(name) = extract_tag_value(trimmed, "name") {
-                theme_name = Some(name);
-            }
-            out.push(line.to_string());
-            continue;
-        }
-
-        if in_font {
-            if extract_tag_value(trimmed, "name").is_some() {
-                let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                out.push(format!("{}<name>{}</name>", indent, font_name));
-                continue;
-            }
-            if extract_tag_value(trimmed, "size").is_some() {
-                let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                let size = match font_place.as_deref() {
-                    Some("ActiveWindow") | Some("InactiveWindow") => active_size,
-                    Some("MenuHeader")
-                    | Some("MenuItem")
-                    | Some("ActiveOnScreenDisplay")
-                    | Some("InactiveOnScreenDisplay") => menu_size,
-                    _ => menu_size,
-                };
-                out.push(format!("{}<size>{}</size>", indent, size));
-                continue;
-            }
-        }
-
-        out.push(line.to_string());
-    }
-
-    let mut out = out.join("\n");
-    out.push('\n');
-    (out, theme_name)
-}
-
-fn update_openbox_theme(fs_root: &Path, theme_name: &str, scale: i32) {
-    let user_theme = fs_root.join(format!("root/.themes/{}/openbox-3/themerc", theme_name));
-    let system_theme = fs_root.join(format!("usr/share/themes/{}/openbox-3/themerc", theme_name));
-    let source = if user_theme.exists() {
-        user_theme.clone()
-    } else if system_theme.exists() {
-        system_theme
-    } else {
-        return;
-    };
-
-    let content = fs::read_to_string(&source).unwrap_or_default();
-    if content.is_empty() {
-        return;
-    }
-
-    let button_size = 18 * scale;
-    let title_height = 22 * scale;
-    let mut lines = parse_kv_lines(&content, ':');
-    set_kv_value(&mut lines, "button.width", &button_size.to_string(), ':');
-    set_kv_value(&mut lines, "button.height", &button_size.to_string(), ':');
-    set_kv_value(&mut lines, "title.height", &title_height.to_string(), ':');
-
-    let content = render_kv_lines(&lines);
-    let _ = fs::create_dir_all(
-        user_theme
-            .parent()
-            .expect("Failed to read openbox theme directory"),
-    );
-    fs::write(&user_theme, content).expect("Failed to write openbox theme file");
-}
-
 fn setup_fake_bwrap(_: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let wrapper_path = fs_root.join("usr/local/bin/bwrap");
@@ -718,10 +497,24 @@ runpy.run_path('/usr/sbin/onboard', run_name='__main__')
     None
 }
 
-fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
-    let android_app = options.android_app.clone();
+fn chroot_home_dir(fs_root: &Path, username: &str) -> PathBuf {
+    if username == "root" {
+        fs_root.join("root")
+    } else {
+        fs_root.join(format!("home/{username}"))
+    }
+}
 
+fn write_executable(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    fs::write(path, contents).expect("Failed to write executable script");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+        .expect("Failed to mark executable script");
+}
+
+fn read_android_density_dpi(android_app: AndroidApp) -> i32 {
     let mut density_dpi: i32 = 160;
     run_in_jvm(
         |env, app| {
@@ -747,80 +540,221 @@ fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
                 .l()
                 .expect("Failed to read getDisplayMetrics result");
             density_dpi = env
-                .get_field(metrics, "densityDpi", "I")
+                .get_field(&metrics, "densityDpi", "I")
                 .expect("Failed to read densityDpi")
                 .i()
                 .expect("Failed to convert densityDpi");
         },
         android_app,
     );
+    density_dpi
+}
 
-    let scale = ((density_dpi as f32) / 160.0 * 1.1).max(1.0).round() as i32;
-    let xft_dpi = scale * 96;
+/// Map Android density to a whole-number UI scale factor (same baseline as the old LXQt setup).
+fn android_ui_scale(density_dpi: i32) -> i32 {
+    ((density_dpi as f32) / 160.0 * 1.1).max(1.0).round() as i32
+}
 
-    let xresources_path = fs_root.join("root/.Xresources");
+fn setup_xfce_wayland(options: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let username = get_application_context().local_config.user.username;
+    let home_dir = chroot_home_dir(fs_root, &username);
+    let labwc_dir = home_dir.join(".config/xfce4/labwc");
+
+    let density_dpi = read_android_density_dpi(options.android_app.clone());
+    let ui_scale = android_ui_scale(density_dpi);
+    // Xft uses 96 as the default logical DPI; multiply by scale for HiDPI fonts.
+    let xft_dpi = ui_scale * 96;
+
+    // Still useful for Xwayland clients started by labwc.
+    let xresources_path = home_dir.join(".Xresources");
+    let _ = fs::create_dir_all(
+        xresources_path
+            .parent()
+            .expect("Failed to read Xresources parent directory"),
+    );
     upsert_kv_file(&xresources_path, ':', &[("Xft.dpi", xft_dpi.to_string())]);
 
-    let session_path = fs_root.join("root/.config/lxqt/session.conf");
-    let _ = fs::create_dir_all(
-        session_path
-            .parent()
-            .expect("Failed to read LXQt session.conf parent directory"),
+    // xfconf is read when xfce4-session starts; agent toggles must exist before launch
+    // (https://docs.xfce.org/xfce/xfce4-session/advanced — SSH and GPG Agents).
+    let xfconf_dir = home_dir.join(".config/xfce4/xfconf/xfce-perchannel-xml");
+    let _ = fs::create_dir_all(&xfconf_dir);
+    fs::write(
+        xfconf_dir.join("xfce4-session.xml"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+
+<channel name="xfce4-session" version="1.0">
+  <property name="startup" type="empty">
+    <property name="ssh-agent" type="empty">
+      <property name="enabled" type="bool" value="false"/>
+    </property>
+    <property name="gpg-agent" type="empty">
+      <property name="enabled" type="bool" value="false"/>
+    </property>
+  </property>
+</channel>
+"#,
+    )
+    .expect("Failed to write xfce4-session xfconf defaults");
+    fs::write(
+        xfconf_dir.join("xsettings.xml"),
+        &format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+
+<channel name="xsettings" version="1.0">
+  <property name="Xft" type="empty">
+    <property name="DPI" type="int" value="{xft_dpi}"/>
+  </property>
+</channel>
+"#
+        ),
+    )
+    .expect("Failed to write xsettings xfconf defaults");
+
+    // https://docs.xfce.org/xfce/getting-started — `startxfce4 --wayland` starts the
+    // session manager, panel, compositor (labwc), and desktop manager.
+    write_executable(
+        &fs_root.join("usr/local/bin/startxfce4-localdesktop"),
+        r#"#!/bin/sh
+exec startxfce4 --wayland "$@"
+"#,
     );
 
-    let session_content = fs::read_to_string(&session_path).unwrap_or_default();
-    let session_with_env = update_ini_section(
-        &session_content,
-        "Environment",
-        &[
-            ("GDK_SCALE", scale.to_string()),
-            ("QT_SCALE_FACTOR", scale.to_string()),
-        ],
-    );
-    let session_out = update_ini_section(
-        &session_with_env,
-        "General",
-        &[("window_manager", "openbox".to_string())],
-    );
-    fs::write(&session_path, session_out).expect("Failed to write session.conf");
+    // Runs from ~/.config/autostart once xfsettingsd is up; reinforces pre-seeded /Xft/DPI.
+    write_executable(
+        &fs_root.join("usr/local/bin/localdesktop-xfce-session-init"),
+        &format!(
+            r#"#!/bin/sh
+for _ in $(seq 1 50); do
+    xfconf-query -c xsettings -lv >/dev/null 2>&1 && break
+    sleep 0.1
+done
 
-    // lxqt-powermanagement frequently crashes in a PRoot container due to missing
-    // host power-management interfaces. Disable its autostart by default.
-    let autostart_dir = fs_root.join("root/.config/autostart");
+xfconf-query -c xsettings -p /Xft/DPI -n -t int -s {xft_dpi} 2>/dev/null || \
+xfconf-query -c xsettings -p /Xft/DPI -t int -s {xft_dpi}
+"#
+        ),
+    );
+
+    let autostart_dir = home_dir.join(".config/autostart");
     let _ = fs::create_dir_all(&autostart_dir);
-    let powermanagement_override = autostart_dir.join("lxqt-powermanagement.desktop");
-    let powermanagement_hidden = r#"[Desktop Entry]
+
+    fs::write(
+        autostart_dir.join("localdesktop-xfce-session-init.desktop"),
+        r#"[Desktop Entry]
+Version=1.0
 Type=Application
-Name=LXQt Power Management
+Name=Local Desktop Xfce Session Init
+Comment=Apply HiDPI font scaling via xfsettings
+Exec=/usr/local/bin/localdesktop-xfce-session-init
+Terminal=false
+OnlyShowIn=XFCE;
+X-GNOME-Autostart-enabled=true
+"#,
+    )
+    .expect("Failed to write Xfce session init autostart entry");
+
+    // xfce4-power-manager expects host power interfaces that proot cannot provide.
+    fs::write(
+        autostart_dir.join("xfce4-power-manager.desktop"),
+        r#"[Desktop Entry]
+Type=Application
+Name=Power Manager
 Hidden=true
-"#;
-    fs::write(&powermanagement_override, powermanagement_hidden)
-        .expect("Failed to disable lxqt-powermanagement autostart");
+OnlyShowIn=XFCE;
+"#,
+    )
+    .expect("Failed to disable xfce4-power-manager autostart");
 
-    let openbox_user_rc = fs_root.join("root/.config/openbox/rc.xml");
-    let openbox_system_rc = fs_root.join("etc/xdg/openbox/rc.xml");
-    let openbox_source = if openbox_user_rc.exists() {
-        openbox_user_rc.clone()
-    } else if openbox_system_rc.exists() {
-        openbox_system_rc
-    } else {
-        return None;
-    };
+    let _ = fs::remove_file(autostart_dir.join("localdesktop-xfce-scale.desktop"));
+    let _ = fs::remove_file(autostart_dir.join("localdesktop-wlroots-output.desktop"));
+    let _ = fs::remove_file(fs_root.join("usr/local/bin/localdesktop-xfce-scale"));
 
-    let rc_content = fs::read_to_string(&openbox_source).unwrap_or_default();
-    if !rc_content.is_empty() {
-        let (rc_out, theme_name) = update_openbox_rc(&rc_content, scale, "DejaVu Sans");
-        let _ = fs::create_dir_all(
-            openbox_user_rc
-                .parent()
-                .expect("Failed to read openbox config directory"),
-        );
-        fs::write(&openbox_user_rc, rc_out).expect("Failed to write openbox rc.xml");
+    // labwc runs wlr-randr from its autostart script once the compositor owns the output
+    // (labwc-config.5). Xfce stores labwc config under ~/.config/xfce4/labwc/.
+    write_executable(
+        &fs_root.join("usr/local/bin/localdesktop-wlroots-output"),
+        &format!(
+            r#"#!/bin/sh
+# Keep labwc's wlroots output aligned with the Android host window when possible.
+state_file="/tmp/localdesktop-output"
+lock_file="/tmp/localdesktop-wlroots-output.pid"
+fallback_mode="1280x720"
+fallback_scale="{ui_scale}"
 
-        if let Some(theme_name) = theme_name {
-            update_openbox_theme(fs_root, &theme_name, scale);
-        }
-    }
+if [ -r "$lock_file" ]; then
+    old_pid=$(cat "$lock_file" 2>/dev/null)
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+        exit 0
+    fi
+fi
+echo "$$" > "$lock_file"
+trap 'rm -f "$lock_file"' EXIT INT TERM
+
+first_output() {{
+    wlr-randr 2>/dev/null | awk 'NF > 0 && $1 !~ /^Modes:/ && $1 !~ /^Current:/ && $1 !~ /^Position:/ && $1 !~ /^Transform:/ && $1 !~ /^Scale:/ {{ print $1; exit }}'
+}}
+
+read_output_state() {{
+    target_mode="$fallback_mode"
+    target_scale="$fallback_scale"
+    if [ -r "$state_file" ]; then
+        . "$state_file"
+        target_mode="${{LOCALDESKTOP_OUTPUT_MODE:-$target_mode}}"
+        target_scale="${{LOCALDESKTOP_OUTPUT_SCALE:-$target_scale}}"
+    fi
+    case "$target_mode" in
+        *x*) ;;
+        *) target_mode="$fallback_mode" ;;
+    esac
+    case "$target_scale" in
+        ''|*[!0-9]*) target_scale="$fallback_scale" ;;
+    esac
+}}
+
+apply_output() {{
+    output="$1"
+    wlr-randr --output "$output" --custom-mode "${{target_mode}}@60Hz" --scale "$target_scale" >/dev/null 2>&1 && return 0
+    wlr-randr --output "$output" --custom-mode "$target_mode" --scale "$target_scale" >/dev/null 2>&1 && return 0
+    wlr-randr --output "$output" --mode "$target_mode" --scale "$target_scale" >/dev/null 2>&1 && return 0
+    wlr-randr --output "$output" --scale "$target_scale" >/dev/null 2>&1 && return 0
+    return 1
+}}
+
+last_config=""
+while true; do
+    read_output_state
+    output=$(first_output)
+    if [ -n "$output" ]; then
+        config="$output $target_mode $target_scale"
+        if [ "$config" != "$last_config" ] && apply_output "$output"; then
+            last_config="$config"
+        fi
+    fi
+    sleep 1
+done
+"#
+        ),
+    );
+
+    let _ = fs::create_dir_all(&labwc_dir);
+    write_executable(
+        &labwc_dir.join("autostart"),
+        r#"#!/bin/sh
+/usr/local/bin/localdesktop-wlroots-output >/tmp/localdesktop-wlroots-output.log 2>&1 &
+"#,
+    );
+
+    // Arch wiki: lock prevents startxfce4 from overwriting custom labwc environment.
+    // https://wiki.archlinux.org/title/Xfce#Using_labwc_custom_keymaps
+    fs::write(
+        labwc_dir.join("environment"),
+        "XDG_SESSION_TYPE=wayland\nXDG_CURRENT_DESKTOP=XFCE\n",
+    )
+    .expect("Failed to write labwc environment file");
+    fs::write(labwc_dir.join("lock"), "").expect("Failed to write labwc environment lock file");
+
+    let _ = fs::remove_file(home_dir.join(".config/labwc/autostart"));
 
     None
 }
@@ -897,11 +831,10 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
         Box::new(install_dependencies),         // Step 3. Install dependencies
         Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
-        Box::new(setup_qterminal_wrapper), // Step 5. Ensure qterminal launches interactive bash
-        Box::new(setup_fake_bwrap),           // Step 6. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
-        Box::new(setup_onboard_signal_fix), // Step 7. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
-        Box::new(setup_lxqt_scaling),       // Step 8. Setup LXQt HiDPI scaling
-        Box::new(fix_xkb_symlink),          // Step 9. Fix xkb symlink (last)
+        Box::new(setup_fake_bwrap), // Step 5. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
+        Box::new(setup_onboard_signal_fix), // Step 6. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
+        Box::new(setup_xfce_wayland),       // Step 7. Setup Xfce Wayland launch and HiDPI scaling
+        Box::new(fix_xkb_symlink),          // Step 8. Fix xkb symlink (last)
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {

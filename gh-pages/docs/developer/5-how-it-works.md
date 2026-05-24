@@ -5,7 +5,7 @@ title: How it works
 1. An Arch Linux ARM64 filesystem is set up inside the app's internal storage.
 2. Proot mounts the filesystem and provides a chroot-like environment.
 3. A minimal built-in Wayland compositor runs in Android NDK.
-4. Rootful Xwayland & a desktop environment launches inside the chroot and renders back to the Android native activity.
+4. Xfce 4 on Wayland launches inside the chroot as a Wayland client of the built-in compositor and renders back to the Android native activity.
 
 ## Proot
 
@@ -65,7 +65,7 @@ Remember, X11 is a protocol, Xorg is a display server. Although they are often u
 Wayland is a modern display server protocol that is designed to replace X11. And Local Desktop follows this trend. This approach has some advantages:
 
 - Wayland servers, more frequently called **compositors**, are much more efficient than X11 servers.
-- By implementing a minimal Wayland compositor, we can run Xwayland on top of it.
+- By implementing a minimal Wayland compositor, guest Wayland sessions can connect as clients. Legacy X11 applications can still run via Xwayland when a nested compositor (such as labwc) provides it.
 
 ### Xwayland
 
@@ -79,8 +79,8 @@ How Xwayland did this, you may ask? It is more obvious than you think: it acts a
 
 The magic behind Local Desktop is that:
 
-- It implements a minimal Wayland compositor that runs on an Android native activity.
-- That minimal Wayland compositor runs Xwayland.
-- Xwayland displays the UI of other applications, such as Firefox or Xfce.
+- It implements a minimal Wayland compositor that runs on an Android native activity and listens on `/tmp/wayland-0`.
+- The default Xfce session starts with `startxfce4 --wayland`, which brings up labwc as a nested compositor and connects to that socket.
+- Applications (Firefox, Thunar, the Xfce panel, and so on) render through that nested Wayland stack back to the Android window. Xwayland remains available for legacy X11-only apps when needed.
 
 Fun fact: [Termux:X11](https://github.com/termux/termux-x11) also implements a display server, but it is based on X11. Just like how Xwayland is an X11 server running on top of Wayland, Termux:X11 is an X11 server running on top of an Android activity. (And Xorg is an X11 server running on top of the Linux kernel, remember that?)

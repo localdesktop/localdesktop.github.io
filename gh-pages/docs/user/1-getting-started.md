@@ -51,11 +51,11 @@ After Xfce launches, go to _"Applications"_ > _"Accessories"_ > _"Onboard"_. Thi
 
 ![Onboard](/img/onboard.webp#boxed)
 
-## Text are too small
+## Text is too small
 
-Change the _"Window Scaling"_ setting in _"Applications"_ > _"Settings"_ > _"Appearance"_.
+Open _"Applications"_ > _"Settings"_ > _"Display"_, select your Wayland output, set _"Scale"_ to **2.00**, then click _"Apply"_.
 
-![2x Window Scaling](/img/2x-scaling.webp#boxed)
+![2× display scaling on Wayland](/img/2x-scaling.webp#boxed)
 
 ## Disable phantom process killer
 
