@@ -9,42 +9,244 @@
 
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
-/* You can override the default Infima variables here. */
+/* ------------------------------------------------------------------ */
+/* Theme tokens — light sky aurora (default)                          */
+/* ------------------------------------------------------------------ */
 :root {
-  --ifm-color-primary: #ff0000;
-  --ifm-color-primary-dark: #e00000;
-  --ifm-color-primary-darker: #d40000;
-  --ifm-color-primary-darkest: #ad0000;
-  --ifm-color-primary-light: #ff2424;
-  --ifm-color-primary-lighter: #ff3939;
-  --ifm-color-primary-lightest: #ff6666;
-  --ifm-code-font-size: 95%;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
-  --ifm-background-color: #ffffff;
+  --ld-accent: #0d9488;
+  --ld-accent-bright: #0891b2;
+  --ld-accent-soft: #059669;
+  --ld-accent-alt: #7c3aed;
+  --ld-accent-blue: #3b82f6;
+
+  --ld-ink: #0f172a;
+  --ld-muted: #64748b;
+  --ld-heading: #0f172a;
+  --ld-surface: rgba(255, 255, 255, 0.78);
+  --ld-surface-strong: rgba(255, 255, 255, 0.92);
+  --ld-chrome: rgba(255, 255, 255, 0.72);
+  --ld-border: rgba(15, 23, 42, 0.1);
+  --ld-border-accent: rgba(13, 148, 136, 0.28);
+
+  --ld-glow-1: rgba(52, 211, 153, 0.2);
+  --ld-glow-2: rgba(167, 139, 250, 0.16);
+  --ld-glow-3: rgba(34, 211, 238, 0.14);
+  --ld-glow-4: rgba(96, 165, 250, 0.1);
+  --ld-bg-linear: linear-gradient(
+    165deg,
+    #f8fafc 0%,
+    #eef2ff 28%,
+    #ecfeff 52%,
+    #f0fdf4 78%,
+    #f8fafc 100%
+  );
+
+  --ld-btn-text: #041018;
+  --ld-code-bg: rgba(13, 148, 136, 0.08);
+  --ld-pre-bg: rgba(255, 255, 255, 0.88);
+  --ld-highlight: rgba(34, 211, 238, 0.1);
+  --ld-menu-active-bg: rgba(52, 211, 153, 0.1);
+  --ld-menu-hover-bg: rgba(34, 211, 238, 0.06);
+  --ld-table-stripe: rgba(52, 211, 153, 0.04);
+  --ld-breadcrumb-active-bg: rgba(34, 211, 238, 0.08);
+  --ld-shadow-accent: rgba(13, 148, 136, 0.16);
 }
 
-/* For readability concerns, you should choose a lighter palette in dark mode. */
+/* ------------------------------------------------------------------ */
+/* Theme tokens — dark northern lights                                */
+/* ------------------------------------------------------------------ */
 html[data-theme="dark"] {
-  --ifm-color-primary: #ff4d4d;
-  --ifm-color-primary-dark: #ff2424;
-  --ifm-color-primary-darker: #ff1111;
-  --ifm-color-primary-darkest: #d60000;
-  --ifm-color-primary-light: #ff6666;
-  --ifm-color-primary-lighter: #ff7a7a;
-  --ifm-color-primary-lightest: #ffa3a3;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
-  --ifm-background-color: #000000;
-  --ifm-navbar-background-color: var(--ifm-background-color);
+  --ld-accent: #2dd4bf;
+  --ld-accent-bright: #22d3ee;
+  --ld-accent-soft: #34d399;
+  --ld-accent-alt: #a78bfa;
+  --ld-accent-blue: #60a5fa;
+
+  --ld-ink: #e8edf5;
+  --ld-muted: #94a3b8;
+  --ld-heading: #f8fafc;
+  --ld-surface: rgba(8, 16, 28, 0.82);
+  --ld-surface-strong: rgba(8, 16, 28, 0.92);
+  --ld-chrome: rgba(4, 10, 18, 0.72);
+  --ld-border: rgba(148, 163, 184, 0.18);
+  --ld-border-accent: rgba(34, 211, 238, 0.25);
+
+  --ld-glow-1: rgba(52, 211, 153, 0.22);
+  --ld-glow-2: rgba(167, 139, 250, 0.18);
+  --ld-glow-3: rgba(34, 211, 238, 0.14);
+  --ld-glow-4: rgba(96, 165, 250, 0.08);
+  --ld-bg-linear: linear-gradient(
+    165deg,
+    #030608 0%,
+    #071018 30%,
+    #0a1520 55%,
+    #060b12 100%
+  );
+
+  --ld-code-bg: rgba(34, 211, 238, 0.1);
+  --ld-pre-bg: rgba(4, 10, 18, 0.88);
+  --ld-highlight: rgba(34, 211, 238, 0.12);
+  --ld-menu-active-bg: rgba(52, 211, 153, 0.12);
+  --ld-menu-hover-bg: rgba(34, 211, 238, 0.08);
+  --ld-table-stripe: rgba(52, 211, 153, 0.05);
+  --ld-breadcrumb-active-bg: rgba(34, 211, 238, 0.1);
+  --ld-shadow-accent: rgba(34, 211, 238, 0.16);
 }
 
+/* ------------------------------------------------------------------ */
+/* Infima mapping (shared)                                            */
+/* ------------------------------------------------------------------ */
+:root,
+html[data-theme="dark"] {
+  --ifm-color-primary: var(--ld-accent);
+  --ifm-color-primary-dark: var(--ld-accent);
+  --ifm-color-primary-darker: var(--ld-accent-soft);
+  --ifm-color-primary-darkest: var(--ld-accent-soft);
+  --ifm-color-primary-light: var(--ld-accent-bright);
+  --ifm-color-primary-lighter: var(--ld-accent-bright);
+  --ifm-color-primary-lightest: var(--ld-accent-bright);
+
+  --ifm-background-color: transparent;
+  --ifm-background-surface-color: var(--ld-surface);
+  --ifm-font-color-base: var(--ld-ink);
+  --ifm-font-color-secondary: var(--ld-muted);
+  --ifm-heading-color: var(--ld-heading);
+
+  --ifm-link-color: var(--ld-accent-bright);
+  --ifm-link-hover-color: var(--ld-accent-soft);
+  --ifm-link-decoration: none;
+  --ifm-link-hover-decoration: underline;
+
+  --ifm-navbar-background-color: var(--ld-chrome);
+  --ifm-navbar-link-color: var(--ld-ink);
+  --ifm-navbar-link-hover-color: var(--ld-accent-bright);
+  --ifm-navbar-shadow: 0 1px 0 var(--ld-border-accent);
+
+  --ifm-menu-color: var(--ld-muted);
+  --ifm-menu-color-active: var(--ld-accent-soft);
+  --ifm-menu-color-background-active: var(--ld-menu-active-bg);
+  --ifm-menu-color-background-hover: var(--ld-menu-hover-bg);
+
+  --ifm-toc-link-color: var(--ld-muted);
+  --ifm-toc-link-active-color: var(--ld-accent-bright);
+  --ifm-toc-border-color: var(--ld-border-accent);
+
+  --ifm-hr-border-color: var(--ld-border-accent);
+  --ifm-table-border-color: var(--ld-border);
+  --ifm-table-stripe-background: var(--ld-table-stripe);
+
+  --ifm-code-background: var(--ld-code-bg);
+  --ifm-code-border-radius: 4px;
+  --ifm-code-font-size: 95%;
+  --ifm-pre-background: var(--ld-pre-bg);
+  --ifm-pre-border-radius: 8px;
+
+  --ifm-card-background-color: var(--ld-surface);
+  --ifm-card-border-color: var(--ld-border-accent);
+
+  --ifm-footer-background-color: var(--ld-chrome);
+  --ifm-footer-color: var(--ld-ink);
+  --ifm-footer-link-color: var(--ld-accent-bright);
+  --ifm-footer-link-hover-color: var(--ld-accent-soft);
+  --ifm-footer-title-color: var(--ld-heading);
+
+  --ifm-button-border-color: var(--ld-accent);
+  --ifm-breadcrumb-color-active: var(--ld-accent-bright);
+  --ifm-breadcrumb-item-background-active: var(--ld-breadcrumb-active-bg);
+
+  --docusaurus-highlighted-code-line-bg: var(--ld-highlight);
+}
+
+/* ------------------------------------------------------------------ */
+/* Layout polish (shared)                                             */
+/* ------------------------------------------------------------------ */
+html {
+  background:
+    radial-gradient(ellipse 90% 55% at 12% 8%, var(--ld-glow-1), transparent 58%),
+    radial-gradient(ellipse 75% 50% at 88% 12%, var(--ld-glow-2), transparent 52%),
+    radial-gradient(ellipse 85% 55% at 55% 100%, var(--ld-glow-3), transparent 58%),
+    radial-gradient(ellipse 60% 40% at 70% 55%, var(--ld-glow-4), transparent 50%),
+    var(--ld-bg-linear);
+  background-attachment: fixed;
+}
+
+body {
+  background: transparent;
+}
+
+.navbar,
 .footer--dark {
-  --ifm-footer-background-color: var(--ifm-background-color);
-  --ifm-footer-color: var(--ifm-heading-color);
-  --ifm-footer-link-color: var(--ifm-link-color);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.theme-doc-sidebar-container,
+.theme-doc-toc-desktop,
+.table-of-contents {
+  background: transparent;
+}
+
+.menu__link--active:not(.menu__link--sublist) {
+  border-left: 2px solid var(--ld-accent-soft);
+}
+
+.button--primary {
+  border: none;
+  background: linear-gradient(
+    135deg,
+    var(--ld-accent) 0%,
+    var(--ld-accent-bright) 45%,
+    var(--ld-accent-alt) 100%
+  );
+  color: var(--ld-btn-text);
+  font-weight: 700;
+}
+
+.button--primary:hover,
+.button--primary:focus {
+  background: linear-gradient(
+    135deg,
+    var(--ld-accent-soft) 0%,
+    var(--ld-accent-bright) 50%,
+    var(--ld-accent-blue) 100%
+  );
+  color: var(--ld-btn-text);
+}
+
+.pagination-nav__link {
+  border-color: var(--ld-border-accent);
+  background: var(--ld-surface);
+}
+
+.pagination-nav__link:hover {
+  border-color: var(--ld-accent-bright);
+}
+
+.alert {
+  --ifm-alert-background-color: var(--ld-surface);
+  --ifm-alert-border-color: var(--ld-border-accent);
+}
+
+.alert--info {
+  --ifm-alert-background-color: var(--ld-highlight);
+  --ifm-alert-border-color: var(--ld-border-accent);
+  --ifm-alert-color: var(--ld-accent-bright);
+}
+
+.alert--success {
+  --ifm-alert-background-color: var(--ld-menu-active-bg);
+  --ifm-alert-border-color: color-mix(in srgb, var(--ld-accent-soft) 35%, transparent);
+  --ifm-alert-color: var(--ld-accent-soft);
+}
+
+.alert--warning {
+  --ifm-alert-background-color: color-mix(in srgb, var(--ld-accent-alt) 10%, transparent);
+  --ifm-alert-border-color: color-mix(in srgb, var(--ld-accent-alt) 35%, transparent);
+  --ifm-alert-color: var(--ld-accent-alt);
 }
 
 img[src$="#boxed"] {
-  border: 1px solid #ebebeb;
+  border: 1px solid var(--ld-border);
   border-radius: 8px;
   max-width: 80%;
 }

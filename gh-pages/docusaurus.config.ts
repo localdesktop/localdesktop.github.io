@@ -6,6 +6,7 @@ import type * as Preset from "@docusaurus/preset-classic";
 
 const downloadUrl = "https://github.com/localdesktop/localdesktop.github.io/releases";
 const repositoryUrl = "https://github.com/localdesktop/localdesktop.github.io";
+const isProd = process.env.NODE_ENV === "production";
 
 const config: Config = {
   title: "Local Desktop | Linux on Android",
@@ -63,9 +64,6 @@ const config: Config = {
         },
         theme: {
           customCss: "./src/css/custom.css",
-        },
-        gtag: {
-          trackingID: "G-0NQ9P761VB",
         },
         sitemap: {
           changefreq: "always",
@@ -147,11 +145,19 @@ const config: Config = {
       darkTheme: prismThemes.dracula,
     },
     mermaid: {
-      theme: { light: "forest" },
+      theme: { light: "neutral", dark: "dark" },
     },
   } satisfies Preset.ThemeConfig,
 
   plugins: [
+    ...(isProd
+      ? [
+          [
+            "@docusaurus/plugin-google-gtag",
+            { trackingID: "G-0NQ9P761VB" },
+          ] as const,
+        ]
+      : []),
     [
       "@gracefullight/docusaurus-plugin-microsoft-clarity",
       { projectId: "r0gcnlvoyw" },
