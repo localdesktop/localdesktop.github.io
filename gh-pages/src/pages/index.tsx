@@ -413,36 +413,10 @@ export default function Home(): ReactNode {
 
 const homeStyles = `
 .ldHome {
-  --ld-red: #ff0000;
-  --ld-ink: #0f1117;
-  --ld-muted: rgba(15, 17, 23, 0.68);
-  --ld-panel: rgba(255, 255, 255, 0.78);
-  --ld-panel-strong: rgba(255, 255, 255, 0.94);
-  --ld-line: rgba(15, 17, 23, 0.14);
-  --ld-grid: rgba(255, 0, 0, 0.13);
   min-height: 100vh;
-  background:
-    linear-gradient(var(--ld-grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--ld-grid) 1px, transparent 1px),
-    radial-gradient(circle at 76% 16%, rgba(255, 0, 0, 0.16), transparent 34%),
-    linear-gradient(180deg, #ffffff 0%, #f5f5f5 48%, #eceff3 100%);
-  background-size: 34px 34px, 34px 34px, auto, auto;
+  background: transparent;
   color: var(--ld-ink);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-}
-
-html[data-theme="dark"] .ldHome {
-  --ld-ink: #f8fafc;
-  --ld-muted: rgba(248, 250, 252, 0.72);
-  --ld-panel: rgba(8, 10, 15, 0.72);
-  --ld-panel-strong: rgba(8, 10, 15, 0.92);
-  --ld-line: rgba(248, 250, 252, 0.16);
-  --ld-grid: rgba(255, 0, 0, 0.15);
-  background:
-    linear-gradient(var(--ld-grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--ld-grid) 1px, transparent 1px),
-    radial-gradient(circle at 76% 16%, rgba(255, 0, 0, 0.24), transparent 34%),
-    linear-gradient(180deg, #050608 0%, #0b0d12 52%, #101318 100%);
 }
 .ldHero {
   display: flex;
@@ -462,7 +436,7 @@ html[data-theme="dark"] .ldHome {
 }
 
 .ldPrompt {
-  color: var(--ld-red);
+  color: var(--ld-accent-bright);
   font-size: 0.84rem;
   font-weight: 800;
   line-height: 1.45;
@@ -483,7 +457,7 @@ html[data-theme="dark"] .ldHome {
   font-size: clamp(3.3rem, 7vw, 5.8rem);
   line-height: 0.86;
   text-transform: uppercase;
-  text-shadow: 3px 3px 0 rgba(255, 0, 0, 0.18);
+  text-shadow: 3px 3px 0 var(--ld-shadow-accent);
 }
 
 .ldHeroText {
@@ -507,17 +481,9 @@ html[data-theme="dark"] .ldHome {
   font-weight: 900;
 }
 
-.ldHome .button--primary,
-.ldHome .button--primary:hover,
-.ldHome .button--primary:focus {
-  border-color: var(--ld-red);
-  background: var(--ld-red);
-  color: #ffffff;
-}
-
 .ldHome .button--secondary {
-  border-color: var(--ld-line);
-  background: var(--ld-panel);
+  border-color: var(--ld-border);
+  background: var(--ld-surface);
   color: var(--ld-ink);
 }
 
@@ -537,19 +503,19 @@ html[data-theme="dark"] .ldHome {
   gap: 1px;
   width: min(1180px, calc(100% - 36px));
   margin: clamp(28px, 5vw, 56px) auto 0;
-  border: 1px solid var(--ld-line);
-  background: var(--ld-line);
+  border: 1px solid var(--ld-border);
+  background: var(--ld-border);
 }
 
 .ldSpec {
   padding: 20px;
-  background: var(--ld-panel-strong);
+  background: var(--ld-surface-strong);
 }
 
 .ldSpec span,
 .ldPostGrid span {
   display: block;
-  color: var(--ld-red);
+  color: var(--ld-accent-bright);
   font-size: 0.76rem;
   font-weight: 900;
   text-transform: uppercase;
@@ -598,7 +564,7 @@ html[data-theme="dark"] .ldHome {
 }
 
 .ldSectionHeader a {
-  color: var(--ld-red);
+  color: var(--ld-accent-bright);
   font-weight: 900;
 }
 
@@ -610,9 +576,9 @@ html[data-theme="dark"] .ldHome {
 
 .ldFeaturedPost,
 .ldPostItem {
-  border: 1px solid var(--ld-line);
+  border: 1px solid var(--ld-border);
   border-radius: 8px;
-  background: var(--ld-panel-strong);
+  background: var(--ld-surface-strong);
   color: var(--ld-ink);
   overflow: hidden;
   text-decoration: none;
@@ -621,11 +587,11 @@ html[data-theme="dark"] .ldHome {
 
 .ldFeaturedPost:hover,
 .ldPostItem:hover {
-  border-color: var(--ld-red);
+  border-color: var(--ld-accent-bright);
   color: var(--ld-ink);
   text-decoration: none;
   transform: translateY(-3px);
-  box-shadow: 0 20px 54px rgba(255, 0, 0, 0.16);
+  box-shadow: 0 20px 54px var(--ld-shadow-accent);
 }
 
 .ldFeaturedPost {
