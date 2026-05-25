@@ -235,20 +235,22 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
             ("h", 72),
             ("xh", 96),
             ("xxh", 144),
-            ("xxh", 192),
-            ("xxxh", 256),
+            ("xxxh", 192),
         ];
         for (name, size) in dpis {
             let dir_name = format!("mipmap-{}dpi", name);
             let dir = res.join(dir_name);
             std::fs::create_dir_all(&dir)?;
+            let opts = xcommon::ScalerOptsBuilder::new(size, size).build();
+            // Pre-API 26 devices cannot use adaptive icons (mipmap-anydpi-v26).
+            {
+                let mut icon = std::fs::File::create(dir.join("ic_launcher.png"))?;
+                scaler.write(&mut icon, opts)?;
+            }
             for variant in ["foreground", "monochrome"] {
                 let mut icon =
                     std::fs::File::create(dir.join(format!("ic_launcher_{}.png", variant)))?;
-                scaler.write(
-                    &mut icon,
-                    xcommon::ScalerOptsBuilder::new(size, size).build(),
-                )?;
+                scaler.write(&mut icon, opts)?;
             }
         }
         manifest.application.icon = Some("@mipmap/ic_launcher".into());

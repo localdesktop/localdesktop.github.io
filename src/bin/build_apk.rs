@@ -399,8 +399,12 @@ pub mod apk {
         if has_android_code {
             app.has_code = Some(true);
         }
-        if wry && app.theme.is_none() {
-            app.theme = Some("@style/Theme.AppCompat.Light.NoActionBar".into());
+        if app.theme.is_none() {
+            app.theme = Some(if wry {
+                "@style/Theme.AppCompat.Light.NoActionBar".into()
+            } else {
+                "@android:style/Theme.Light.NoTitleBar".into()
+            });
         }
         if app.activities.is_empty() {
             app.activities.push(Activity::default());
