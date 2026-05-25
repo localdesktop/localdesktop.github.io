@@ -1,4 +1,5 @@
-import React, { type ReactNode } from "react";
+import React, { type ReactNode, useEffect } from "react";
+import clsx from "clsx";
 import Link from "@docusaurus/Link";
 import Head from "@docusaurus/Head";
 import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
@@ -8,6 +9,7 @@ import config from "@site/docusaurus.config";
 import AudienceChart from "../components/audience-chart";
 import HomeDarkModeEnforcer from "../components/home-dark-mode-enforcer";
 import LatestNews from "../components/latest-news";
+import { setChartInteractive, useChartInteractive } from "../hooks/use-chart-interactive";
 
 type FeatureItem = {
   title: string;
@@ -65,6 +67,26 @@ function Feature({ title, description }: FeatureItem) {
 export default function Home(): ReactNode {
   const { siteConfig } = useDocusaurusContext();
   const repositoryUrl = config.customFields.repositoryUrl as string;
+  const chartInteractive = useChartInteractive();
+
+  useEffect(() => {
+    return () => setChartInteractive(false);
+  }, []);
+
+  useEffect(() => {
+    if (!chartInteractive) {
+      return undefined;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setChartInteractive(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [chartInteractive]);
 
   return (
     <Layout title="Home" description={siteConfig.tagline}>
@@ -105,12 +127,21 @@ export default function Home(): ReactNode {
       </Head>
 
       <div className="home">
-        <div className="home-bg" aria-hidden="true">
+        <div
+          className={clsx("home-bg", chartInteractive && "home-bg--interactive")}
+          aria-hidden={chartInteractive ? undefined : "true"}
+        >
+          <button
+            type="button"
+            className="home-bg__scrim"
+            aria-label="Close audience map"
+            tabIndex={chartInteractive ? 0 : -1}
+            onClick={() => setChartInteractive(false)}
+          />
           <AudienceChart />
-          <div className="home-bg__scrim" />
         </div>
 
-        <div className="home-foreground">
+        <div className={clsx("home-foreground", chartInteractive && "home-foreground--inactive")}>
           <section className="home-hero">
             <div className="home-hero__inner">
               <Heading as="h1" className="home-hero__title">
