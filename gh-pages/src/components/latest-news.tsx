@@ -1,16 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Feed, Item } from "../types";
 
-const pastelColors = [
-  "bg-red-50 dark:bg-red-950",
-  "bg-yellow-50 dark:bg-yellow-950",
-  "bg-green-50 dark:bg-green-950",
-  "bg-blue-50 dark:bg-blue-950",
-  "bg-purple-50 dark:bg-purple-950",
-  "bg-pink-50 dark:bg-pink-950",
-  "bg-indigo-50 dark:bg-indigo-950",
-];
-
 export default function LatestNews() {
   const [posts, setPosts] = useState<Item[]>([]);
 
@@ -41,9 +31,7 @@ export default function LatestNews() {
               {/* Left: Featured latest post */}
               <div className="flex-grow lg:flex-shrink-0 lg:basis-[640px] overflow-hidden">
                 <article
-                  className={`p-6 rounded-2xl h-full space-y-2 ${
-                    pastelColors[0 % pastelColors.length]
-                  }`}
+                  className="p-6 h-full space-y-2"
                 >
                   <h3 className="text-2xl font-semibold">
                     <a href={posts[0].url}>{posts[0].title}</a>
@@ -75,9 +63,7 @@ export default function LatestNews() {
                   >
                     <article
                       key={post.id}
-                      className={`p-4 rounded-2xl ${
-                        pastelColors[(i + 1) % pastelColors.length]
-                      }`}
+                      className="p-4"
                     >
                       <h4 className="text-lg font-semibold">{post.title}</h4>
                       <p className="text-sm opacity-50 !mb-0">
