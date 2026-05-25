@@ -162,6 +162,10 @@ impl Config {
             application
                 .theme
                 .get_or_insert_with(|| "@style/Theme.AppCompat.Light.NoActionBar".into());
+        } else {
+            application.theme.get_or_insert_with(|| {
+                "@android:style/Theme.Light.NoTitleBar".into()
+            });
         }
         application
             .debuggable
