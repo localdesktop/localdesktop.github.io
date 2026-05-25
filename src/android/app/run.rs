@@ -5,7 +5,8 @@ use crate::android::{
     accessibility::{self, AppUserEvent},
     backend::{
         wayland::{
-            bind, centralize, centralize_injected_keyboard, handle, CentralizedEvent, State,
+            bind, centralize, centralize_injected_keyboard, handle, write_guest_output_state,
+            CentralizedEvent, State,
         },
         webview::ErrorVariant,
     },
@@ -14,7 +15,9 @@ use crate::android::{
 };
 use crate::core::config;
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::utils::Transform;
+use smithay::wayland::shell::xdg::ToplevelSurface;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
@@ -60,6 +63,21 @@ fn configure_output(backend: &mut crate::android::backend::wayland::WaylandBacke
         Some(Scale::Fractional(scale_factor)),
         Some((0, 0).into()),
     );
+
+    let guest_scale = scale_factor.round().max(1.0) as i32;
+    write_guest_output_state(window_size.w, window_size.h, guest_scale);
+
+    for surface in backend.compositor.state.xdg_shell_state.toplevel_surfaces() {
+        configure_toplevel(surface, window_size.w, window_size.h);
+    }
+}
+
+fn configure_toplevel(surface: &ToplevelSurface, width: i32, height: i32) {
+    surface.with_pending_state(|state| {
+        state.size.replace((width, height).into());
+        state.states.set(xdg_toplevel::State::Activated);
+    });
+    surface.send_configure();
 }
 
 impl ApplicationHandler<AppUserEvent> for PolarBearApp {

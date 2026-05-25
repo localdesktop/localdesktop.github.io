@@ -4,7 +4,10 @@ mod event_centralizer;
 mod event_handler;
 mod input;
 mod keymap;
+mod output_state;
 mod winit_backend;
+
+pub use output_state::write_guest_output_state;
 
 pub use compositor::{Compositor, State};
 pub use event_centralizer::{centralize, centralize_injected_keyboard, CentralizedEvent};

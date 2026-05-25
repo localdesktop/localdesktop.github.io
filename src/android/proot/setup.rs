@@ -672,14 +672,16 @@ OnlyShowIn=XFCE;
 
     // labwc runs wlr-randr from its autostart script once the compositor owns the output
     // (labwc-config.5). Xfce stores labwc config under ~/.config/xfce4/labwc/.
+    //
+    // Host geometry is written to /tmp/localdesktop-output by the Android compositor before
+    // launch; the script waits for that file instead of applying a hardcoded fallback mode.
     write_executable(
         &fs_root.join("usr/local/bin/localdesktop-wlroots-output"),
         &format!(
             r#"#!/bin/sh
-# Keep labwc's wlroots output aligned with the Android host window when possible.
+# Keep labwc's wlroots output aligned with the Android host window.
 state_file="/tmp/localdesktop-output"
 lock_file="/tmp/localdesktop-wlroots-output.pid"
-fallback_mode="1280x720"
 fallback_scale="{ui_scale}"
 
 if [ -r "$lock_file" ]; then
@@ -696,16 +698,16 @@ first_output() {{
 }}
 
 read_output_state() {{
-    target_mode="$fallback_mode"
+    target_mode=""
     target_scale="$fallback_scale"
     if [ -r "$state_file" ]; then
         . "$state_file"
-        target_mode="${{LOCALDESKTOP_OUTPUT_MODE:-$target_mode}}"
+        target_mode="${{LOCALDESKTOP_OUTPUT_MODE:-}}"
         target_scale="${{LOCALDESKTOP_OUTPUT_SCALE:-$target_scale}}"
     fi
     case "$target_mode" in
         *x*) ;;
-        *) target_mode="$fallback_mode" ;;
+        *) return 1 ;;
     esac
     case "$target_scale" in
         ''|*[!0-9]*) target_scale="$fallback_scale" ;;
@@ -723,7 +725,10 @@ apply_output() {{
 
 last_config=""
 while true; do
-    read_output_state
+    if ! read_output_state; then
+        sleep 0.2
+        continue
+    fi
     output=$(first_output)
     if [ -n "$output" ]; then
         config="$output $target_mode $target_scale"
@@ -738,6 +743,18 @@ done
     );
 
     let _ = fs::create_dir_all(&labwc_dir);
+    // Nested on our compositor: reuse the parent wl_output mode when possible (labwc-config.5).
+    fs::write(
+        labwc_dir.join("rc.xml"),
+        r#"<?xml version="1.0"?>
+<labwc_config>
+  <core>
+    <reuseOutputMode>yes</reuseOutputMode>
+  </core>
+</labwc_config>
+"#,
+    )
+    .expect("Failed to write labwc rc.xml defaults");
     write_executable(
         &labwc_dir.join("autostart"),
         r#"#!/bin/sh
