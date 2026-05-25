@@ -2,7 +2,7 @@ use crate::android::{
     accessibility,
     backend::wayland::{
         compositor::{send_frames_surface_tree, ClientState, State},
-        CentralizedEvent, WaylandBackend,
+        write_guest_output_state, CentralizedEvent, WaylandBackend,
     },
 };
 use smithay::backend::renderer::element::surface::{
@@ -236,18 +236,22 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
             _ => {}
         },
         CentralizedEvent::Resized { size, scale_factor } => {
+            backend.compositor.state.size = (size.w, size.h).into();
+
             if let Some(output) = &backend.compositor.output {
-                // set the preferred mode
                 output.change_current_state(
                     Some(Mode {
                         size: size.into(),
                         refresh: 60000,
-                    }), // the resolution mode,
-                    Some(Transform::Normal), // global screen transformation
-                    Some(Scale::Fractional(scale_factor)), // global screen scaling factor
-                    Some((0, 0).into()),     // output position
+                    }),
+                    Some(Transform::Normal),
+                    Some(Scale::Fractional(scale_factor)),
+                    Some((0, 0).into()),
                 );
             }
+
+            let guest_scale = scale_factor.round().max(1.0) as i32;
+            write_guest_output_state(size.w, size.h, guest_scale);
 
             if let Some(surface) = get_surface(&backend.compositor.state) {
                 surface.xdg_toplevel().configure(size.w, size.h, vec![]);

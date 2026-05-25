@@ -1,4 +1,4 @@
-import React, { type ReactNode, useEffect, useMemo, useState } from "react";
+import React, { type ReactNode } from "react";
 import Link from "@docusaurus/Link";
 import Head from "@docusaurus/Head";
 import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
@@ -7,15 +7,7 @@ import Heading from "@theme/Heading";
 import config from "@site/docusaurus.config";
 import AudienceChart from "../components/audience-chart";
 import HomeDarkModeEnforcer from "../components/home-dark-mode-enforcer";
-import type { Feed, Item } from "../types";
-
-type BlogPost = {
-  title: string;
-  summary: string;
-  url: string;
-  date: string;
-  image: string;
-};
+import LatestNews from "../components/latest-news";
 
 type FeatureItem = {
   title: string;
@@ -59,92 +51,6 @@ const FEATURES: FeatureItem[] = [
   },
 ];
 
-const FALLBACK_POSTS: BlogPost[] = [
-  {
-    title: "Googlebook makes Local Desktop more useful",
-    summary: "A look at how Android desktop hardware makes local Linux workflows more practical.",
-    url: "/blog/2026/05/13/googlebook-and-local-desktop",
-    date: "2026-05-13",
-    image: "/img/blog/googlebook-cast-my-apps.webp",
-  },
-  {
-    title: "A Big Thank You to Our New Contributors",
-    summary: "Recent contributor work, project momentum, and what changed in Local Desktop.",
-    url: "/blog/2026/04/07/thank-you-new-contributors",
-    date: "2026-04-07",
-    image: "/img/blog/thank-you-new-contributors.png",
-  },
-  {
-    title: "Anyone Can Code",
-    summary: "Project notes on coding from Android, modern tooling, and building in public.",
-    url: "/blog/2026/02/28/anyone-can-code",
-    date: "2026-02-28",
-    image: "/img/blog/anyone-can-code.webp",
-  },
-];
-
-const POST_IMAGE_BY_SLUG: Record<string, string> = {
-  "googlebook-and-local-desktop": "/img/blog/googlebook-cast-my-apps.webp",
-  "thank-you-new-contributors": "/img/blog/thank-you-new-contributors.png",
-  "anyone-can-code": "/img/blog/anyone-can-code.webp",
-  "thank-you-for-1000-github-stars": "/img/blog/personal-pain.jpg",
-  "kde-support": "/img/kde.webp",
-  "built-in-gui-linux-support-on-android-canary": "/img/blog/codex-on-termux.webp",
-};
-
-function stripHtml(value?: string) {
-  return (value || "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
-}
-
-function postSlug(url: string) {
-  return url.split("/").filter(Boolean).pop() || "";
-}
-
-function normalizePost(post: Item, fallback: BlogPost): BlogPost {
-  const slug = postSlug(post.url);
-
-  return {
-    title: post.title || fallback.title,
-    summary: stripHtml(post.summary || post.content_html).slice(0, 150) || fallback.summary,
-    url: post.url || fallback.url,
-    date: String(post.date_modified || fallback.date).slice(0, 10),
-    image: POST_IMAGE_BY_SLUG[slug] || fallback.image,
-  };
-}
-
-function useLatestPosts() {
-  const [posts, setPosts] = useState<BlogPost[]>(FALLBACK_POSTS);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    fetch("/blog/feed.json")
-      .then<Feed>((res) => res.json())
-      .then((data) => {
-        if (cancelled) {
-          return;
-        }
-
-        const latest = (data.items || []).map((post, index) =>
-          normalizePost(post, FALLBACK_POSTS[index] || FALLBACK_POSTS[0]),
-        );
-
-        setPosts(latest.length ? latest : FALLBACK_POSTS);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPosts(FALLBACK_POSTS);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return posts;
-}
-
 function Feature({ title, description }: FeatureItem) {
   return (
     <div className="home-feature">
@@ -156,26 +62,8 @@ function Feature({ title, description }: FeatureItem) {
   );
 }
 
-function BlogCard({ post, featured = false }: { post: BlogPost; featured?: boolean }) {
-  return (
-    <Link to={post.url} className={`home-post-card${featured ? " home-post-card--featured" : ""}`}>
-      <img src={post.image} alt="" className="home-post-card__image" loading="lazy" />
-      <div className="home-post-card__body">
-        <p className="home-post-card__meta">{post.date}</p>
-        <Heading as={featured ? "h3" : "h4"} className="home-post-card__title">
-          {post.title}
-        </Heading>
-        {featured && <p className="home-post-card__summary">{post.summary}</p>}
-      </div>
-    </Link>
-  );
-}
-
 export default function Home(): ReactNode {
   const { siteConfig } = useDocusaurusContext();
-  const posts = useLatestPosts();
-  const featuredPost = posts[0];
-  const secondaryPosts = useMemo(() => posts.slice(1), [posts]);
   const repositoryUrl = config.customFields.repositoryUrl as string;
 
   return (
@@ -268,22 +156,7 @@ export default function Home(): ReactNode {
             </blockquote>
           </section>
 
-          <section className="home-section" aria-labelledby="latest-news">
-            <div className="home-section__header home-section__header--center">
-              <Heading as="h2" id="latest-news">
-                <Link to="/blog">Latest News</Link>
-              </Heading>
-            </div>
-
-            <div className="home-blog-grid">
-              <BlogCard post={featuredPost} featured />
-              <div className="home-post-list">
-                {secondaryPosts.map((post) => (
-                  <BlogCard post={post} key={post.url} />
-                ))}
-              </div>
-            </div>
-          </section>
+          <LatestNews />
         </div>
       </div>
     </Layout>
