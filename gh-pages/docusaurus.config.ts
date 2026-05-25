@@ -184,6 +184,9 @@ const config: Config = {
     downloadUrl,
     repositoryUrl,
     emailCollectForm: "https://forms.gle/UDrYH9xwhznT2u8Y9",
+    // Landing page only — always the dark-themed Looker report (docs keep light/dark toggle).
+    audienceChartEmbedUrlDark:
+      "https://lookerstudio.google.com/embed/reporting/adb676dc-c6b1-4161-a995-ec93d008ab79/page/JoHzF",
   },
 };
 

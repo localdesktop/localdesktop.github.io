@@ -49,7 +49,6 @@
   --ld-menu-hover-bg: rgba(34, 211, 238, 0.06);
   --ld-table-stripe: rgba(52, 211, 153, 0.04);
   --ld-breadcrumb-active-bg: rgba(34, 211, 238, 0.08);
-  --ld-shadow-accent: rgba(13, 148, 136, 0.16);
 }
 
 /* ------------------------------------------------------------------ */
@@ -90,7 +89,6 @@ html[data-theme="dark"] {
   --ld-menu-hover-bg: rgba(34, 211, 238, 0.08);
   --ld-table-stripe: rgba(52, 211, 153, 0.05);
   --ld-breadcrumb-active-bg: rgba(34, 211, 238, 0.1);
-  --ld-shadow-accent: rgba(34, 211, 238, 0.16);
 }
 
 /* ------------------------------------------------------------------ */
@@ -144,8 +142,8 @@ html[data-theme="dark"] {
   --ifm-card-background-color: var(--ld-surface);
   --ifm-card-border-color: var(--ld-border-accent);
 
-  --ifm-footer-background-color: var(--ld-chrome);
-  --ifm-footer-color: var(--ld-ink);
+  --ifm-footer-background-color: transparent;
+  --ifm-footer-color: var(--ld-muted);
   --ifm-footer-link-color: var(--ld-accent-bright);
   --ifm-footer-link-hover-color: var(--ld-accent-soft);
   --ifm-footer-title-color: var(--ld-heading);
@@ -174,10 +172,54 @@ body {
   background: transparent;
 }
 
-.navbar,
-.footer--dark {
+.navbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--ifm-z-index-fixed);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
+}
+
+html:has(.home) .navbar,
+html.home-force-dark .navbar {
+  z-index: calc(var(--ifm-z-index-fixed) + 1);
+}
+
+.footer {
+  background: transparent;
+  border-top: 1px solid color-mix(in srgb, var(--ld-border) 70%, transparent);
+}
+
+.footer.footer--dark {
+  --ifm-footer-background-color: transparent;
+  --ifm-footer-color: var(--ld-muted);
+  --ifm-footer-link-color: var(--ld-accent-bright);
+  --ifm-footer-link-hover-color: var(--ld-accent-soft);
+  --ifm-footer-title-color: var(--ld-heading);
+}
+
+.footer__link-item {
+  color: var(--ifm-footer-link-color);
+  font-weight: 600;
+}
+
+.footer__copyright {
+  color: var(--ifm-footer-color);
+  font-size: 0.875rem;
+}
+
+/* Landing page footer sits over the map — boost contrast. */
+html:has(.home) .footer {
+  position: relative;
+  z-index: 2;
+  --ifm-footer-color: #cbd5e1;
+  --ifm-footer-link-color: #5eead4;
+  --ifm-footer-link-hover-color: #99f6e4;
+}
+
+html:has(.home) .footer__link-item,
+html:has(.home) .footer__copyright {
+  text-shadow: 0 1px 3px rgba(4, 8, 16, 0.75);
 }
 
 .theme-doc-sidebar-container,
@@ -253,4 +295,297 @@ img[src$="#boxed"] {
 
 p:has(img[src$="#boxed"]) {
   text-align: center;
+}
+
+/* ------------------------------------------------------------------ */
+/* Home page                                                        */
+/* ------------------------------------------------------------------ */
+:root {
+  --home-max-width: 68rem;
+  --home-section-y: clamp(1.75rem, 3.5vw, 2.75rem);
+}
+
+.home {
+  position: relative;
+  color: var(--ifm-font-color-base);
+}
+
+.home-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Landing page is always dark; chart uses the dark Looker report. */
+.home-bg__scrim {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, #040810 38%, transparent);
+}
+
+/* Hide theme toggle on landing page — collapse wrapper so navbar stays aligned. */
+html.home-force-dark [class*="colorModeToggle"],
+html:has(.home) [class*="colorModeToggle"],
+html.home-force-dark .navbar-sidebar__brand > :has(button[aria-label*="Switch between dark and light mode"]),
+html:has(.home) .navbar-sidebar__brand > :has(button[aria-label*="Switch between dark and light mode"]) {
+  display: none;
+}
+
+.home-foreground {
+  position: relative;
+  z-index: 1;
+}
+
+.audience-chart__iframe {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100vw;
+  height: 100vh;
+  min-width: 100%;
+  min-height: 100%;
+  border: 0;
+  transform: translate(-50%, -50%) scale(1.08);
+  transform-origin: center center;
+  overflow: hidden;
+}
+
+.home-hero {
+  padding: clamp(2.75rem, 5vw, 4rem) 1.25rem clamp(1.5rem, 3vw, 2rem);
+  text-align: center;
+}
+
+.home-hero__inner {
+  max-width: var(--home-max-width);
+  margin: 0 auto;
+}
+
+.home-hero__title {
+  margin: 0;
+  font-size: clamp(2.25rem, 5vw, 3.5rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+.home-hero__subtitle {
+  max-width: 36rem;
+  margin: 0.65rem auto 0;
+  color: var(--ifm-font-color-secondary);
+  font-size: clamp(0.98rem, 1.8vw, 1.12rem);
+  line-height: 1.55;
+}
+
+.home-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.65rem;
+  margin-top: 1.25rem;
+}
+
+.home .button--secondary {
+  background: color-mix(in srgb, #040810 42%, transparent);
+  border-color: color-mix(in srgb, #5eead4 65%, transparent);
+  color: #f8fafc;
+  font-weight: 600;
+}
+
+.home .button--secondary:hover,
+.home .button--secondary:focus {
+  background: color-mix(in srgb, #040810 62%, transparent);
+  border-color: #5eead4;
+  color: #ffffff;
+}
+
+.home-features {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1.25rem;
+}
+
+.home-feature {
+  text-align: center;
+}
+
+.home-feature__title {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+
+.home-feature__description {
+  margin: 0;
+  color: var(--ifm-font-color-secondary);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.home-quote {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding-left: 1.25rem;
+  border-left: 4px solid color-mix(in srgb, var(--ld-accent-bright) 55%, transparent);
+  color: #cbd5e1;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(0.98rem, 1.6vw, 1.05rem);
+  line-height: 1.65;
+}
+
+.home-quote p {
+  margin: 0 0 1rem;
+}
+
+.home-quote p:last-of-type {
+  margin-bottom: 0.75rem;
+}
+
+.home-quote__attribution {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 1rem;
+  font-style: italic;
+  text-align: right;
+}
+
+.home-section {
+  max-width: var(--home-max-width);
+  margin: 0 auto;
+  padding: var(--home-section-y) 1.25rem;
+}
+
+.home-section + .home-section {
+  border-top: 1px solid color-mix(in srgb, var(--ld-border) 65%, transparent);
+}
+
+.home-section__header--center {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 1.25rem;
+}
+
+.home-section__header--center h2 {
+  margin: 0;
+  font-size: clamp(1.45rem, 2.5vw, 1.85rem);
+  letter-spacing: -0.02em;
+}
+
+.home-section__header--center a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.home-section__header--center a:hover {
+  color: var(--ld-accent-bright);
+  text-decoration: none;
+}
+
+.home-blog-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(240px, 0.9fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.home-post-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.home-post-card {
+  display: grid;
+  color: var(--ifm-font-color-base);
+  text-decoration: none;
+  background: transparent;
+  transition: color 160ms ease;
+}
+
+.home-post-card--featured {
+  grid-template-rows: auto 1fr;
+  gap: 0.65rem;
+}
+
+.home-post-card:not(.home-post-card--featured) {
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: center;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--ld-border) 70%, transparent);
+}
+
+.home-post-list .home-post-card:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.home-post-card:hover {
+  color: var(--ld-accent-bright);
+  text-decoration: none;
+}
+
+.home-post-card__image {
+  width: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 6px;
+}
+
+.home-post-card--featured .home-post-card__image {
+  aspect-ratio: 16 / 9;
+}
+
+.home-post-card:not(.home-post-card--featured) .home-post-card__image {
+  aspect-ratio: 1;
+  height: 72px;
+}
+
+.home-post-card__body {
+  min-width: 0;
+}
+
+.home-post-card__meta {
+  margin: 0 0 0.2rem;
+  color: var(--ifm-font-color-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.home-post-card__title {
+  margin: 0;
+  font-size: 0.98rem;
+  line-height: 1.3;
+}
+
+.home-post-card--featured .home-post-card__title {
+  font-size: clamp(1.05rem, 1.8vw, 1.25rem);
+}
+
+.home-post-card__summary {
+  margin: 0.45rem 0 0;
+  color: var(--ifm-font-color-secondary);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 996px) {
+  .home-blog-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .home-features {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 576px) {
+  .home-features {
+    grid-template-columns: 1fr;
+  }
+
+  .home-post-card__summary {
+    display: none;
+  }
 }
