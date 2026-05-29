@@ -641,8 +641,10 @@ fn cover_and_toc(opts: &Opts, version: &str) -> Result<String> {
     } else {
         format!("v{version}")
     };
+    // Smaller on the narrow compact page so the title stays on one line.
+    let title_size = if opts.compact { "16pt" } else { "22pt" };
     s.push_str(&format!(
-        "#align(center, text(size: 22pt, weight: \"bold\", fill: rgb(\"#{}\"))[{}])\n\n",
+        "#align(center, text(size: {title_size}, weight: \"bold\", fill: rgb(\"#{}\"))[{}])\n\n",
         t.ink,
         esc_markup(title)
     ));

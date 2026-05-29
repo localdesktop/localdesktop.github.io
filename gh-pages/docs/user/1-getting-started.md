@@ -4,7 +4,7 @@ title: Getting Started
 
 Welcome to Local Desktop!
 
-{/* hide-in-pdf — shown only inside the in-app installer iframe (setup-progress.html); dropped from the PDF manuals by scripts/docs.py */}
+{/* hide-in-pdf — shown only inside the in-app installer iframe (setup-progress.html); dropped from the PDF manuals by build_docs */}
 
 If you are seeing this page, the application is performing several tasks in the background:
 
