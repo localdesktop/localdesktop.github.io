@@ -1,7 +1,7 @@
 <!--
-  This is the SPINE of the generated architecture PDF (see scripts/build-docs.sh).
+  This is the SPINE of the generated architecture PDF (see src/bin/build_docs/).
   The prose is curated; the code is not. Each snippet directive (the HTML-comment
-  lines beginning with "snippet", parsed by scripts/docs.py) is replaced at build
+  lines beginning with "snippet", expanded by build_docs) is replaced at build
   time with the named function pulled fresh from source, so the walkthrough can
   never drift out of sync with the code it describes.
 
@@ -9,9 +9,6 @@
   than scanned file-by-file. We start at the one entry point the OS calls,
   android_main, follow the fork into the two backends, then cross over to the two
   ways the APK that contains all of this gets built.
-
-  NOTE: keep the arrow-close sequence out of this comment's prose, or pandoc ends
-  the HTML comment early and leaks the remainder into the rendered PDF.
 -->
 
 # `android_main` — the one entry point

@@ -133,10 +133,10 @@ jobs:
       - name: Build User Manual PDFs
         if: github.ref_type == 'tag'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pandoc texlive-xetex texlive-latex-extra texlive-fonts-recommended python3-pil webp
-          bash scripts/build-docs.sh user
-          bash scripts/build-docs.sh user dark
+          # All-Rust: Typst renders the PDF, the image crate handles webp — no
+          # pandoc/LaTeX/Python, no apt packages needed.
+          cargo run --release --bin build_docs -- user
+          cargo run --release --bin build_docs -- user dark
           # Paren-free alias for the dark variant (the release `files` globs treat
           # parentheses specially); the light name is already glob-safe.
           cp "manuals/Local Desktop - User Manual (Dark).pdf" "manuals/Local Desktop - User Manual - Dark.pdf"
