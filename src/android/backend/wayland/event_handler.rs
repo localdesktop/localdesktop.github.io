@@ -13,19 +13,25 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::draw_render_elements;
 use smithay::backend::renderer::{Color32F, Frame, Renderer};
 use smithay::input::keyboard::FilterResult;
-use smithay::input::{pointer, touch};
-use smithay::reexports::wayland_server::protocol::wl_pointer::ButtonState;
-use smithay::utils::{Rectangle, Transform, SERIAL_COUNTER};
+use smithay::backend::input::ButtonState;
+use smithay::input::pointer;
+use smithay::reexports::wayland_server::protocol::wl_pointer::ButtonState as WlButtonState;
+use smithay::utils::{Point, Rectangle, Transform, SERIAL_COUNTER};
 use smithay::wayland::shell::xdg::ToplevelSurface;
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, Event, InputEvent, KeyboardKeyEvent, PointerAxisEvent,
-        PointerButtonEvent, TouchEvent,
+        PointerButtonEvent,
     },
     output::{Mode, Scale},
 };
 use std::sync::Arc;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
+
+/// Linux input event code for the left mouse button (`BTN_LEFT`).
+const BTN_LEFT: u32 = 0x110;
+/// How far a finger must travel before a touch becomes a drag (press-and-hold) rather than a tap.
+const TAP_DRAG_THRESHOLD_PX: f64 = 25.0;
 
 /**
  * As we currently use Xwayland, there is only 1 surface
@@ -37,6 +43,77 @@ fn get_surface(state: &State) -> Option<ToplevelSurface> {
         .iter()
         .next()
         .cloned()
+}
+
+fn pointer_focus(state: &State) -> Option<(smithay::reexports::wayland_server::protocol::wl_surface::WlSurface, Point<f64, smithay::utils::Logical>)> {
+    get_surface(state).map(|surface| (surface.wl_surface().clone(), (0f64, 0f64).into()))
+}
+
+fn emit_pointer_motion(compositor: &mut crate::android::backend::wayland::Compositor, x: f64, y: f64, time: u32) {
+    let pointer = compositor.pointer.clone();
+    let state = &mut compositor.state;
+    if let Some(focus) = pointer_focus(state) {
+        let serial = SERIAL_COUNTER.next_serial();
+        pointer.motion(
+            state,
+            Some(focus),
+            &pointer::MotionEvent {
+                location: (x, y).into(),
+                serial,
+                time,
+            },
+        );
+        pointer.frame(state);
+    }
+}
+
+/// Press the left button. Also moves keyboard focus to the surface under the pointer.
+fn emit_pointer_press(compositor: &mut crate::android::backend::wayland::Compositor, time: u32) {
+    let pointer = compositor.pointer.clone();
+    let state = &mut compositor.state;
+    if let Some(surface) = get_surface(state) {
+        compositor.keyboard.set_focus(
+            state,
+            Some(surface.wl_surface().clone()),
+            SERIAL_COUNTER.next_serial().into(),
+        );
+    }
+
+    let serial = SERIAL_COUNTER.next_serial();
+    pointer.button(
+        state,
+        &pointer::ButtonEvent {
+            button: BTN_LEFT,
+            state: ButtonState::Pressed,
+            serial,
+            time,
+        },
+    );
+    pointer.frame(state);
+}
+
+/// Release the left button.
+fn emit_pointer_release(compositor: &mut crate::android::backend::wayland::Compositor, time: u32) {
+    let pointer = compositor.pointer.clone();
+    let state = &mut compositor.state;
+    let serial = SERIAL_COUNTER.next_serial();
+    pointer.button(
+        state,
+        &pointer::ButtonEvent {
+            button: BTN_LEFT,
+            state: ButtonState::Released,
+            serial,
+            time,
+        },
+    );
+    pointer.frame(state);
+}
+
+/// A full tap: move to the location, then a press immediately followed by a release.
+fn emit_pointer_click(compositor: &mut crate::android::backend::wayland::Compositor, x: f64, y: f64, time: u32) {
+    emit_pointer_motion(compositor, x, y, time);
+    emit_pointer_press(compositor, time);
+    emit_pointer_release(compositor, time);
 }
 
 pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop: &ActiveEventLoop) {
@@ -89,59 +166,59 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                 );
             }
             InputEvent::TouchDown { event } => {
-                let compositor = &mut backend.compositor;
-                let state = &mut compositor.state;
-                if let Some(surface) = get_surface(state) {
-                    compositor.keyboard.set_focus(
-                        state,
-                        Some(surface.wl_surface().clone()),
-                        0.into(),
-                    );
-                    let serial = SERIAL_COUNTER.next_serial();
-                    let time = compositor.start_time.elapsed().as_millis() as u32;
-                    compositor.touch.down(
-                        state,
-                        Some((surface.wl_surface().clone(), (0f64, 0f64).into())),
-                        &touch::DownEvent {
-                            slot: event.slot(),
-                            location: (event.x(), event.y()).into(),
-                            serial,
-                            time,
-                        },
-                    );
-                };
-            }
-            InputEvent::TouchUp { event } => {
-                let compositor = &mut backend.compositor;
-                let state = &mut compositor.state;
-                if let Some(_surface) = get_surface(state) {
-                    let serial = SERIAL_COUNTER.next_serial();
-                    let time = compositor.start_time.elapsed().as_millis() as u32;
-                    compositor.touch.up(
-                        state,
-                        &touch::UpEvent {
-                            slot: event.slot(),
-                            serial,
-                            time,
-                        },
-                    );
-                };
+                // Just move the cursor. Defer the button press until the finger moves
+                // (a drag) or lifts (a tap), so a second finger landing for a scroll
+                // doesn't leave a stray press held down.
+                emit_pointer_motion(&mut backend.compositor, event.x(), event.y(), event.time_msec());
             }
             InputEvent::TouchMotion { event } => {
-                let compositor = &mut backend.compositor;
-                let state = &mut compositor.state;
-                if let Some(surface) = get_surface(state) {
-                    let time = compositor.start_time.elapsed().as_millis() as u32;
-                    compositor.touch.motion(
-                        state,
-                        Some((surface.wl_surface().clone(), (0f64, 0f64).into())),
-                        &touch::MotionEvent {
-                            slot: event.slot(),
-                            location: (event.x(), event.y()).into(),
-                            time,
-                        },
-                    );
-                };
+                let time = event.time_msec();
+                let (x, y) = (event.x(), event.y());
+
+                // Once the finger travels past the threshold, press the button so the
+                // motion that follows reads as a drag. The centralizer only emits this
+                // event for a genuine single-finger gesture (never the leftover finger of
+                // a two-finger scroll), so this can't be mistaken for a scroll.
+                if !backend.pointer_pressed {
+                    let start = backend.touch_down_position;
+                    let far_enough = start
+                        .map(|s| {
+                            let dx = s.x - x;
+                            let dy = s.y - y;
+                            dx * dx + dy * dy > TAP_DRAG_THRESHOLD_PX * TAP_DRAG_THRESHOLD_PX
+                        })
+                        .unwrap_or(false);
+                    if far_enough {
+                        // Anchor the drag at where the finger first landed so the grab /
+                        // selection starts there, not where we crossed the threshold.
+                        if let Some(s) = start {
+                            emit_pointer_motion(&mut backend.compositor, s.x, s.y, time);
+                        }
+                        emit_pointer_press(&mut backend.compositor, time);
+                        backend.pointer_pressed = true;
+                    }
+                }
+
+                emit_pointer_motion(&mut backend.compositor, x, y, time);
+            }
+            InputEvent::TouchUp { event } => {
+                let time = event.time_msec();
+                emit_pointer_motion(&mut backend.compositor, event.x, event.y, time);
+
+                if backend.pointer_pressed {
+                    // End of a drag.
+                    emit_pointer_release(&mut backend.compositor, time);
+                    backend.pointer_pressed = false;
+                } else if event.emit_click {
+                    // A tap that never became a drag → synthesize a click.
+                    emit_pointer_click(&mut backend.compositor, event.x, event.y, time);
+                }
+            }
+            InputEvent::TouchCancel { event } => {
+                if backend.pointer_pressed {
+                    emit_pointer_release(&mut backend.compositor, event.time() as u32);
+                    backend.pointer_pressed = false;
+                }
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let compositor = &mut backend.compositor;
@@ -165,7 +242,7 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                 let serial = SERIAL_COUNTER.next_serial();
                 let button = event.button_code();
 
-                let state = ButtonState::from(event.state());
+                let state = WlButtonState::from(event.state());
 
                 let compositor = &mut backend.compositor;
                 let pointer = compositor.pointer.clone();
@@ -189,6 +266,12 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                 pointer.frame(&mut compositor.state);
             }
             InputEvent::PointerAxis { event } => {
+                // A scroll means a second finger landed; drop any button the first
+                // finger may have pressed so we don't scroll with it held.
+                if backend.pointer_pressed {
+                    emit_pointer_release(&mut backend.compositor, event.time_msec());
+                    backend.pointer_pressed = false;
+                }
                 let horizontal_amount = event
                     .amount(Axis::Horizontal)
                     .unwrap_or_else(|| event.amount_v120(Axis::Horizontal).unwrap_or(0.0) / 120.);

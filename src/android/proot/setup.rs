@@ -636,6 +636,27 @@ xfconf-query -c xsettings -p /Xft/DPI -t int -s {xft_dpi}
         ),
     );
 
+    const DOCS_HOME_URL: &str = "https://localdesktop.github.io/";
+
+    let desktop_dir = home_dir.join("Desktop");
+    let _ = fs::create_dir_all(&desktop_dir);
+    fs::write(
+        desktop_dir.join("localdesktop-documentation.desktop"),
+        format!(
+            r#"[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Documentation
+Comment=Open Local Desktop user documentation
+Exec=firefox {DOCS_HOME_URL}
+Icon=firefox
+Terminal=false
+StartupNotify=true
+"#
+        ),
+    )
+    .expect("Failed to write Documentation desktop launcher");
+
     let autostart_dir = home_dir.join(".config/autostart");
     let _ = fs::create_dir_all(&autostart_dir);
 
@@ -929,6 +950,9 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             scale_factor: 1.0,
             touch_points: std::collections::HashMap::new(),
             scroll_centroid: None,
+            touch_gesture_was_multi_touch: false,
+            touch_down_position: None,
+            pointer_pressed: false,
         })
     } else {
         PolarBearBackend::WebView(WebviewBackend::build(receiver, progress))

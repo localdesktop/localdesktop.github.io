@@ -304,10 +304,14 @@ impl AbsolutePositionEvent<WinitInput> for WinitTouchMovedEvent {
 }
 
 /// Winit-Backend internal event wrapping `winit`'s types into a `TouchUpEvent`
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WinitTouchEndedEvent {
     pub(crate) time: u64,
     pub(crate) id: u64,
+    /// When false, the touch ended as part of a multi-touch gesture (e.g. scroll).
+    pub(crate) emit_click: bool,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
 }
 
 impl Event<WinitInput> for WinitTouchEndedEvent {

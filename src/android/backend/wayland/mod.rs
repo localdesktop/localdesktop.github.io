@@ -31,4 +31,10 @@ pub struct WaylandBackend {
     pub touch_points: HashMap<u64, PhysicalPosition<f64>>,
     /// Centroid of the two active touch points at the last scroll update.
     pub scroll_centroid: Option<PhysicalPosition<f64>>,
+    /// Set when a two-finger gesture occurred; cleared after the last finger lifts.
+    pub touch_gesture_was_multi_touch: bool,
+    /// Location where the active single-finger touch first landed, used to tell a tap from a drag.
+    pub touch_down_position: Option<PhysicalPosition<f64>>,
+    /// Whether a synthesized left-button press is currently held (an in-progress drag).
+    pub pointer_pressed: bool,
 }
