@@ -2,3 +2,6 @@
 target
 localdesktop.apk
 .DS_Store
+/build/
+/manuals/
+/dist/
