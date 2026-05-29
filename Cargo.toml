@@ -49,8 +49,6 @@ smithay = { version = "0.5.0", default-features = false, features = [
 ] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies] # Deps used only for setting up cross testing
-# Host-only: the `build_docs` tool renders the offline PDF manuals fully in Rust
-# (Typst as a library — no pandoc/LaTeX), so these never touch the Android build.
 typst-as-lib = { version = "0.15", features = ["typst-kit-embed-fonts"] }
 typst-pdf = "0.14"
 pulldown-cmark = { version = "0.12", default-features = false }

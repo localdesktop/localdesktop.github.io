@@ -2,8 +2,6 @@
 target
 localdesktop.apk
 .DS_Store
-
-# `build_docs`: generated PDFs (manuals/) and its work dir (vendored fonts, image cache)
 /build/
 /manuals/
 /dist/
