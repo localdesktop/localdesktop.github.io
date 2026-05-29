@@ -2,3 +2,8 @@
 target
 localdesktop.apk
 .DS_Store
+
+# `scripts/build-docs.sh`: generated PDFs (manuals/) and the work dir (combined md, header, fonts/styles)
+/build/
+/manuals/
+/dist/
