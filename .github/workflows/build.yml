@@ -134,12 +134,23 @@ jobs:
         if: github.ref_type == 'tag'
         run: |
           # All-Rust: Typst renders the PDF, the image crate handles webp — no
-          # pandoc/LaTeX/Python, no apt packages needed.
-          cargo run --release --bin build_docs -- user
-          cargo run --release --bin build_docs -- user dark
-          # Paren-free alias for the dark variant (the release `files` globs treat
-          # parentheses specially); the light name is already glob-safe.
-          cp "manuals/Local Desktop - User Manual (Dark).pdf" "manuals/Local Desktop - User Manual - Dark.pdf"
+          # pandoc/LaTeX/Python, no apt packages needed. Six variants: every
+          # size (desktop/fold/phone) × theme (light/dark).
+          V="${{ steps.extract_version.outputs.version }}"
+          for size in desktop fold phone; do
+            for theme in light dark; do
+              cargo run --release --bin build_docs -- user "$size" "$theme"
+            done
+          done
+          # Rename build_docs' display names to versioned, dot-free release names
+          # (GitHub turns spaces into dots in asset download URLs).
+          cd manuals
+          mv "Local Desktop - User Manual.pdf"               "Local-Desktop-v$V-User-Manual.pdf"
+          mv "Local Desktop - User Manual (Dark).pdf"        "Local-Desktop-v$V-User-Manual-Dark.pdf"
+          mv "Local Desktop - User Manual (Fold).pdf"        "Local-Desktop-v$V-User-Manual-Fold.pdf"
+          mv "Local Desktop - User Manual (Fold, Dark).pdf"  "Local-Desktop-v$V-User-Manual-Fold-Dark.pdf"
+          mv "Local Desktop - User Manual (Phone).pdf"       "Local-Desktop-v$V-User-Manual-Phone.pdf"
+          mv "Local Desktop - User Manual (Phone, Dark).pdf" "Local-Desktop-v$V-User-Manual-Phone-Dark.pdf"
 
       - name: Create GitHub Release
         if: github.ref_type == 'tag'
@@ -154,5 +165,9 @@ jobs:
             target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.apk
             target/x/localdesktop-${{ steps.extract_version.outputs.version }}.aab
             target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.aab
-            manuals/Local Desktop - User Manual.pdf
-            manuals/Local Desktop - User Manual - Dark.pdf
+            manuals/Local-Desktop-v${{ steps.extract_version.outputs.version }}-User-Manual.pdf
+            manuals/Local-Desktop-v${{ steps.extract_version.outputs.version }}-User-Manual-Dark.pdf
+            manuals/Local-Desktop-v${{ steps.extract_version.outputs.version }}-User-Manual-Fold.pdf
+            manuals/Local-Desktop-v${{ steps.extract_version.outputs.version }}-User-Manual-Fold-Dark.pdf
+            manuals/Local-Desktop-v${{ steps.extract_version.outputs.version }}-User-Manual-Phone.pdf
+            manuals/Local-Desktop-v${{ steps.extract_version.outputs.version }}-User-Manual-Phone-Dark.pdf

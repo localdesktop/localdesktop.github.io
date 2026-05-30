@@ -156,9 +156,15 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
             if backend.touch_points.len() >= 2 {
                 // Second finger down: transition to two-finger scroll mode.
                 // Initialize the centroid so the first move has a reference point.
+                backend.touch_gesture_was_multi_touch = true;
                 backend.scroll_centroid = Some(centroid(&backend.touch_points));
                 CentralizedEvent::Unsupported
+            } else if backend.touch_gesture_was_multi_touch {
+                // A finger landed again during the tail of a two-finger gesture; keep ignoring
+                // single-finger handling until every finger has lifted.
+                CentralizedEvent::Unsupported
             } else {
+                backend.touch_down_position = Some(location);
                 let size = backend
                     .graphic_renderer
                     .as_ref()
@@ -186,6 +192,7 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
             backend.touch_points.insert(id, location);
             if backend.touch_points.len() >= 2 {
                 // Two-finger scroll: emit a PointerAxis event based on centroid delta.
+                backend.touch_gesture_was_multi_touch = true;
                 let new_centroid = centroid(&backend.touch_points);
                 if let Some(last) = backend.scroll_centroid {
                     let dx = new_centroid.x - last.x;
@@ -205,6 +212,10 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
                 } else {
                     backend.scroll_centroid = Some(new_centroid);
                 }
+                CentralizedEvent::Unsupported
+            } else if backend.touch_gesture_was_multi_touch {
+                // Leftover finger drifting after a two-finger scroll: ignore it so it neither
+                // moves the cursor nor starts a drag that would select text.
                 CentralizedEvent::Unsupported
             } else {
                 let size = backend
@@ -228,23 +239,36 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
 
         WindowEvent::Touch(Touch {
             phase: TouchPhase::Ended,
+            location,
             id,
             ..
         }) => {
-            let was_scrolling = backend.touch_points.len() >= 2;
+            let was_multi_touch = backend.touch_points.len() >= 2;
             backend.touch_points.remove(&id);
             backend.scroll_centroid = if backend.touch_points.len() >= 2 {
                 Some(centroid(&backend.touch_points))
             } else {
                 None
             };
-            if was_scrolling {
-                // Don't forward a stray TouchUp after a two-finger gesture.
-                CentralizedEvent::Unsupported
-            } else {
+            if was_multi_touch {
+                backend.touch_gesture_was_multi_touch = true;
+            }
+            if backend.touch_points.is_empty() {
+                let emit_click = !backend.touch_gesture_was_multi_touch;
+                backend.touch_gesture_was_multi_touch = false;
+                backend.touch_down_position = None;
                 CentralizedEvent::Input(InputEvent::TouchUp {
-                    event: WinitTouchEndedEvent { time, id },
+                    event: WinitTouchEndedEvent {
+                        time,
+                        id,
+                        emit_click,
+                        x: location.x,
+                        y: location.y,
+                    },
                 })
+            } else {
+                // Don't forward a stray TouchUp while other fingers are still down.
+                CentralizedEvent::Unsupported
             }
         }
         WindowEvent::Touch(Touch {
@@ -252,10 +276,17 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
             id,
             ..
         }) => {
-            let was_scrolling = backend.touch_points.len() >= 2;
+            let was_multi_touch = backend.touch_points.len() >= 2;
             backend.touch_points.remove(&id);
             backend.scroll_centroid = None;
-            if was_scrolling {
+            if was_multi_touch {
+                backend.touch_gesture_was_multi_touch = true;
+            }
+            if backend.touch_points.is_empty() {
+                backend.touch_gesture_was_multi_touch = false;
+                backend.touch_down_position = None;
+            }
+            if was_multi_touch {
                 CentralizedEvent::Unsupported
             } else {
                 CentralizedEvent::Input(InputEvent::TouchCancel {

@@ -83,15 +83,19 @@ jobs:
               'release:breaking',
               'release:feature',
               'release:bugfix',
+              'release:patch',
+              'release:docs',
           ]
           labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
           selected = [label for label in release_labels if label in labels]
 
           if len(selected) != 1:
               print('PRs to main must have exactly one release label:')
-              print('  - release:breaking')
-              print('  - release:feature')
-              print('  - release:bugfix')
+              print('  - release:breaking  (major)')
+              print('  - release:feature   (minor)')
+              print('  - release:bugfix    (patch)')
+              print('  - release:patch     (patch)')
+              print('  - release:docs      (no version bump / no app release)')
               print(f'Found: {selected or "none"}')
               raise SystemExit(1)
 
@@ -116,10 +120,12 @@ jobs:
           import json
           import os
 
+          # release:docs is intentionally absent → no level → no version bump.
           release_labels = {
               'release:breaking': 'major',
               'release:feature': 'minor',
               'release:bugfix': 'patch',
+              'release:patch': 'patch',
           }
           labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
           selected = [label for label in release_labels if label in labels]
@@ -275,7 +281,7 @@ jobs:
   publish-release-tag:
     name: Publish Release Tag
     needs: classify-pr
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.gh_pages_only != 'true' && needs.classify-pr.outputs.same_repo_pr == 'true'
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.gh_pages_only != 'true' && needs.classify-pr.outputs.same_repo_pr == 'true' && !contains(github.event.pull_request.labels.*.name, 'release:docs')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -289,10 +295,12 @@ jobs:
           import json
           import os
 
+          # release:docs PRs never reach here (the job is skipped for them).
           release_labels = [
               'release:breaking',
               'release:feature',
               'release:bugfix',
+              'release:patch',
           ]
           labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
           selected = [label for label in release_labels if label in labels]
@@ -300,7 +308,7 @@ jobs:
           if len(selected) != 1:
               raise SystemExit(
                   'Expected exactly one release label: '
-                  'release:breaking, release:feature, or release:bugfix'
+                  'release:breaking, release:feature, release:bugfix, or release:patch'
               )
 
           print(f'Publishing tag for {selected[0]}')

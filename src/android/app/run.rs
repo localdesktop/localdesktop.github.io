@@ -179,6 +179,9 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
             backend.key_counter = 0;
             backend.touch_points.clear();
             backend.scroll_centroid = None;
+            backend.touch_gesture_was_multi_touch = false;
+            backend.touch_down_position = None;
+            backend.pointer_pressed = false;
         }
     }
 }

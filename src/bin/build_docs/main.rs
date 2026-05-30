@@ -34,11 +34,30 @@ enum Manual {
     User,
 }
 
+/// Page size. Desktop = full A4; Fold = near-square foldable inner screen;
+/// Phone = narrow/tall, optimized for a normal mobile phone.
+#[derive(Clone, Copy, PartialEq)]
+enum Size {
+    Desktop,
+    Fold,
+    Phone,
+}
+
+impl Size {
+    fn label(self) -> Option<&'static str> {
+        match self {
+            Size::Desktop => None,
+            Size::Fold => Some("Fold"),
+            Size::Phone => Some("Phone"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 struct Opts {
     manual: Manual,
     callgraph: bool,
-    compact: bool,
+    size: Size,
     dark: bool,
 }
 
@@ -90,15 +109,14 @@ impl Opts {
             "Local Desktop - Developer Manual"
         });
         let mut quals: Vec<&str> = Vec::new();
-        if self.manual == Manual::User {
-            if self.dark {
-                quals.push("Dark");
-            }
-        } else if self.callgraph {
+        if self.manual == Manual::Developer && self.callgraph {
             quals.push("Call Graph");
         }
-        if self.compact {
-            quals.push("Compact");
+        if let Some(l) = self.size.label() {
+            quals.push(l);
+        }
+        if self.manual == Manual::User && self.dark {
+            quals.push("Dark");
         }
         if !quals.is_empty() {
             name.push_str(&format!(" ({})", quals.join(", ")));
@@ -582,16 +600,20 @@ fn preamble(opts: &Opts) -> String {
     let t = opts.theme();
     let mut s = String::new();
     // Page.
-    if opts.compact {
-        s.push_str("#set page(width: 130mm, height: 150mm, margin: 6mm)\n");
-    } else {
-        let margin = if opts.manual == Manual::User { "2.4cm" } else { "2cm" };
-        s.push_str(&format!("#set page(paper: \"a4\", margin: {margin})\n"));
+    match opts.size {
+        // Near-square foldable inner screen (e.g. OnePlus Open).
+        Size::Fold => s.push_str("#set page(width: 130mm, height: 150mm, margin: 6mm)\n"),
+        // Narrow/tall, ~19.5:9 — a normal phone held portrait.
+        Size::Phone => s.push_str("#set page(width: 90mm, height: 190mm, margin: 5mm)\n"),
+        Size::Desktop => {
+            let margin = if opts.manual == Manual::User { "2.4cm" } else { "2cm" };
+            s.push_str(&format!("#set page(paper: \"a4\", margin: {margin})\n"));
+        }
     }
     if let Some(bg) = t.page_bg {
         s.push_str(&format!("#set page(fill: rgb(\"#{bg}\"))\n"));
     }
-    let size = if opts.compact { "9pt" } else { "11pt" };
+    let size = if opts.size == Size::Desktop { "11pt" } else { "9pt" };
     s.push_str(&format!(
         "#set text(font: \"{}\", size: {size}, fill: rgb(\"#{}\"))\n",
         t.font, t.ink
@@ -641,8 +663,8 @@ fn cover_and_toc(opts: &Opts, version: &str) -> Result<String> {
     } else {
         format!("v{version}")
     };
-    // Smaller on the narrow compact page so the title stays on one line.
-    let title_size = if opts.compact { "16pt" } else { "22pt" };
+    // Smaller on the narrow fold/phone pages so the title stays on one line.
+    let title_size = if opts.size == Size::Desktop { "22pt" } else { "16pt" };
     s.push_str(&format!(
         "#align(center, text(size: {title_size}, weight: \"bold\", fill: rgb(\"#{}\"))[{}])\n\n",
         t.ink,
@@ -783,25 +805,29 @@ fn render(opts: &Opts) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "all") {
-        let variants = [
-            (Manual::Developer, false, false, false),
-            (Manual::Developer, true, false, false),
-            (Manual::Developer, false, true, false),
-            (Manual::Developer, true, true, false),
-            (Manual::User, false, false, false),
-            (Manual::User, false, true, false),
-            (Manual::User, false, false, true),
-            (Manual::User, false, true, true),
-        ];
+        let mut variants: Vec<(Manual, bool, Size, bool)> = Vec::new();
+        // Developer manual: Desktop + Fold, curated + call-graph (no phone — it's a
+        // code reference, not phone reading).
+        for &size in &[Size::Desktop, Size::Fold] {
+            for &callgraph in &[false, true] {
+                variants.push((Manual::Developer, callgraph, size, false));
+            }
+        }
+        // User manual: every size × theme (the 6 release variants).
+        for &size in &[Size::Desktop, Size::Fold, Size::Phone] {
+            for &dark in &[false, true] {
+                variants.push((Manual::User, false, size, dark));
+            }
+        }
         // purge
         let mdir = repo_root().join("manuals");
         let _ = fs::remove_dir_all(&mdir);
         fs::create_dir_all(&mdir)?;
-        for (manual, callgraph, compact, dark) in variants {
+        for (manual, callgraph, size, dark) in variants {
             render(&Opts {
                 manual,
                 callgraph,
-                compact,
+                size,
                 dark,
             })?;
         }
@@ -812,7 +838,7 @@ fn main() -> Result<()> {
     let mut opts = Opts {
         manual: Manual::Developer,
         callgraph: false,
-        compact: false,
+        size: Size::Desktop,
         dark: false,
     };
     for a in &args {
@@ -821,8 +847,9 @@ fn main() -> Result<()> {
             "user" => opts.manual = Manual::User,
             "curated" => opts.callgraph = false,
             "callgraph" => opts.callgraph = true,
-            "normal" => opts.compact = false,
-            "compact" | "phone" | "foldable" => opts.compact = true,
+            "normal" | "desktop" => opts.size = Size::Desktop,
+            "compact" | "fold" | "foldable" => opts.size = Size::Fold,
+            "phone" | "mobile" => opts.size = Size::Phone,
             "light" => opts.dark = false,
             "dark" => opts.dark = true,
             other => eprintln!("Ignoring unknown argument '{other}'."),

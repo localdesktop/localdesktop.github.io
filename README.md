@@ -153,8 +153,8 @@ cargo run --bin build_docs -- all          # purge manuals/ + rebuild every vari
 
 Extra knobs (words, in any order):
 
-- **`compact`** — a near-square 130×150mm page with small margins, sized to read on a
-  foldable's inner screen. Applies to either manual.
+- **Page size** — `desktop` (default, A4), `fold` (near-square 130×150mm, for a foldable's
+  inner screen), or `phone` (narrow/tall ~90×190mm, for a normal mobile phone).
 - **`dark`** — User Manual only: the website's dark "northern lights" theme (dark page,
   light text, bright-teal accents, dark code blocks).
 - **`callgraph`** — Developer Manual only: replace the hand-written architecture
@@ -162,16 +162,18 @@ Extra knobs (words, in any order):
   functions. See the two architecture modes below.
 
 ```bash
-cargo run --bin build_docs -- callgraph compact   # developer, call-graph, compact page
+cargo run --bin build_docs -- callgraph fold      # developer, call-graph, fold page
 cargo run --bin build_docs -- user dark           # user manual, dark theme
-cargo run --bin build_docs -- user dark compact   # user manual, dark, compact page
+cargo run --bin build_docs -- user phone dark     # user manual, dark, phone page
 ```
 
 `all` regenerates the full set, so `manuals/` only ever holds the latest build:
-`Local Desktop - {Developer,User} Manual [(Call Graph|Dark[, Compact])].pdf`.
+`Local Desktop - {Developer,User} Manual [(Call Graph|Fold|Phone[, Dark])].pdf`.
 
-The normal-size User Manual (light and dark) ships as release artifacts — the
-release workflow builds and attaches them alongside the APK/AAB.
+The User Manual ships as release artifacts in **6 variants** — every size
+(desktop/fold/phone) × theme (light/dark) — attached alongside the APK/AAB as
+`Local-Desktop-v<version>-User-Manual[-Fold|-Phone][-Dark].pdf`. The app also
+pre-downloads the matching desktop/light manual onto the Linux desktop during setup.
 
 The Developer Manual's architecture part comes in two modes:
 
