@@ -657,6 +657,27 @@ StartupNotify=true
     )
     .expect("Failed to write Documentation desktop launcher");
 
+    // Pre-download the matching offline User Manual (light, desktop size) onto the
+    // Desktop. Best-effort and off-thread so it never blocks setup; idempotent via
+    // the version in the filename. The release asset is dot-free/hyphenated (GitHub
+    // turns spaces into dots in download URLs); the on-disk name is human-friendly.
+    let version = crate::core::config::VERSION;
+    let manual_path = desktop_dir.join(format!("Local Desktop v{version} - User Manual.pdf"));
+    if !manual_path.exists() {
+        let url = format!(
+            "https://github.com/localdesktop/localdesktop.github.io/releases/download/v{version}/Local-Desktop-v{version}-User-Manual.pdf"
+        );
+        thread::spawn(move || {
+            if let Ok(response) = reqwest::blocking::get(&url) {
+                if let Ok(response) = response.error_for_status() {
+                    if let Ok(bytes) = response.bytes() {
+                        let _ = fs::write(&manual_path, &bytes);
+                    }
+                }
+            }
+        });
+    }
+
     let autostart_dir = home_dir.join(".config/autostart");
     let _ = fs::create_dir_all(&autostart_dir);
 
