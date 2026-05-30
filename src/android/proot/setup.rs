@@ -9,7 +9,7 @@ use crate::{
         utils::application_context::get_application_context,
         utils::ndk::run_in_jvm,
     },
-    core::config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT},
+    core::config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL},
 };
 use jni::objects::JObject;
 use jni::sys::_jobject;
@@ -640,8 +640,6 @@ xfconf-query -c xsettings -p /Xft/DPI -t int -s {xft_dpi}
         ),
     );
 
-    const DOCS_HOME_URL: &str = "https://localdesktop.github.io/";
-
     let desktop_dir = home_dir.join("Desktop");
     let _ = fs::create_dir_all(&desktop_dir);
 
@@ -682,14 +680,11 @@ StartupNotify=true
 
     // Pre-download the matching offline User Manual (light, desktop size) onto the
     // Desktop. Best-effort and off-thread so it never blocks setup; create-if-missing
-    // via the version in the filename. The release asset is dot-free/hyphenated (GitHub
-    // turns spaces into dots in download URLs); the on-disk name is human-friendly.
+    // via the version in the filename. The on-disk name is human-friendly.
     let version = crate::core::config::VERSION;
     let manual_path = desktop_dir.join(format!("Local Desktop v{version} - User Manual.pdf"));
     if !manual_path.exists() {
-        let url = format!(
-            "https://github.com/localdesktop/localdesktop.github.io/releases/download/v{version}/Local-Desktop-v{version}-User-Manual.pdf"
-        );
+        let url = crate::core::config::user_manual_url();
         thread::spawn(move || {
             if let Ok(response) = reqwest::blocking::get(&url) {
                 if let Ok(response) = response.error_for_status() {

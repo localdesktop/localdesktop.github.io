@@ -13,6 +13,17 @@ pub const ARCH_FS_ROOT: &str = "/data/local/tmp/arch";
 
 pub const ARCH_FS_ARCHIVE: &str = "https://github.com/termux/proot-distro/releases/download/v4.29.0/archlinux-aarch64-pd-v4.29.0.tar.xz";
 
+/// Project homepage, also the online documentation entry point.
+pub const DOCS_HOME_URL: &str = "https://localdesktop.github.io/";
+
+/// Download URL for the offline User Manual PDF matching the running version.
+/// The release asset is dot-free/hyphenated (GitHub turns spaces into dots).
+pub fn user_manual_url() -> String {
+    format!(
+        "https://github.com/localdesktop/localdesktop.github.io/releases/download/v{VERSION}/Local-Desktop-v{VERSION}-User-Manual.pdf"
+    )
+}
+
 pub const WAYLAND_SOCKET_NAME: &str = "wayland-0";
 
 pub const MAX_PANEL_LOG_ENTRIES: usize = 100;

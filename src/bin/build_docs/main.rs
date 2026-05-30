@@ -603,8 +603,9 @@ fn preamble(opts: &Opts) -> String {
     match opts.size {
         // Near-square foldable inner screen (e.g. OnePlus Open).
         Size::Fold => s.push_str("#set page(width: 130mm, height: 150mm, margin: 6mm)\n"),
-        // Narrow/tall, ~19.5:9 — a normal phone held portrait.
-        Size::Phone => s.push_str("#set page(width: 90mm, height: 190mm, margin: 5mm)\n"),
+        // Narrow/tall, ~19.5:9 — sized to a real phone screen (~72mm wide) so the
+        // page fits the viewport at 100% and text stays readable without zooming.
+        Size::Phone => s.push_str("#set page(width: 72mm, height: 156mm, margin: 4mm)\n"),
         Size::Desktop => {
             let margin = if opts.manual == Manual::User { "2.4cm" } else { "2cm" };
             s.push_str(&format!("#set page(paper: \"a4\", margin: {margin})\n"));
