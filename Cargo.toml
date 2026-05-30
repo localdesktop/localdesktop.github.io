@@ -1,6 +1,6 @@
 [package]
 name = "localdesktop"
-version = "1.8.1"
+version = "1.8.2"
 edition = "2021"
 build = "build.rs"
 default-run = "build_apk"
