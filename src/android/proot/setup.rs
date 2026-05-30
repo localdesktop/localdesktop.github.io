@@ -49,6 +49,10 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 /// Each stage should indicate whether the associated task is done previously or not.
 /// Thus, it should return a finished status if the task is done, so that the setup process can move on to the next stage.
 /// Otherwise, it should return a `JoinHandle`, so that the setup process can wait for the task to finish, but not block the main thread so that the setup progress can be reported to the user.
+///
+/// For coding agents: READ THIS BEFORE ADDING WORK HERE.
+/// - Heavy/long work belongs inside the spawned thread of a returned `Some(JoinHandle)`, so it runs once at install and surfaces as setup progress.
+/// - Simple/light tasks or important settings that must be run every launch (e.g. the Firefox config) can be done inline on the `None` path.
 type StageOutput = Option<JoinHandle<()>>;
 
 fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
@@ -640,26 +644,45 @@ xfconf-query -c xsettings -p /Xft/DPI -t int -s {xft_dpi}
 
     let desktop_dir = home_dir.join("Desktop");
     let _ = fs::create_dir_all(&desktop_dir);
-    fs::write(
-        desktop_dir.join("localdesktop-documentation.desktop"),
-        format!(
-            r#"[Desktop Entry]
+
+    // Desktop items are seeded create-if-missing (the run-once mechanism described
+    // on `StageOutput`): write only when absent, so we never clobber the user's
+    // edits or re-create on every launch. Deleting an item re-seeds it next launch,
+    // same as the rest of the managed environment.
+    let online_docs = desktop_dir.join("localdesktop-online-docs.desktop");
+    if !online_docs.exists() {
+        let _ = fs::write(
+            &online_docs,
+            format!(
+                r#"[Desktop Entry]
 Version=1.0
 Type=Application
-Name=Documentation
-Comment=Open Local Desktop user documentation
+Name=Local Desktop - Online Docs
+Comment=Open the Local Desktop documentation website
 Exec=firefox {DOCS_HOME_URL}
 Icon=firefox
 Terminal=false
 StartupNotify=true
 "#
-        ),
-    )
-    .expect("Failed to write Documentation desktop launcher");
+            ),
+        );
+    }
+    // Remove the launcher's former name so existing installs pick up the rename.
+    let _ = fs::remove_file(desktop_dir.join("localdesktop-documentation.desktop"));
+
+    // Open PDFs (e.g. the manual below) in Evince instead of Firefox. Create-if-missing
+    // so we don't stomp a user's own default-app choices.
+    let mimeapps = home_dir.join(".config/mimeapps.list");
+    if !mimeapps.exists() {
+        let _ = fs::write(
+            &mimeapps,
+            "[Default Applications]\napplication/pdf=org.gnome.Evince.desktop\n",
+        );
+    }
 
     // Pre-download the matching offline User Manual (light, desktop size) onto the
-    // Desktop. Best-effort and off-thread so it never blocks setup; idempotent via
-    // the version in the filename. The release asset is dot-free/hyphenated (GitHub
+    // Desktop. Best-effort and off-thread so it never blocks setup; create-if-missing
+    // via the version in the filename. The release asset is dot-free/hyphenated (GitHub
     // turns spaces into dots in download URLs); the on-disk name is human-friendly.
     let version = crate::core::config::VERSION;
     let manual_path = desktop_dir.join(format!("Local Desktop v{version} - User Manual.pdf"));

@@ -84,6 +84,8 @@ jobs:
               'release:feature',
               'release:bugfix',
               'release:patch',
+              'release:improvement',
+              'release:optimisation',
               'release:docs',
           ]
           labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
@@ -91,11 +93,13 @@ jobs:
 
           if len(selected) != 1:
               print('PRs to main must have exactly one release label:')
-              print('  - release:breaking  (major)')
-              print('  - release:feature   (minor)')
-              print('  - release:bugfix    (patch)')
-              print('  - release:patch     (patch)')
-              print('  - release:docs      (no version bump / no app release)')
+              print('  - release:breaking     (major)')
+              print('  - release:feature      (minor)')
+              print('  - release:bugfix       (patch)')
+              print('  - release:patch        (patch)')
+              print('  - release:improvement  (patch)')
+              print('  - release:optimisation (patch)')
+              print('  - release:docs         (no version bump / no app release)')
               print(f'Found: {selected or "none"}')
               raise SystemExit(1)
 
@@ -126,6 +130,8 @@ jobs:
               'release:feature': 'minor',
               'release:bugfix': 'patch',
               'release:patch': 'patch',
+              'release:improvement': 'patch',
+              'release:optimisation': 'patch',
           }
           labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
           selected = [label for label in release_labels if label in labels]
@@ -301,6 +307,8 @@ jobs:
               'release:feature',
               'release:bugfix',
               'release:patch',
+              'release:improvement',
+              'release:optimisation',
           ]
           labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
           selected = [label for label in release_labels if label in labels]
@@ -308,7 +316,8 @@ jobs:
           if len(selected) != 1:
               raise SystemExit(
                   'Expected exactly one release label: '
-                  'release:breaking, release:feature, release:bugfix, or release:patch'
+                  'release:breaking, release:feature, release:bugfix, release:patch, '
+                  'release:improvement, or release:optimisation'
               )
 
           print(f'Publishing tag for {selected[0]}')
