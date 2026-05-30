@@ -130,6 +130,17 @@ jobs:
         run: |
           mv target/x/release/android/gradle/app/build/outputs/bundle/debug/app-debug.aab target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.aab
           mv target/x/release/android/gradle/app/build/outputs/bundle/release/app-release.aab target/x/localdesktop-${{ steps.extract_version.outputs.version }}.aab
+      - name: Build User Manual PDFs
+        if: github.ref_type == 'tag'
+        run: |
+          # All-Rust: Typst renders the PDF, the image crate handles webp — no
+          # pandoc/LaTeX/Python, no apt packages needed.
+          cargo run --release --bin build_docs -- user
+          cargo run --release --bin build_docs -- user dark
+          # Paren-free alias for the dark variant (the release `files` globs treat
+          # parentheses specially); the light name is already glob-safe.
+          cp "manuals/Local Desktop - User Manual (Dark).pdf" "manuals/Local Desktop - User Manual - Dark.pdf"
+
       - name: Create GitHub Release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
@@ -143,3 +154,5 @@ jobs:
             target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.apk
             target/x/localdesktop-${{ steps.extract_version.outputs.version }}.aab
             target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.aab
+            manuals/Local Desktop - User Manual.pdf
+            manuals/Local Desktop - User Manual - Dark.pdf

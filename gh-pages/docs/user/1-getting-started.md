@@ -4,6 +4,8 @@ title: Getting Started
 
 Welcome to Local Desktop!
 
+{/* hide-in-pdf — shown only inside the in-app installer iframe (setup-progress.html); dropped from the PDF manuals by build_docs */}
+
 If you are seeing this page, the application is performing several tasks in the background:
 
 - It is extracting an Arch Linux ARM64 filesystem.
@@ -16,6 +18,8 @@ You can always revisit this page by going to [localdesktop.github.io](/).
 :::info Tips
 It is highly recommended that you keep the app open in the foreground until the installation is complete.
 :::
+
+{/* /hide-in-pdf */}
 
 ## How to install applications?
 

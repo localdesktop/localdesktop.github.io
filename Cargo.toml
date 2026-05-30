@@ -1,6 +1,6 @@
 [package]
 name = "localdesktop"
-version = "1.7.2"
+version = "1.7.3"
 edition = "2021"
 build = "build.rs"
 default-run = "build_apk"
@@ -49,6 +49,10 @@ smithay = { version = "0.5.0", default-features = false, features = [
 ] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies] # Deps used only for setting up cross testing
+typst-as-lib = { version = "0.15", features = ["typst-kit-embed-fonts"] }
+typst-pdf = "0.14"
+pulldown-cmark = { version = "0.12", default-features = false }
+regex = "1"
 
 [dependencies] # Deps used for both target
 anyhow = "1.0.68"
