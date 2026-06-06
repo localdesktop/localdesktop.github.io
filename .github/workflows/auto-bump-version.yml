@@ -280,7 +280,7 @@ jobs:
   publish-release-tag:
     name: Publish Release Tag
     needs: classify-pr
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.gh_pages_only != 'true' && !contains(github.event.pull_request.labels.*.name, 'release:docs')
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.gh_pages_only != 'true' && needs.classify-pr.outputs.same_repo_pr == 'true' && !contains(github.event.pull_request.labels.*.name, 'release:docs')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -323,13 +323,64 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.PAT }}
 
-      # Fork PRs skip the pre-merge Sync job (we can't safely push to a fork from
-      # CI), so the version bump that same-repo PRs receive on their branch never
-      # happened. Apply it here on main, in this trusted context, before tagging.
-      # This block is a no-op for same-repo PRs, whose main is already bumped.
-      - name: Read release level (fork PRs)
-        id: fork_level
-        if: needs.classify-pr.outputs.same_repo_pr != 'true'
+      - name: Extract version
+        id: version
+        run: echo "value=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].version')" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release notes
+        id: notes
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          python <<'PY'
+          import os
+          from pathlib import Path
+
+          notes = (os.environ.get('PR_BODY') or '').strip()
+          if not notes:
+              notes = (os.environ.get('PR_TITLE') or '').strip()
+
+          notes_path = Path(os.environ['RUNNER_TEMP']) / 'release-notes.md'
+          notes_path.write_text(f'{notes}\n', encoding='utf-8')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write(f'path={notes_path}\n')
+          PY
+
+      - name: Create and push tag
+        env:
+          TAG: v${{ steps.version.outputs.value }}
+        run: |
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -F "${{ steps.notes.outputs.path }}"
+          git push origin "refs/tags/$TAG"
+
+  # Fork PRs can't carry their own version bump (the ruleset forbids direct
+  # pushes to main, and CI can't safely push to a fork). So once a fork PR
+  # merges, open an in-repo "release bump" PR that rides the normal same-repo
+  # flow: it carries the same release label, gets bumped + validated, and on
+  # merge the Publish job tags it. The v*.*.* tag — and therefore the APK
+  # build — only happens after this bump PR merges, i.e. on the merged fork
+  # code at its new version.
+  open-release-bump-pr:
+    name: Open Release Bump PR
+    needs: classify-pr
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.gh_pages_only != 'true' && needs.classify-pr.outputs.same_repo_pr != 'true' && !contains(github.event.pull_request.labels.*.name, 'release:docs')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Resolve release label and level
+        id: release
         env:
           LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
         run: |
@@ -348,18 +399,26 @@ jobs:
           labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
           selected = [label for label in release_labels if label in labels]
           # release:docs never reaches this job; validation guarantees exactly one.
-          level = release_labels[selected[0]]
-          print(f'Applying release bump level: {level}')
+          label = selected[0]
+          level = release_labels[label]
+          print(f'Release label: {label} (level: {level})')
 
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write(f'label={label}\n')
               f.write(f'level={level}\n')
           PY
 
-      - name: Determine desired version (fork PRs)
-        id: fork_version
-        if: needs.classify-pr.outputs.same_repo_pr != 'true'
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.PAT }}
+
+      - name: Determine desired version
+        id: version
         env:
-          CURRENT_BUMP_LEVEL: ${{ steps.fork_level.outputs.level }}
+          CURRENT_BUMP_LEVEL: ${{ steps.release.outputs.level }}
         run: |
           git fetch origin --tags
           python <<'PY'
@@ -418,11 +477,15 @@ jobs:
               f.write(f'desired_version={desired_version_str}\n')
           PY
 
-      - name: Apply desired version (fork PRs)
-        if: needs.classify-pr.outputs.same_repo_pr != 'true'
+      - name: Create bump branch
+        id: branch
         env:
-          DESIRED_VERSION: ${{ steps.fork_version.outputs.desired_version }}
+          DESIRED_VERSION: ${{ steps.version.outputs.desired_version }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          BRANCH="release/v${DESIRED_VERSION}-pr-${PR_NUMBER}"
+          echo "name=${BRANCH}" >> "$GITHUB_OUTPUT"
+
           python <<'PY'
           import os
           import re
@@ -456,56 +519,43 @@ jobs:
           cargo_lock.write_text(cargo_lock_text, encoding='utf-8')
           PY
 
-      - name: Commit version bump to main (fork PRs)
-        if: needs.classify-pr.outputs.same_repo_pr != 'true'
-        env:
-          DESIRED_VERSION: ${{ steps.fork_version.outputs.desired_version }}
-        run: |
           if git diff --quiet -- Cargo.toml Cargo.lock; then
+            echo "No version change needed; skipping bump PR."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
           git add Cargo.toml Cargo.lock
           git commit -m "chore: set version to v${DESIRED_VERSION}"
-          git push origin HEAD:main
+          git push origin "${BRANCH}"
 
-      - name: Extract version
-        id: version
-        run: echo "value=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].version')" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare release notes
-        id: notes
+      - name: Open and auto-merge bump PR
+        if: steps.branch.outputs.skip != 'true'
         env:
+          GH_TOKEN: ${{ secrets.PAT }}
+          DESIRED_VERSION: ${{ steps.version.outputs.desired_version }}
+          RELEASE_LABEL: ${{ steps.release.outputs.label }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BODY: ${{ github.event.pull_request.body }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          python <<'PY'
-          import os
-          from pathlib import Path
+          # The Publish job tags from this PR's body and build.yml turns the tag
+          # message into the GitHub Release notes, so mirror the merged fork PR's
+          # body here.
+          {
+            printf '%s\n\n' "${PR_BODY}"
+            printf -- '---\n_Release commit for #%s._\n' "${PR_NUMBER}"
+          } > "${RUNNER_TEMP}/bump-body.md"
 
-          notes = (os.environ.get('PR_BODY') or '').strip()
-          if not notes:
-              notes = (os.environ.get('PR_TITLE') or '').strip()
+          PR_URL=$(gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "chore: release v${DESIRED_VERSION} (#${PR_NUMBER})" \
+            --body-file "${RUNNER_TEMP}/bump-body.md" \
+            --label "${RELEASE_LABEL}")
+          echo "Opened bump PR: ${PR_URL}"
 
-          notes_path = Path(os.environ['RUNNER_TEMP']) / 'release-notes.md'
-          notes_path.write_text(f'{notes}\n', encoding='utf-8')
-
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
-              f.write(f'path={notes_path}\n')
-          PY
-
-      - name: Create and push tag
-        env:
-          TAG: v${{ steps.version.outputs.value }}
-        run: |
-          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists, skipping."
-            exit 0
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -F "${{ steps.notes.outputs.path }}"
-          git push origin "refs/tags/$TAG"
+          gh pr merge "${PR_URL}" --auto --squash --delete-branch
