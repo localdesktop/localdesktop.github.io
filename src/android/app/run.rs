@@ -4,6 +4,7 @@ use super::build::{PolarBearApp, PolarBearBackend};
 use crate::android::{
     accessibility::{self, AppUserEvent},
     backend::{
+        pulse_server,
         wayland::{
             bind, centralize, centralize_injected_keyboard, handle, write_guest_output_state,
             CentralizedEvent, State,
@@ -127,6 +128,8 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
                 }
                 handle(CentralizedEvent::Redraw, backend, event_loop);
                 launch();
+                // Start the PulseAudio Server if Wayland is ready
+                pulse_server::spawn_after_ready(self.frontend.android_app.clone());
             }
         }
     }
@@ -182,6 +185,8 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
             backend.touch_gesture_was_multi_touch = false;
             backend.touch_down_position = None;
             backend.pointer_pressed = false;
+            // Kill PulseAudio Server if Wayland is suspended
+            pulse_server::shutdown();
         }
     }
 }
