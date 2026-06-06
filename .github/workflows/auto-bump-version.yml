@@ -63,15 +63,8 @@ jobs:
         if: needs.classify-pr.outputs.gh_pages_only == 'true'
         run: echo "Release label validation skipped for gh-pages-only PR."
 
-      - name: Require PR branch in this repository
-        if: needs.classify-pr.outputs.gh_pages_only != 'true' && needs.classify-pr.outputs.same_repo_pr != 'true'
-        run: |
-          echo "Release automation only supports PR branches from this repository."
-          echo "Open the PR from a branch in this repository so the workflow can push the version bump commit."
-          exit 1
-
       - name: Require exactly one release label
-        if: needs.classify-pr.outputs.gh_pages_only != 'true' && needs.classify-pr.outputs.same_repo_pr == 'true'
+        if: needs.classify-pr.outputs.gh_pages_only != 'true'
         env:
           LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
         run: |
@@ -287,7 +280,7 @@ jobs:
   publish-release-tag:
     name: Publish Release Tag
     needs: classify-pr
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.gh_pages_only != 'true' && needs.classify-pr.outputs.same_repo_pr == 'true' && !contains(github.event.pull_request.labels.*.name, 'release:docs')
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.gh_pages_only != 'true' && !contains(github.event.pull_request.labels.*.name, 'release:docs')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -329,6 +322,154 @@ jobs:
           ref: main
           fetch-depth: 0
           token: ${{ secrets.PAT }}
+
+      # Fork PRs skip the pre-merge Sync job (we can't safely push to a fork from
+      # CI), so the version bump that same-repo PRs receive on their branch never
+      # happened. Apply it here on main, in this trusted context, before tagging.
+      # This block is a no-op for same-repo PRs, whose main is already bumped.
+      - name: Read release level (fork PRs)
+        id: fork_level
+        if: needs.classify-pr.outputs.same_repo_pr != 'true'
+        env:
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
+        run: |
+          python <<'PY'
+          import json
+          import os
+
+          release_labels = {
+              'release:breaking': 'major',
+              'release:feature': 'minor',
+              'release:bugfix': 'patch',
+              'release:patch': 'patch',
+              'release:improvement': 'patch',
+              'release:optimisation': 'patch',
+          }
+          labels = {item['name'] for item in json.loads(os.environ['LABELS_JSON'])}
+          selected = [label for label in release_labels if label in labels]
+          # release:docs never reaches this job; validation guarantees exactly one.
+          level = release_labels[selected[0]]
+          print(f'Applying release bump level: {level}')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write(f'level={level}\n')
+          PY
+
+      - name: Determine desired version (fork PRs)
+        id: fork_version
+        if: needs.classify-pr.outputs.same_repo_pr != 'true'
+        env:
+          CURRENT_BUMP_LEVEL: ${{ steps.fork_level.outputs.level }}
+        run: |
+          git fetch origin --tags
+          python <<'PY'
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          current_level = os.environ['CURRENT_BUMP_LEVEL']
+
+          def parse_version(raw):
+              match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', raw.strip())
+              if not match:
+                  return None
+              return tuple(map(int, match.groups()))
+
+          def bump(version, level):
+              major, minor, patch = version
+              if level == 'major':
+                  return (major + 1, 0, 0)
+              if level == 'minor':
+                  return (major, minor + 1, 0)
+              return (major, minor, patch + 1)
+
+          manifest_raw = Path('Cargo.toml').read_text(encoding='utf-8')
+          match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', manifest_raw, re.M)
+          if not match:
+              raise SystemExit('Could not find version in Cargo.toml on main')
+
+          main_version = tuple(map(int, match.groups()))
+
+          tags = subprocess.run(
+              ['git', 'tag', '--list', 'v*.*.*', '--sort=-v:refname'],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.splitlines()
+
+          latest_tag_version = None
+          for tag in tags:
+              parsed = parse_version(tag)
+              if parsed is not None:
+                  latest_tag_version = parsed
+                  break
+
+          base_version = main_version
+          if latest_tag_version is not None:
+              base_version = max(main_version, latest_tag_version)
+
+          desired_version = bump(base_version, current_level)
+          desired_version_str = '.'.join(map(str, desired_version))
+          print(f'Base version: {".".join(map(str, base_version))}')
+          print(f'Desired version: {desired_version_str}')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write(f'desired_version={desired_version_str}\n')
+          PY
+
+      - name: Apply desired version (fork PRs)
+        if: needs.classify-pr.outputs.same_repo_pr != 'true'
+        env:
+          DESIRED_VERSION: ${{ steps.fork_version.outputs.desired_version }}
+        run: |
+          python <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          desired_version = os.environ['DESIRED_VERSION']
+
+          cargo_toml = Path('Cargo.toml')
+          cargo_toml_text = cargo_toml.read_text(encoding='utf-8')
+          cargo_toml_text, toml_replacements = re.subn(
+              r'^version\s*=\s*"\d+\.\d+\.\d+"',
+              f'version = "{desired_version}"',
+              cargo_toml_text,
+              count=1,
+              flags=re.M,
+          )
+          if toml_replacements != 1:
+              raise SystemExit('Failed to update version in Cargo.toml')
+          cargo_toml.write_text(cargo_toml_text, encoding='utf-8')
+
+          cargo_lock = Path('Cargo.lock')
+          cargo_lock_text = cargo_lock.read_text(encoding='utf-8')
+          cargo_lock_text, lock_replacements = re.subn(
+              r'(\[\[package\]\]\nname = "localdesktop"\nversion = ")\d+\.\d+\.\d+(")',
+              rf'\g<1>{desired_version}\2',
+              cargo_lock_text,
+              count=1,
+          )
+          if lock_replacements != 1:
+              raise SystemExit('Failed to update localdesktop package version in Cargo.lock')
+          cargo_lock.write_text(cargo_lock_text, encoding='utf-8')
+          PY
+
+      - name: Commit version bump to main (fork PRs)
+        if: needs.classify-pr.outputs.same_repo_pr != 'true'
+        env:
+          DESIRED_VERSION: ${{ steps.fork_version.outputs.desired_version }}
+        run: |
+          if git diff --quiet -- Cargo.toml Cargo.lock; then
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: set version to v${DESIRED_VERSION}"
+          git push origin HEAD:main
 
       - name: Extract version
         id: version
