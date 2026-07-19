@@ -1,0 +1,72 @@
+# PipeWire Standalone-Client AAudio Sink POC
+
+This branch adds a proof-of-concept backend for standalone-client
+PipeWire/AAudio playback: run PipeWire on the Android side, expose its native
+socket to the proot guest, and bridge playback with a separate standalone
+PipeWire client that registers an AAudio-backed `Audio/Sink`.
+
+It is intentionally not a PipeWire/SPA plugin or PipeWire module. That keeps the
+first experiment closer to the existing PulseAudio model: a host-side daemon plus
+a host-side audio sink process.
+
+It does not replace PulseAudio. The supervisor is inert unless the experimental
+native artifacts are bundled in the APK.
+
+## Runtime Shape
+
+```text
+guest PipeWire client
+  -> /tmp/pipewire-0
+  -> host PipeWire daemon in Android app context
+  -> localdesktop-aaudio-sink client
+  -> AAudio
+```
+
+The socket path is intentionally under the proot-visible `/tmp`, matching the
+Wayland strategy:
+
+```text
+host path:  /data/data/app.polarbear/files/arch/tmp/pipewire-0
+guest path: /tmp/pipewire-0
+```
+
+The default guest launch now exports:
+
+```sh
+PIPEWIRE_RUNTIME_DIR=/tmp
+XDG_RUNTIME_DIR=/tmp
+```
+
+## Android-Side Artifacts
+
+Place these in `assets/libs/arm64-v8a` before building the APK:
+
+- `libpipewire_exec.so`: renamed `pipewire` executable.
+- `liblocaldesktop_pipewire_aaudio_sink.so`: built from
+  `native/pipewire-aaudio-sink`.
+- PipeWire module `.so` files, for example
+  `libpipewire-module-protocol-native.so`.
+- SPA plugin `.so` files, for example `libspa-support.so` and
+  `libspa-audioconvert.so`.
+
+Keep the module and plugin files flat in `assets/libs/arm64-v8a`. The current
+APK packagers extract top-level `.so` files from that directory into Android
+`nativeLibraryDir`.
+
+Optional:
+
+- `libwireplumber_exec.so`: renamed `wireplumber` executable. Without it, the
+  generated config tries `libpipewire-module-session-manager` with `nofail`.
+
+## Current Limits
+
+- Playback only.
+- F32 interleaved output only.
+- Fixed default request of 48 kHz stereo.
+- No Android audio focus handling yet.
+- No capture/microphone path.
+- Policy is experimental; use WirePlumber if available, otherwise manual
+  `pw-link` may be needed.
+
+This is meant to prove the architecture and timing path, not to become the final
+audio backend as-is.
