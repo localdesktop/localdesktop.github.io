@@ -12,29 +12,41 @@ const THIN_PAGE_PATHS = new Set([
   "/blog/2025/07/08/thank-you-for-100-github-stars",
   "/blog/2026/04/07/thank-you-new-contributors",
   "/docs/developer/bug-cheat-sheet/android-debug",
+  "/docs/developer/bug-cheat-sheet/egl-context",
   "/docs/developer/bug-cheat-sheet/pacman-progress",
   "/docs/developer/bug-cheat-sheet/random-crashes",
   "/docs/developer/bug-cheat-sheet/xkb-error",
-  "/docs/user/5-android-storage",
+  "/docs/user/android-storage",
   "/docs/user/app-compatibility/gimp",
   "/docs/user/app-compatibility/visual-studio-code",
 ]);
+
+const GENERATED_LISTING_PAGE_PATHS = new Set([
+  "/blog/archive",
+  "/blog/authors",
+  "/blog/tags",
+]);
+
+const GENERATED_LISTING_PAGE_PREFIXES = ["/blog/tags/"];
 
 export default function LayoutWrapper(props: Props): ReactNode {
   const routes = useRouteContext();
   const location = useLocation();
 
   const pathname = location.pathname.replace(/\/$/, "") || "/";
-  const isThinPage = THIN_PAGE_PATHS.has(pathname);
+  const isNoindexPage =
+    THIN_PAGE_PATHS.has(pathname) ||
+    GENERATED_LISTING_PAGE_PATHS.has(pathname) ||
+    GENERATED_LISTING_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix));
   const noAdsense =
     (typeof window !== "undefined" && window.self !== window.top) ||
     ["/privacy", "/support-us"].includes(pathname) ||
-    isThinPage ||
+    isNoindexPage ||
     routes.plugin.name === "native";
 
   return (
     <>
-      {isThinPage && (
+      {isNoindexPage && (
         <Head>
           <meta name="robots" content="noindex" />
         </Head>
