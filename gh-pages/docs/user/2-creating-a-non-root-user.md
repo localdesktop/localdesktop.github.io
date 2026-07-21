@@ -61,12 +61,16 @@ _(Replace `teddy` with the username you created [previously](#create-your-user))
 
 Save and exit.
 
-You can test if your new user can use `sudo` by temporarily logging in:
+You can test whether the account is resolvable and can use `sudo` by temporarily logging in:
 
 ```bash
-su teddy # Change to your username
+getent passwd teddy # Change to your username
+su - teddy
 sudo ls /root # Make sure it does not output something like: "teddy is not in the sudoers file"
+exit
 ```
+
+If `su` displays `I have no name`, close and reopen Local Desktop, then repeat the test. Local Desktop repairs the account database permissions during startup so non-root processes can resolve users and groups.
 
 ## [Important] Tell Local Desktop
 
@@ -76,13 +80,14 @@ You must tell Local Desktop who to log in as, or it will log in as root. To (cre
 nano /etc/localdesktop/localdesktop.toml
 ```
 
-Add the following content:
+Test the new account for one launch while keeping root as the persistent fallback:
 
 ```toml title="/etc/localdesktop/localdesktop.toml"
 [user]
-username = "teddy"
+username = "root"
+try_username = "teddy"
 ```
 
 _(Replace `teddy` with the username you created [previously](#create-your-user))_
 
-The changes will take effect the next time you launch Local Desktop. If something goes wrong, you can always delete this config file and restart as root.
+The changes will take effect the next time you launch Local Desktop. After that launch, `try_username` is commented out automatically. If the desktop works, change `username = "root"` to `username = "teddy"` and remove the commented `try_username` line. If the configured account is missing, Local Desktop falls back to root so you can repair the account or config without clearing the app's storage.

@@ -1,5 +1,8 @@
 use crate::android::utils::application_context::get_application_context;
-use crate::core::config;
+use crate::core::{
+    config,
+    guest_user::{repair_account_database_permissions, GuestUser, ROOT_USERNAME},
+};
 use std::ffi::CString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -101,7 +104,17 @@ impl ArchProcess {
 
     pub fn run(self) -> Output {
         let context = get_application_context();
-        let user = self.user.as_deref().unwrap_or("root");
+        if let Err(error) = repair_account_database_permissions(Path::new(config::ARCH_FS_ROOT)) {
+            log::warn!("Failed to repair guest account database permissions: {error}");
+        }
+
+        let requested_username = self.user.as_deref().unwrap_or(ROOT_USERNAME);
+        let user = GuestUser::resolve(Path::new(config::ARCH_FS_ROOT), requested_username);
+        if self.user.is_some() && user.username() != requested_username {
+            log::warn!(
+                "Configured guest user '{requested_username}' could not be resolved; falling back to root"
+            );
+        }
 
         let mut process = Command::new(context.native_library_dir.join("libproot.so"));
         process
@@ -153,28 +166,24 @@ impl ArchProcess {
 
         // env vars
         process.arg("/usr/bin/env").arg("-i");
-        if user == "root" {
-            process.arg("HOME=/root");
-        } else {
-            process.arg(format!("HOME=/home/{}", user));
-        }
         process
+            .arg(format!("HOME={}", user.guest_home_dir().display()))
             .arg("LANG=C.UTF-8")
             .arg("TERM=xterm-256color")
             .arg("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:/system/bin:/system/xbin")
             .arg("TMPDIR=/tmp")
-            .arg(format!("USER={}", user))
-            .arg(format!("LOGNAME={}", user));
+            .arg(format!("USER={}", user.username()))
+            .arg(format!("LOGNAME={}", user.username()));
 
         // user shell
-        if user == "root" {
+        if user.username() == ROOT_USERNAME {
             process.arg("sh");
         } else {
             process
                 .arg("runuser")
                 .arg("--pty")
                 .arg("-u")
-                .arg(user)
+                .arg(user.username())
                 .arg("--")
                 .arg("sh");
         }

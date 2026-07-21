@@ -1,5 +1,6 @@
 pub mod core {
     pub mod config;
+    pub mod guest_user;
 }
 
 #[cfg(target_os = "android")]

@@ -41,7 +41,7 @@ pub const CONFIG_FILE: &str = "/etc/localdesktop/localdesktop.toml";
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct LocalConfig {
-    #[serde(default)]
+    #[serde(default, alias = "users")]
     pub user: UserConfig,
 
     /// What happens if we don't assign this `#[serde(default)]` attribute?
@@ -54,13 +54,18 @@ pub struct LocalConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserConfig {
+    #[serde(default = "default_username")]
     pub username: String,
+}
+
+fn default_username() -> String {
+    "root".to_string()
 }
 
 impl Default for UserConfig {
     fn default() -> Self {
         Self {
-            username: "root".to_string(),
+            username: default_username(),
         }
     }
 }
@@ -179,8 +184,7 @@ pub fn parse_config(full_config_path: String) -> LocalConfig {
         return config;
     }
     // Config malformed, use the default config and the user can modify it again
-    let default_config = LocalConfig::default();
-    default_config
+    LocalConfig::default()
 }
 
 #[cfg(test)]
@@ -240,6 +244,41 @@ mod tests {
                 assert_eq!(config.user.username, "testuser");
                 assert_eq!(config.command.check, "try-check");
                 assert_eq!(config.command.install, "install-cmd")
+            },
+        );
+    }
+
+    #[test]
+    fn should_keep_other_sections_when_try_username_has_been_consumed() {
+        with_config_file(
+            r#"
+                [user]
+                try_username = "alice"
+
+                [command]
+                check = "custom-check"
+            "#,
+            |full_config_path| {
+                let first_launch = parse_config(full_config_path.clone());
+                assert_eq!(first_launch.user.username, "alice");
+
+                let second_launch = parse_config(full_config_path);
+                assert_eq!(second_launch.user.username, "root");
+                assert_eq!(second_launch.command.check, "custom-check");
+            },
+        );
+    }
+
+    #[test]
+    fn should_accept_the_legacy_users_section_name() {
+        with_config_file(
+            r#"
+                [users]
+                username = "alice"
+            "#,
+            |full_config_path| {
+                let config = parse_config(full_config_path);
+                assert_eq!(config.user.username, "alice");
             },
         );
     }
