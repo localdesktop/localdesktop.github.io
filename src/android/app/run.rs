@@ -15,6 +15,7 @@ use crate::android::{
     utils::{ndk::run_in_jvm, webview::show_webview_popup},
 };
 use crate::core::config;
+use jni::objects::{JObject, JValue};
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::utils::Transform;
@@ -22,7 +23,87 @@ use smithay::wayland::shell::xdg::ToplevelSurface;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
+use winit::platform::android::activity::AndroidApp;
 use winit::window::WindowId;
+
+// A compact, application-owned cursor. Android accessibility settings can scale system pointer
+// icons substantially; using a custom icon keeps the pointer size stable inside Local Desktop.
+const LOCAL_POINTER_PNG: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 16, 0, 0, 0,
+    24, 8, 6, 0, 0, 0, 243, 160, 125, 12, 0, 0, 0, 136, 73, 68, 65, 84, 120, 218, 173,
+    148, 75, 18, 192, 32, 8, 67, 77, 198, 251, 95, 153, 46, 106, 109, 107, 253, 64, 42, 43,
+    199, 153, 60, 4, 130, 41, 109, 10, 83, 133, 252, 11, 169, 0, 51, 147, 32, 124, 213, 33,
+    64, 248, 105, 70, 16, 194, 110, 71, 3, 16, 14, 199, 114, 67, 76, 2, 92, 144, 213, 107,
+    232, 50, 201, 4, 66, 183, 211, 6, 16, 134, 236, 218, 129, 48, 236, 249, 6, 146, 87, 2, 0,
+    179, 253, 65, 30, 137, 74, 166, 122, 229, 158, 66, 155, 49, 52, 198, 34, 198, 121, 68,
+    204, 202, 15, 177, 188, 141, 248, 86, 3, 183, 145, 176, 227, 71, 146, 237, 236, 208, 154,
+    121, 54, 115, 102, 24, 249, 211, 93, 198, 1, 62, 182, 71, 1, 8, 185, 87, 167, 0, 0, 0,
+    0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+
+fn set_local_pointer(android_app: AndroidApp, enabled: bool) {
+    run_in_jvm(
+        |env, app| {
+            let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as *mut _) };
+            let result = (|| -> jni::errors::Result<()> {
+                let window = env
+                    .call_method(&activity, "getWindow", "()Landroid/view/Window;", &[])?
+                    .l()?;
+                let decor_view = env
+                    .call_method(window, "getDecorView", "()Landroid/view/View;", &[])?
+                    .l()?;
+
+                if enabled {
+                    let bytes = env.byte_array_from_slice(LOCAL_POINTER_PNG)?;
+                    let bitmap = env
+                        .call_static_method(
+                            "android/graphics/BitmapFactory",
+                            "decodeByteArray",
+                            "([BII)Landroid/graphics/Bitmap;",
+                            &[
+                                JValue::Object(&JObject::from(bytes)),
+                                JValue::Int(0),
+                                JValue::Int(LOCAL_POINTER_PNG.len() as i32),
+                            ],
+                        )?
+                        .l()?;
+                    let pointer_icon = env
+                        .call_static_method(
+                            "android/view/PointerIcon",
+                            "create",
+                            "(Landroid/graphics/Bitmap;FF)Landroid/view/PointerIcon;",
+                            &[
+                                JValue::Object(&bitmap),
+                                JValue::Float(1.0),
+                                JValue::Float(1.0),
+                            ],
+                        )?
+                        .l()?;
+                    env.call_method(
+                        decor_view,
+                        "setPointerIcon",
+                        "(Landroid/view/PointerIcon;)V",
+                        &[JValue::Object(&pointer_icon)],
+                    )?;
+                } else {
+                    env.call_method(
+                        decor_view,
+                        "setPointerIcon",
+                        "(Landroid/view/PointerIcon;)V",
+                        &[JValue::Object(&JObject::null())],
+                    )?;
+                }
+                Ok(())
+            })();
+
+            if let Err(error) = result {
+                log::warn!("Failed to update Local Desktop pointer icon: {error}");
+            }
+            std::mem::forget(activity);
+        },
+        android_app,
+    );
+}
 
 fn configure_output(backend: &mut crate::android::backend::wayland::WaylandBackend) {
     let Some(winit) = backend.graphic_renderer.as_ref() else {
@@ -120,6 +201,7 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
                     log::info!("Ignoring redundant resume while renderer is already active");
                 }
 
+                set_local_pointer(self.frontend.android_app.clone(), true);
                 configure_output(backend);
                 accessibility::set_runtime_active(true);
 
@@ -178,6 +260,7 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
         event_loop.set_control_flow(ControlFlow::Wait);
 
         if let PolarBearBackend::Wayland(backend) = &mut self.backend {
+            set_local_pointer(self.frontend.android_app.clone(), false);
             backend.graphic_renderer = None;
             backend.key_counter = 0;
             backend.touch_points.clear();
