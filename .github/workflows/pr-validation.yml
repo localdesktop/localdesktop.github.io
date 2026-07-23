@@ -26,7 +26,9 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -54,7 +56,9 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -65,22 +69,23 @@ jobs:
           shared-key: android-arm64-validation
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Gradle 8.14.3
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.14.3"
+          cache-provider: basic
 
       - name: Cache prepared Android NDK
         id: android-ndk-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/x/Android.ndk
-          key: android-ndk-r28-${{ runner.os }}-x86_64-v1
+          key: android-ndk-r28-${{ runner.os }}-x86_64-v2
 
       - name: Install system dependencies
         run: |
@@ -93,21 +98,30 @@ jobs:
         run: |
           set -euo pipefail
 
+          archive="android-ndk-r28-linux.zip"
           curl --fail --location --retry 3 \
-            --output android-ndk-r28-linux.zip \
-            https://dl.google.com/android/repository/android-ndk-r28-linux.zip
-          unzip -q android-ndk-r28-linux.zip
+            --output "$archive" \
+            "https://dl.google.com/android/repository/$archive"
+          echo "894f469c5192a116d21f412de27966140a530ebc  $archive" | sha1sum --check --strict
+          unzip -q "$archive"
 
           toolchain="android-ndk-r28/toolchains/llvm/prebuilt/linux-x86_64"
           clang_version="$(find "$toolchain/lib/clang" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n 1)"
+          test -n "$clang_version"
           clang="$toolchain/lib/clang/$clang_version"
 
+          test -d "$toolchain/sysroot/usr"
+          test -d "$clang/lib/linux/aarch64"
+          test -d "$clang/lib/linux/arm"
+          test -d "$clang/lib/linux/x86_64"
+          test -d "$clang/lib/linux/i386"
+
           mkdir -p Android.ndk
-          cp -r "$toolchain/sysroot/usr" Android.ndk/
-          cp -r "$clang/lib/linux/aarch64/." Android.ndk/usr/lib/aarch64-linux-android/
-          cp -r "$clang/lib/linux/arm/." Android.ndk/usr/lib/arm-linux-androideabi/
-          cp -r "$clang/lib/linux/x86_64/." Android.ndk/usr/lib/x86_64-linux-android/
-          cp -r "$clang/lib/linux/i386/." Android.ndk/usr/lib/i686-linux-android/
+          cp -a "$toolchain/sysroot/usr" Android.ndk/
+          cp -a "$clang/lib/linux/aarch64/." Android.ndk/usr/lib/aarch64-linux-android/
+          cp -a "$clang/lib/linux/arm/." Android.ndk/usr/lib/arm-linux-androideabi/
+          cp -a "$clang/lib/linux/x86_64/." Android.ndk/usr/lib/x86_64-linux-android/
+          cp -a "$clang/lib/linux/i386/." Android.ndk/usr/lib/i686-linux-android/
 
           printf 'INPUT(-lunwind)\n' > Android.ndk/usr/lib/aarch64-linux-android/libgcc.a
           printf 'INPUT(-lunwind)\n' > Android.ndk/usr/lib/arm-linux-androideabi/libgcc.a
@@ -116,12 +130,13 @@ jobs:
 
           mkdir -p "$HOME/.cache/x"
           mv Android.ndk "$HOME/.cache/x/Android.ndk"
+          rm -rf android-ndk-r28 "$archive"
 
       - name: Install patched xbuild
         working-directory: patches/xbuild
         run: cargo install --path xbuild
 
-      - name: Build unsigned debug APK
+      - name: Build debug APK
         run: x build --platform=android --arch=arm64 --format=apk
 
       - name: List generated APKs
@@ -129,7 +144,7 @@ jobs:
         run: find target/x -type f -name '*.apk' -print 2>/dev/null || true
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: localdesktop-android-arm64-debug
           path: target/x/**/outputs/apk/debug/*.apk
