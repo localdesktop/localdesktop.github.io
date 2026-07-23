@@ -85,7 +85,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/x/Android.ndk
-          key: android-ndk-r28-${{ runner.os }}-x86_64-v2
+          key: android-ndk-r28-${{ runner.os }}-x86_64-v3
 
       - name: Install system dependencies
         run: |
@@ -102,7 +102,7 @@ jobs:
           curl --fail --location --retry 3 \
             --output "$archive" \
             "https://dl.google.com/android/repository/$archive"
-          echo "894f469c5192a116d21f412de27966140a530ebc  $archive" | sha1sum --check --strict
+          echo "a186b67e8810cb949514925e4f7a2255548fb55f5e9b0824a6430d012c1b695b  $archive" | sha256sum --check --strict
           unzip -q "$archive"
 
           toolchain="android-ndk-r28/toolchains/llvm/prebuilt/linux-x86_64"
