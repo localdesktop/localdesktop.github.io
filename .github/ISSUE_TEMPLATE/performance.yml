@@ -1,0 +1,123 @@
+name: Performance or graphics problem
+description: Report a reproducible performance, rendering, GPU, or audio problem
+title: "[Performance]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve Local Desktop. Please report one reproducible problem per issue. Separate unrelated touch, installation, package-management, browser, audio, and graphics requests.
+
+  - type: input
+    id: version
+    attributes:
+      label: Local Desktop version
+      placeholder: "For example: 2.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device model
+      placeholder: "Manufacturer and exact model"
+    validations:
+      required: true
+
+  - type: input
+    id: android
+    attributes:
+      label: Android version and build
+      placeholder: "For example: Android 15, build AP3A..."
+    validations:
+      required: true
+
+  - type: input
+    id: soc_gpu
+    attributes:
+      label: SoC and GPU
+      placeholder: "For example: Snapdragon 8 Gen 2 / Adreno 740"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: firmware
+    attributes:
+      label: Device environment
+      options:
+        - Stock, unrooted
+        - Stock, rooted
+        - Custom firmware, unrooted
+        - Custom firmware, rooted
+        - Unknown
+    validations:
+      required: true
+
+  - type: dropdown
+    id: application_type
+    attributes:
+      label: Affected application type
+      multiple: true
+      options:
+        - Native Wayland application
+        - Xwayland/X11 application
+        - Firefox
+        - Entire desktop session
+        - Audio only
+        - Unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest reliable sequence that demonstrates the problem.
+      placeholder: |
+        1. Launch ...
+        2. Open ...
+        3. Perform ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Include measurable information such as delay, frame rate, CPU usage, or error output where possible.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: report
+    attributes:
+      label: Support report
+      description: Run `sh scripts/localdesktop-support-report.sh` inside the guest, review it for sensitive information, and paste the complete output here.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Add Android logs, screenshots, or application output when available. Do not paste secrets or private data.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I confirmed that this report describes one primary problem.
+          required: true
+        - label: I searched existing issues for the same device and symptom.
+          required: true
+        - label: I understand that Turnip applies to Qualcomm Adreno GPUs, not Mali or other GPU families.
+          required: true
