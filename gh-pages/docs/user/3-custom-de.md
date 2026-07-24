@@ -3,88 +3,161 @@ title: Using other Desktop Environments
 ---
 
 :::warning
-This is an advanced topic. Proceed with your own risk.
+This is an advanced topic. A desktop environment that fails to start can leave you on a black or solid-colour screen for that launch. Test changes with the `try_*` settings described below so that Local Desktop can recover on the next restart.
 :::
 
-## The `[command]` configs
+:::info Project scope
+Local Desktop targets desktop-style use on Android with a sufficiently large display and a physical keyboard. Mobile shells such as Phosh and Plasma Mobile are not currently supported or planned as defaults. We intentionally do not publish unverified installation or launch commands; confirmed community configurations are welcome.
+:::
 
-Local Desktop uses 3 commands to set up your desktop environment:
+## Before you begin
+
+Local Desktop reads custom settings from:
+
+```text
+/etc/localdesktop/localdesktop.toml
+```
+
+The file is optional and might not exist on a fresh installation. From the default root session, create it when needed:
+
+```bash
+mkdir -p /etc/localdesktop
+touch /etc/localdesktop/localdesktop.toml
+```
+
+Each setting must fit on one line. A TOML key may appear only once in a table, so a configuration must contain **exactly one** `launch` or `try_launch` entry. Do not paste the X11 and Wayland alternatives into the same `[command]` table.
+
+## The `[command]` settings
+
+Local Desktop uses three commands to set up a desktop environment:
 
 ```toml title="/etc/localdesktop/localdesktop.toml"
 [command]
-check="pacman -Q noto-fonts && pacman -Q xfce4-session && pacman -Q xfce4-panel && pacman -Q xfce4-settings && pacman -Q xfce4-terminal && pacman -Q thunar && pacman -Q xfdesktop && pacman -Q xfconf && pacman -Q labwc && pacman -Q wlr-randr && pacman -Q xorg-xwayland && pacman -Q xdg-desktop-portal && pacman -Q xdg-desktop-portal-gtk && pacman -Q onboard"
-install="stdbuf -oL pacman -Syu --needed --noconfirm --noprogressbar noto-fonts xfce4 labwc wlr-randr xorg-xwayland xdg-desktop-portal xdg-desktop-portal-gtk onboard"
-launch="XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=XFCE /usr/local/bin/startxfce4-localdesktop 2>&1"
+check = "pacman -Q noto-fonts && pacman -Q xfce4-session && pacman -Q xfce4-panel && pacman -Q xfce4-settings && pacman -Q xfce4-terminal && pacman -Q thunar && pacman -Q xfdesktop && pacman -Q xfconf && pacman -Q labwc && pacman -Q wlr-randr && pacman -Q xorg-xwayland && pacman -Q xdg-desktop-portal && pacman -Q xdg-desktop-portal-gtk && pacman -Q onboard"
+install = "stdbuf -oL pacman -Syu --needed --noconfirm --noprogressbar noto-fonts xfce4 labwc wlr-randr xorg-xwayland xdg-desktop-portal xdg-desktop-portal-gtk onboard"
+launch = "XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=XFCE /usr/local/bin/startxfce4-localdesktop 2>&1"
 ```
 
-You can change these 3 commands to install and launch your custom desktop environment. Please share your successful setups with us and we can put them here to help others.
+You can replace these commands to install and launch another desktop environment.
 
-:::success Tips
-The `try_check`, `try_install`, `try_launch` configs are very handy to try different config values **without breaking anything**. Check out the [Configurations](/docs/user/configurations#special-try_-configs) documentation for more details about `try_*`.
+:::success Test safely with `try_*`
+Use `try_check`, `try_install`, and `try_launch` while testing. Each `try_*` entry overrides its normal counterpart for one launch and is then commented out automatically. See [Configurations](/docs/user/configurations#special-try_-configs) for the complete behavior.
 :::
 
-### check
+### `check`
 
-The `check` command is used to verify if the required packages are installed and Local Desktop is ready to boot in Wayland mode. In case you are wondering, there are 2 modes in Local Desktop:
-- Webview mode (the mode with the official website for documentation on top of a progress bar during installation)
-- Wayland mode
+The `check` command verifies that all required packages are installed. Local Desktop has two operating modes:
 
-If the command in `check` returns success, Local Desktop will boot in Wayland mode. Otherwise, it will enter Webview mode and proceed with the `install` command.
+- **Webview mode**, which shows installation documentation and progress.
+- **Wayland mode**, which hosts the desktop session.
+
+If `check` succeeds, Local Desktop starts in Wayland mode. Otherwise, it enters Webview mode and runs `install`.
 
 :::info Recipe
-You can use `pacman -Q package` to check for a package and `pacman -Qg package-group` to check for a group. Use the `&&` operator to combine multiple checks.
+Use `pacman -Q package` to check an individual package and `pacman -Qg package-group` to check a package group. Join independent checks with `&&` so that any missing requirement causes the command to fail.
 :::
 
-### install
+### `install`
 
-When `check` fails, this command will be executed next. This is exactly the command that Local Desktop runs during the installation process. Some important notes:
-- Always put `stdbuf -oL ` in front of the command. [Why?](/docs/developer/bug-cheat-sheet/pacman-progress)
-- Always include the `--noconfirm` flag, otherwise, it will get stuck because it is waiting for a confirmation that never comes.
-- For a clear output, include `--noprogressbar`.
+When `check` fails, Local Desktop runs `install` as root. Important requirements:
+
+- Prefix the command with `stdbuf -oL `. [Why?](/docs/developer/bug-cheat-sheet/pacman-progress)
+- Include `--noconfirm`; there is no interactive prompt available during setup.
+- Include `--noprogressbar` for readable installation output.
 
 :::info Recipe
-Just keep all the syntax and put all the packages/groups between `pacman -Syu` and the first `--`. For example: `pacman -Syu package-1 package-group-2 package-3 --noconfirm`.
+Keep the command syntax and place all packages or groups between `pacman -Syu` and the first option. For example: `pacman -Syu package-1 package-group-2 package-3 --noconfirm --noprogressbar`.
 :::
 
-### launch
+### `launch`
 
-When `check` returns success, this command will be executed next. This is exactly the command that Local Desktop runs to launch the desktop environment.
+When `check` succeeds, Local Desktop runs `launch` as the user configured under `[user]`.
 
-This is the most important command to set up your preferred desktop environment. It is also the most complicated command, as it requires a good understanding of display server components. Some important notes:
-- When things go wrong, you must check the [logcat](/docs/developer/how-to-logcat) to view the logs.
-- If you don't see any error logs, try appending `2>&1` to redirect stderr to stdout.
-- The default session is **Xfce on Wayland**. The built-in compositor listens on `/tmp/wayland-0`; the guest runs `startxfce4 --wayland`, which starts labwc as a nested compositor and connects to that socket. Setup also installs `/usr/local/bin/startxfce4-localdesktop` as a thin wrapper around `startxfce4 --wayland`.
+This is the most important and most environment-sensitive command. Important notes:
+
+- Check [logcat](/docs/developer/how-to-logcat) when a session does not start.
+- Append `2>&1` when necessary so stderr is included in the captured output.
+- The default session is **Xfce on Wayland**. The built-in compositor listens on `/tmp/wayland-0`; the guest runs `startxfce4 --wayland`, which starts labwc as a nested compositor and connects to that socket. Setup installs `/usr/local/bin/startxfce4-localdesktop` as a thin wrapper around `startxfce4 --wayland`.
 
 :::info Recipe
-Put important environment variables at the beginning of the command, for example `XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=XFCE ...`, then start a Wayland session such as `/usr/local/bin/startxfce4-localdesktop` or `startplasma-wayland`.
+For a native Wayland session, set variables such as `XDG_RUNTIME_DIR=/tmp`, `WAYLAND_DISPLAY=wayland-0`, and `XDG_SESSION_TYPE=wayland`, then start the desktop's Wayland session.
 
-For a legacy **X11 session via Xwayland**, start Xwayland first and point the desktop at `DISPLAY=:1`, for example: `Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-launch startxfce4 2>&1`.
+For a legacy X11 session, start Xwayland, wait for its socket, and point the desktop at `DISPLAY=:1`.
 :::
 
-## Config templates
+## KDE Plasma
 
-### KDE Plasma
+Choose **one** of the following templates. Do not combine their `try_launch` entries.
+
+### X11 session via Xwayland
+
+Use this as the fallback when the native Wayland session does not start on a device:
 
 ```toml title="/etc/localdesktop/localdesktop.toml"
 [command]
 try_check = "pacman -Qg plasma"
 try_install = "stdbuf -oL pacman -Syu plasma --noconfirm --noprogressbar"
-# X11 session via Xwayland
 try_launch = "XDG_RUNTIME_DIR=/tmp Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-launch startplasma-x11 2>&1"
-# Wayland session
+```
+
+### Native Wayland session
+
+Native Wayland can provide better performance, but compatibility is not uniform. Some users have reported black or purple screens. Test it with the one-shot settings below; after a failed launch, restart Local Desktop and use the X11 template instead.
+
+```toml title="/etc/localdesktop/localdesktop.toml"
+[command]
+try_check = "pacman -Qg plasma"
+try_install = "stdbuf -oL pacman -Syu plasma --noconfirm --noprogressbar"
 try_launch = "XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 /usr/lib/plasma-dbus-run-session-if-needed startplasma-wayland 2>&1"
 ```
 
 ![KDE Plasma on Local Desktop](/img/kde.webp)
 
-Feedback:
+### Keep a successful configuration
 
-- The time zone is not set; however, it is simple to set one with KDE's UI.
-- "Could not enter folder tags:." error popups.
-- The Wayland session offers notably better performance than the X11 session or PRoot Distro + Termux:X11, but some features (e.g., Spectacle screenshots) may not work. With KDE 7 dropping X11 support, improving Wayland compatibility and being less dependent on Xwayland will be a bigger priority.
+The `try_*` settings are deliberately one-shot. When a template works, remove the `try_` prefix from **all three** settings:
 
-### Others
+- `try_check` → `check`
+- `try_install` → `install`
+- `try_launch` → `launch`
+
+If you do not make that change, the test entries are commented out after use and Local Desktop returns to its normal desktop configuration on the next launch.
+
+### Run Plasma as a non-root user
+
+Create and configure the account first by following [Creating a Non-root User](/docs/user/creating-a-non-root-user). Then add the user setting alongside one KDE template:
 
 ```toml title="/etc/localdesktop/localdesktop.toml"
-Feel free to contribute your configs by using the "Edit this page" link below
+[user]
+username = "teddy"
+
+[command]
+# Add exactly one KDE check/install/launch template here.
 ```
+
+Replace `teddy` with the account you created. Local Desktop runs `check` and `install` as root, so KDE packages are installed system-wide. It runs only `launch` as the configured user, so the Plasma session and its per-user settings belong to that account. Do not add `sudo` to the `install` command.
+
+### Known limitations
+
+- The time zone is not set automatically; it can be configured through KDE's settings.
+- A `Could not enter folder tags:.` error can appear.
+- Native Wayland features are still incomplete on some devices. For example, Spectacle screenshots might not work.
+
+## Troubleshooting
+
+| Symptom | Action |
+| --- | --- |
+| Black or purple screen after changing KDE settings | Restart Local Desktop. The one-shot `try_*` values will already be disabled. Then test the X11 template or inspect logcat. |
+| KDE works once, then Local Desktop returns to its default desktop | Remove the `try_` prefix from all three successful settings. |
+| Local Desktop ignores the custom file | Check for malformed TOML, duplicate keys, multi-line values, or incorrect capitalization. |
+| The config file is missing | Create `/etc/localdesktop` and `localdesktop.toml` as shown above. |
+| Plasma starts as root | Create a non-root account and set `[user].username` to that exact account name. |
+
+## Other desktop environments
+
+Please contribute only configurations that you have verified on the current Local Desktop release. A useful contribution includes:
+
+- The complete `check`, `install`, and `launch` commands.
+- Whether the session uses native Wayland or Xwayland.
+- The Local Desktop version and device architecture tested.
+- Known limitations and a recovery path when launch fails.
