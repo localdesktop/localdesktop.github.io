@@ -13,6 +13,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::net::Shutdown;
+use std::os::raw::c_int;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -51,6 +52,12 @@ const PIPEWIRE_DAEMON_LIB: &str = "libpipewire_exec.so";
 const WIREPLUMBER_DAEMON_LIB: &str = "libwireplumber_exec.so";
 const AAUDIO_SINK_LIB: &str = "liblocaldesktop_pipewire_aaudio_sink.so";
 const PIPEWIRE_SOCKET_NAME: &str = "pipewire-0";
+const MIN_PIPEWIRE_API_LEVEL: c_int = 30;
+
+#[link(name = "android")]
+extern "C" {
+    fn android_get_device_api_level() -> c_int;
+}
 
 static AAUDIO_CHILDREN: Mutex<Option<PipewireAaudioChildren>> = Mutex::new(None);
 static AAUDIO_START_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
@@ -80,7 +87,10 @@ pub fn spawn_after_ready(_android_app: AndroidApp) {
         return;
     }
 
-    pw_info!("server", "scheduling standalone-client PipeWire/AAudio backend");
+    pw_info!(
+        "server",
+        "scheduling standalone-client PipeWire/AAudio backend"
+    );
     thread::spawn(move || {
         let started = phase_begin("ensure_pipewire_aaudio");
         let result = ensure_running();
@@ -119,6 +129,15 @@ fn ensure_running() -> Result<(), String> {
         .is_some()
     {
         pw_debug!("server", "reuse running PipeWire/AAudio children");
+        return Ok(());
+    }
+
+    let api_level = device_api_level();
+    if api_level < MIN_PIPEWIRE_API_LEVEL {
+        pw_info!(
+            "server",
+            "disabled; bundled Termux PipeWire requires Android API {MIN_PIPEWIRE_API_LEVEL}+ (device API {api_level})"
+        );
         return Ok(());
     }
 
@@ -177,6 +196,10 @@ fn ensure_running() -> Result<(), String> {
         config::PIPEWIRE_GUEST_RUNTIME_DIR
     );
     Ok(())
+}
+
+fn device_api_level() -> c_int {
+    unsafe { android_get_device_api_level() }
 }
 
 fn build_pipewire_env(data_dir: &Path, lib_dir: &Path) -> Result<PipewireAaudioEnv, String> {

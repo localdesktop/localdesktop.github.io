@@ -21,6 +21,11 @@ The process connects to PipeWire like a normal client, registers a virtual
 
 ## Expected APK Artifacts
 
+The `pipewire` branch currently includes prebuilt `arm64-v8a` PipeWire assets
+generated from the Termux `pipewire` package. The PipeWire path is disabled at
+runtime below Android API 30 because those Termux binaries reference Android
+libc symbols that are not available on older releases.
+
 The Rust supervisor in
 `src/android/backend/pipewire_standalone_aaudio.rs` starts only when these files
 exist in Android `nativeLibraryDir`:
@@ -52,6 +57,10 @@ contains `libpipewire-0.3`, PipeWire headers, and SPA headers, then run:
 ```sh
 ./native/pipewire-aaudio-sink/build-android.sh
 ```
+
+The default build API is 30 to match the currently bundled Termux PipeWire
+binary. Override `API` only if the PipeWire sysroot you link against has a
+different Android API floor.
 
 The script writes:
 

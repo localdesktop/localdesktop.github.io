@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-API="${API:-26}"
+API="${API:-30}"
 ABI="${ABI:-arm64-v8a}"
 TARGET="${TARGET:-aarch64-linux-android}"
 OUT="${OUT:-$ROOT/assets/libs/$ABI/liblocaldesktop_pipewire_aaudio_sink.so}"
@@ -42,7 +42,7 @@ mkdir -p "$(dirname "$OUT")"
   $PIPEWIRE_CFLAGS \
   "$ROOT/native/pipewire-aaudio-sink/localdesktop-pipewire-aaudio-sink.c" \
   $PIPEWIRE_LIBS \
-  -laaudio \
+  -ldl \
   -llog \
   -o "$OUT"
 

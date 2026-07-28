@@ -9,8 +9,9 @@ It is intentionally not a PipeWire/SPA plugin or PipeWire module. That keeps the
 first experiment closer to the existing PulseAudio model: a host-side daemon plus
 a host-side audio sink process.
 
-It does not replace PulseAudio. The supervisor is inert unless the experimental
-native artifacts are bundled in the APK.
+It does not replace PulseAudio. The supervisor is disabled on Android below API
+30 and otherwise starts only when the experimental native artifacts are bundled
+in the APK.
 
 ## Runtime Shape
 
@@ -38,6 +39,10 @@ XDG_RUNTIME_DIR=/tmp
 ```
 
 ## Android-Side Artifacts
+
+The branch includes prebuilt `arm64-v8a` PipeWire assets generated from Termux's
+`pipewire` package. `assets/libs/arm64-v8a/PIPEWIRE_ASSETS_MANIFEST.txt` records
+the package source and generated files.
 
 Place these in `assets/libs/arm64-v8a` before building the APK:
 

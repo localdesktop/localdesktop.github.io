@@ -5,6 +5,7 @@
 // Audio/Sink node and writes received F32 interleaved audio to Android AAudio.
 
 #include <aaudio/AAudio.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <pipewire/pipewire.h>
@@ -27,6 +28,33 @@ struct app {
     struct pw_main_loop *loop;
     struct pw_stream *stream;
 
+    void *aaudio_lib;
+    struct {
+        const char *(*convertResultToText)(aaudio_result_t);
+        aaudio_result_t (*createStreamBuilder)(AAudioStreamBuilder **);
+        void (*streamBuilder_delete)(AAudioStreamBuilder *);
+        void (*streamBuilder_setDirection)(AAudioStreamBuilder *, aaudio_direction_t);
+        void (*streamBuilder_setFormat)(AAudioStreamBuilder *, aaudio_format_t);
+        void (*streamBuilder_setPerformanceMode)(AAudioStreamBuilder *, aaudio_performance_mode_t);
+        void (*streamBuilder_setSharingMode)(AAudioStreamBuilder *, aaudio_sharing_mode_t);
+        void (*streamBuilder_setSampleRate)(AAudioStreamBuilder *, int32_t);
+        void (*streamBuilder_setChannelCount)(AAudioStreamBuilder *, int32_t);
+        void (*streamBuilder_setDataCallback)(
+            AAudioStreamBuilder *,
+            AAudioStream_dataCallback,
+            void *);
+        void (*streamBuilder_setErrorCallback)(
+            AAudioStreamBuilder *,
+            AAudioStream_errorCallback,
+            void *);
+        aaudio_result_t (*streamBuilder_openStream)(AAudioStreamBuilder *, AAudioStream **);
+        int32_t (*stream_getSampleRate)(AAudioStream *);
+        int32_t (*stream_getChannelCount)(AAudioStream *);
+        int32_t (*stream_getBufferSizeInFrames)(AAudioStream *);
+        aaudio_result_t (*stream_requestStart)(AAudioStream *);
+        aaudio_result_t (*stream_requestStop)(AAudioStream *);
+        aaudio_result_t (*stream_close)(AAudioStream *);
+    } aaudio_api;
     AAudioStream *aaudio;
 
     const char *node_name;
@@ -160,8 +188,51 @@ static aaudio_data_callback_result_t aaudio_data_callback(
 static void aaudio_error_callback(AAudioStream *stream, void *userdata, aaudio_result_t error)
 {
     (void)stream;
-    (void)userdata;
-    fprintf(stderr, "[pipewire-aaudio-sink] AAudio error: %s\n", AAudio_convertResultToText(error));
+    struct app *app = userdata;
+    const char *text = app->aaudio_api.convertResultToText != NULL
+        ? app->aaudio_api.convertResultToText(error)
+        : "unknown";
+    fprintf(stderr, "[pipewire-aaudio-sink] AAudio error: %s\n", text);
+}
+
+static int load_aaudio(struct app *app)
+{
+    app->aaudio_lib = dlopen("libaaudio.so", RTLD_NOW | RTLD_LOCAL);
+    if (app->aaudio_lib == NULL) {
+        fprintf(stderr, "[pipewire-aaudio-sink] failed to dlopen libaaudio.so: %s\n", dlerror());
+        return -ENOENT;
+    }
+
+#define LOAD_AAUDIO_FIELD(field, symbol) \
+    do { \
+        app->aaudio_api.field = dlsym(app->aaudio_lib, symbol); \
+        if (app->aaudio_api.field == NULL) { \
+            fprintf(stderr, "[pipewire-aaudio-sink] missing AAudio symbol %s: %s\n", symbol, dlerror()); \
+            return -ENOSYS; \
+        } \
+    } while (0)
+
+    LOAD_AAUDIO_FIELD(convertResultToText, "AAudio_convertResultToText");
+    LOAD_AAUDIO_FIELD(createStreamBuilder, "AAudio_createStreamBuilder");
+    LOAD_AAUDIO_FIELD(streamBuilder_delete, "AAudioStreamBuilder_delete");
+    LOAD_AAUDIO_FIELD(streamBuilder_setDirection, "AAudioStreamBuilder_setDirection");
+    LOAD_AAUDIO_FIELD(streamBuilder_setFormat, "AAudioStreamBuilder_setFormat");
+    LOAD_AAUDIO_FIELD(streamBuilder_setPerformanceMode, "AAudioStreamBuilder_setPerformanceMode");
+    LOAD_AAUDIO_FIELD(streamBuilder_setSharingMode, "AAudioStreamBuilder_setSharingMode");
+    LOAD_AAUDIO_FIELD(streamBuilder_setSampleRate, "AAudioStreamBuilder_setSampleRate");
+    LOAD_AAUDIO_FIELD(streamBuilder_setChannelCount, "AAudioStreamBuilder_setChannelCount");
+    LOAD_AAUDIO_FIELD(streamBuilder_setDataCallback, "AAudioStreamBuilder_setDataCallback");
+    LOAD_AAUDIO_FIELD(streamBuilder_setErrorCallback, "AAudioStreamBuilder_setErrorCallback");
+    LOAD_AAUDIO_FIELD(streamBuilder_openStream, "AAudioStreamBuilder_openStream");
+    LOAD_AAUDIO_FIELD(stream_getSampleRate, "AAudioStream_getSampleRate");
+    LOAD_AAUDIO_FIELD(stream_getChannelCount, "AAudioStream_getChannelCount");
+    LOAD_AAUDIO_FIELD(stream_getBufferSizeInFrames, "AAudioStream_getBufferSizeInFrames");
+    LOAD_AAUDIO_FIELD(stream_requestStart, "AAudioStream_requestStart");
+    LOAD_AAUDIO_FIELD(stream_requestStop, "AAudioStream_requestStop");
+    LOAD_AAUDIO_FIELD(stream_close, "AAudioStream_close");
+
+#undef LOAD_AAUDIO_FIELD
+    return 0;
 }
 
 static int open_aaudio(struct app *app)
@@ -169,34 +240,38 @@ static int open_aaudio(struct app *app)
     AAudioStreamBuilder *builder = NULL;
     aaudio_result_t res;
 
-    res = AAudio_createStreamBuilder(&builder);
+    res = load_aaudio(app);
+    if (res < 0)
+        return res;
+
+    res = app->aaudio_api.createStreamBuilder(&builder);
     if (res != AAUDIO_OK)
         return -EIO;
 
-    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
-    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
-    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
-    AAudioStreamBuilder_setSampleRate(builder, (int32_t)app->rate);
-    AAudioStreamBuilder_setChannelCount(builder, (int32_t)app->channels);
-    AAudioStreamBuilder_setDataCallback(builder, aaudio_data_callback, app);
-    AAudioStreamBuilder_setErrorCallback(builder, aaudio_error_callback, app);
+    app->aaudio_api.streamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
+    app->aaudio_api.streamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
+    app->aaudio_api.streamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    app->aaudio_api.streamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
+    app->aaudio_api.streamBuilder_setSampleRate(builder, (int32_t)app->rate);
+    app->aaudio_api.streamBuilder_setChannelCount(builder, (int32_t)app->channels);
+    app->aaudio_api.streamBuilder_setDataCallback(builder, aaudio_data_callback, app);
+    app->aaudio_api.streamBuilder_setErrorCallback(builder, aaudio_error_callback, app);
 
-    res = AAudioStreamBuilder_openStream(builder, &app->aaudio);
-    AAudioStreamBuilder_delete(builder);
+    res = app->aaudio_api.streamBuilder_openStream(builder, &app->aaudio);
+    app->aaudio_api.streamBuilder_delete(builder);
     if (res != AAUDIO_OK)
         return -EIO;
 
-    app->rate = (uint32_t)AAudioStream_getSampleRate(app->aaudio);
-    app->channels = (uint32_t)AAudioStream_getChannelCount(app->aaudio);
+    app->rate = (uint32_t)app->aaudio_api.stream_getSampleRate(app->aaudio);
+    app->channels = (uint32_t)app->aaudio_api.stream_getChannelCount(app->aaudio);
 
     fprintf(stderr,
         "[pipewire-aaudio-sink] opened AAudio stream: rate=%u channels=%u buffer_frames=%d\n",
         app->rate,
         app->channels,
-        AAudioStream_getBufferSizeInFrames(app->aaudio));
+        app->aaudio_api.stream_getBufferSizeInFrames(app->aaudio));
 
-    res = AAudioStream_requestStart(app->aaudio);
+    res = app->aaudio_api.stream_requestStart(app->aaudio);
     if (res != AAUDIO_OK)
         return -EIO;
 
@@ -206,9 +281,13 @@ static int open_aaudio(struct app *app)
 static void close_aaudio(struct app *app)
 {
     if (app->aaudio != NULL) {
-        AAudioStream_requestStop(app->aaudio);
-        AAudioStream_close(app->aaudio);
+        app->aaudio_api.stream_requestStop(app->aaudio);
+        app->aaudio_api.stream_close(app->aaudio);
         app->aaudio = NULL;
+    }
+    if (app->aaudio_lib != NULL) {
+        dlclose(app->aaudio_lib);
+        app->aaudio_lib = NULL;
     }
 }
 
