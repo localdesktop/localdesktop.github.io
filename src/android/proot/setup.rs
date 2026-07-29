@@ -55,6 +55,19 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 /// - Simple/light tasks or important settings that must be run every launch (e.g. the Firefox config) can be done inline on the `None` path.
 type StageOutput = Option<JoinHandle<()>>;
 
+const PIPEWIRE_GUEST_LOCK_PACKAGES: &[&str] = &[
+    "libpipewire",
+    "pipewire",
+    "pipewire-alsa",
+    "pipewire-audio",
+    "pipewire-jack",
+    "pipewire-pulse",
+    "pipewire-v4l2",
+    "pipewire-zeroconf",
+    "gst-plugin-pipewire",
+    "wireplumber",
+];
+
 fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     let context = get_application_context();
     let temp_file = context.data_dir.join("archlinux-fs.tar.xz");
@@ -293,6 +306,32 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
     }));
 }
 
+fn setup_pipewire_package_lock(_: &SetupOptions) -> StageOutput {
+    let pacman_conf = Path::new(ARCH_FS_ROOT).join("etc/pacman.conf");
+    let content = match fs::read_to_string(&pacman_conf) {
+        Ok(content) => content,
+        Err(error) => {
+            log::warn!(
+                "Skipping PipeWire pacman lock; failed to read {}: {error}",
+                pacman_conf.display()
+            );
+            return None;
+        }
+    };
+
+    let updated = ensure_pacman_ignore_pkg(&content, PIPEWIRE_GUEST_LOCK_PACKAGES);
+    if updated != content {
+        fs::write(&pacman_conf, updated).expect("Failed to write PipeWire pacman lock");
+        log::info!(
+            "Locked guest PipeWire packages in {}: {}",
+            pacman_conf.display(),
+            PIPEWIRE_GUEST_LOCK_PACKAGES.join(" ")
+        );
+    }
+
+    None
+}
+
 fn setup_firefox_config(_: &SetupOptions) -> StageOutput {
     // Create the Firefox root directory if it doesn't exist
     let firefox_root = format!("{}/usr/lib/firefox", ARCH_FS_ROOT);
@@ -422,6 +461,80 @@ fn upsert_kv_file(path: &Path, delimiter: char, updates: &[(&str, String)]) {
     }
     let content = render_kv_lines(&lines);
     fs::write(path, content).expect("Failed to write key/value file");
+}
+
+fn ensure_pacman_ignore_pkg(content: &str, packages: &[&str]) -> String {
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let value = packages.join(" ");
+
+    let Some(options_start) = lines.iter().position(|line| line.trim() == "[options]") else {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push("[options]".to_string());
+        lines.push(format!("IgnorePkg   = {value}"));
+        let mut out = lines.join("\n");
+        out.push('\n');
+        return out;
+    };
+
+    let options_end = lines
+        .iter()
+        .enumerate()
+        .skip(options_start + 1)
+        .find(|(_, line)| {
+            let trimmed = line.trim();
+            trimmed.starts_with('[') && trimmed.ends_with(']')
+        })
+        .map(|(index, _)| index)
+        .unwrap_or(lines.len());
+
+    let mut insert_after_comment = None;
+    for index in options_start + 1..options_end {
+        let trimmed = lines[index].trim_start();
+        let active = !trimmed.starts_with('#');
+        let candidate = if active {
+            trimmed
+        } else {
+            trimmed.trim_start_matches('#').trim_start()
+        };
+
+        let Some((key, existing)) = candidate.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "IgnorePkg" {
+            continue;
+        }
+
+        if active {
+            let merged = merge_pacman_list(existing, packages);
+            lines[index] = format!("IgnorePkg   = {merged}");
+            let mut out = lines.join("\n");
+            out.push('\n');
+            return out;
+        }
+
+        insert_after_comment = Some(index + 1);
+    }
+
+    lines.insert(
+        insert_after_comment.unwrap_or(options_start + 1),
+        format!("IgnorePkg   = {value}"),
+    );
+
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+fn merge_pacman_list(existing: &str, packages: &[&str]) -> String {
+    let mut values: Vec<String> = existing.split_whitespace().map(str::to_string).collect();
+    for package in packages {
+        if !values.iter().any(|value| value == package) {
+            values.push((*package).to_string());
+        }
+    }
+    values.join(" ")
 }
 
 fn setup_fake_bwrap(_: &SetupOptions) -> StageOutput {
@@ -912,14 +1025,15 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     };
 
     let stages: Vec<SetupStage> = vec![
-        Box::new(setup_arch_fs),                    // Step 1. Setup Arch FS (extract)
-        Box::new(simulate_linux_sysdata_stage),     // Step 2. Simulate Linux system data
-        Box::new(install_dependencies),             // Step 3. Install dependencies
-        Box::new(setup_firefox_config),             // Step 4. Setup Firefox config
-        Box::new(setup_fake_bwrap), // Step 5. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
-        Box::new(setup_onboard_signal_fix), // Step 6. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
-        Box::new(setup_xfce_wayland),       // Step 7. Setup Xfce Wayland launch and HiDPI scaling
-        Box::new(fix_xkb_symlink),          // Step 8. Fix xkb symlink
+        Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (extract)
+        Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
+        Box::new(setup_pipewire_package_lock), // Step 3. Hold guest PipeWire packages for the Android-side PipeWire POC
+        Box::new(install_dependencies),        // Step 4. Install dependencies
+        Box::new(setup_firefox_config),        // Step 5. Setup Firefox config
+        Box::new(setup_fake_bwrap), // Step 6. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
+        Box::new(setup_onboard_signal_fix), // Step 7. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
+        Box::new(setup_xfce_wayland),       // Step 8. Setup Xfce Wayland launch and HiDPI scaling
+        Box::new(fix_xkb_symlink),          // Step 9. Fix xkb symlink
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {

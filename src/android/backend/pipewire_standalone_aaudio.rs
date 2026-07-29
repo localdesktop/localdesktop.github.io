@@ -109,14 +109,14 @@ pub fn spawn_after_ready(_android_app: AndroidApp) {
 
 /// Stop the proof-of-concept processes, if they were started.
 pub fn shutdown() {
-    if let Ok(mut slot) = AAUDIO_CHILDREN.lock() {
-        if let Some(mut children) = slot.take() {
-            kill_child("aaudio-sink", &mut children.sink);
-            if let Some(mut wireplumber) = children.wireplumber.take() {
-                kill_child("wireplumber", &mut wireplumber);
-            }
-            kill_child("pipewire", &mut children.pipewire);
-        }
+    let children = if let Ok(mut slot) = AAUDIO_CHILDREN.lock() {
+        slot.take()
+    } else {
+        None
+    };
+
+    if let Some(children) = children {
+        stop_children(children);
     }
 
     let runtime_dir = PathBuf::from(config::ARCH_FS_ROOT).join("tmp");
@@ -124,13 +124,30 @@ pub fn shutdown() {
 }
 
 fn ensure_running() -> Result<(), String> {
-    if AAUDIO_CHILDREN
-        .lock()
-        .map_err(|e| format!("pipewire aaudio child lock: {e}"))?
-        .is_some()
-    {
-        pw_debug!("server", "reuse running PipeWire/AAudio children");
-        return Ok(());
+    let stale_children = {
+        let mut slot = AAUDIO_CHILDREN
+            .lock()
+            .map_err(|e| format!("pipewire aaudio child lock: {e}"))?;
+        if let Some(children) = slot.as_mut() {
+            if let Some(reason) = poll_child_exit(children)? {
+                pw_warn!(
+                    "server",
+                    "discarding stale PipeWire/AAudio children: {reason}"
+                );
+                slot.take()
+            } else {
+                pw_debug!("server", "reuse running PipeWire/AAudio children");
+                return Ok(());
+            }
+        } else {
+            None
+        }
+    };
+
+    if let Some(children) = stale_children {
+        stop_children(children);
+        let runtime_dir = PathBuf::from(config::ARCH_FS_ROOT).join("tmp");
+        cleanup_socket(&runtime_dir);
     }
 
     let api_level = device_api_level();
@@ -217,6 +234,7 @@ fn ensure_running() -> Result<(), String> {
         wireplumber,
         sink,
     });
+    spawn_child_monitor(env.runtime_dir.clone());
 
     pw_info!(
         "server",
@@ -225,6 +243,85 @@ fn ensure_running() -> Result<(), String> {
         config::PIPEWIRE_GUEST_RUNTIME_DIR
     );
     Ok(())
+}
+
+fn spawn_child_monitor(runtime_dir: PathBuf) {
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_secs(1));
+
+        let exited_children = {
+            let mut slot = match AAUDIO_CHILDREN.lock() {
+                Ok(slot) => slot,
+                Err(e) => {
+                    pw_error!("monitor", "pipewire aaudio child lock: {e}");
+                    return;
+                }
+            };
+
+            let Some(children) = slot.as_mut() else {
+                return;
+            };
+
+            match poll_child_exit(children) {
+                Ok(Some(reason)) => {
+                    pw_warn!(
+                        "monitor",
+                        "{reason}; stopping PipeWire/AAudio backend and cleaning socket"
+                    );
+                    slot.take()
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    pw_error!("monitor", "failed to poll child state: {e}");
+                    None
+                }
+            }
+        };
+
+        if let Some(children) = exited_children {
+            stop_children(children);
+            cleanup_socket(&runtime_dir);
+            return;
+        }
+    });
+}
+
+fn poll_child_exit(children: &mut PipewireAaudioChildren) -> Result<Option<String>, String> {
+    if let Some(status) = children
+        .pipewire
+        .try_wait()
+        .map_err(|e| format!("pipewire try_wait: {e}"))?
+    {
+        return Ok(Some(format!(
+            "pipewire pid={} exited (status {status})",
+            children.pipewire.id()
+        )));
+    }
+
+    if let Some(wireplumber) = children.wireplumber.as_mut() {
+        if let Some(status) = wireplumber
+            .try_wait()
+            .map_err(|e| format!("wireplumber try_wait: {e}"))?
+        {
+            return Ok(Some(format!(
+                "wireplumber pid={} exited (status {status})",
+                wireplumber.id()
+            )));
+        }
+    }
+
+    if let Some(status) = children
+        .sink
+        .try_wait()
+        .map_err(|e| format!("aaudio-sink try_wait: {e}"))?
+    {
+        return Ok(Some(format!(
+            "aaudio-sink pid={} exited (status {status})",
+            children.sink.id()
+        )));
+    }
+
+    Ok(None)
 }
 
 fn device_api_level() -> c_int {
@@ -493,6 +590,14 @@ fn cleanup_socket(runtime_dir: &Path) {
             }
         }
     }
+}
+
+fn stop_children(mut children: PipewireAaudioChildren) {
+    kill_child("aaudio-sink", &mut children.sink);
+    if let Some(mut wireplumber) = children.wireplumber.take() {
+        kill_child("wireplumber", &mut wireplumber);
+    }
+    kill_child("pipewire", &mut children.pipewire);
 }
 
 fn kill_child(name: &str, child: &mut Child) {

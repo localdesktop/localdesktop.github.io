@@ -71,6 +71,16 @@ Optional:
 - No capture/microphone path.
 - Policy is experimental; use WirePlumber if available, otherwise manual
   `pw-link` may be needed.
+- The POC starts PipeWire as Android app child processes. On Android 12+ test
+  devices and AVDs, disable phantom-process trimming while testing:
+  `adb shell settings put global settings_enable_monitor_phantom_procs false`
+  and
+  `adb shell device_config put activity_manager max_phantom_processes 2147483647`.
+- The setup path writes a guest pacman `IgnorePkg` hold for the PipeWire package
+  family (`libpipewire`, `pipewire`, `pipewire-audio`, `pipewire-alsa`,
+  `pipewire-jack`, `pipewire-pulse`, `pipewire-v4l2`, `pipewire-zeroconf`,
+  `gst-plugin-pipewire`, and `wireplumber`). This holds an installed compatible
+  guest PipeWire version; it does not downgrade an already newer guest install.
 
 This is meant to prove the architecture and timing path, not to become the final
 audio backend as-is.
