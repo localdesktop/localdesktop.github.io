@@ -6,9 +6,9 @@
 //!
 //! The important distinction is that this is not a PipeWire/SPA plugin or
 //! module. It is a standalone client process, so the POC can avoid PipeWire's
-//! plugin ABI while still testing the end-to-end timing path. If the
-//! experimental native executables are not bundled, this module logs a no-op
-//! and leaves the existing PulseAudio path untouched.
+//! plugin ABI while still testing the end-to-end timing path. This is the only
+//! built-in audio backend; Local Desktop no longer starts or configures a
+//! separate legacy audio server.
 
 use std::fs;
 use std::io::{BufRead, BufReader};

@@ -21,6 +21,7 @@ assets/libs/arm64-v8a/libspa-audiomixer.so
 assets/libs/arm64-v8a/libspa-support.so
 assets/libs/arm64-v8a/liblocaldesktop_pipewire_aaudio_sink.so
 
-Copied transitive non-system dependencies are the other .so files in this directory.
+The selected PipeWire modules and SPA plugins have no extra non-system
+dependencies beyond the files listed above.
 
 Missing dependencies reported by readelf:

@@ -5,12 +5,11 @@ PipeWire/AAudio playback: run PipeWire on the Android side, expose its native
 socket to the proot guest, and bridge playback with a separate standalone
 PipeWire client that registers an AAudio-backed `Audio/Sink`.
 
-It is intentionally not a PipeWire/SPA plugin or PipeWire module. That keeps the
-first experiment closer to the existing PulseAudio model: a host-side daemon plus
-a host-side audio sink process.
+It is intentionally not a PipeWire/SPA plugin or PipeWire module. The runtime is
+a host-side PipeWire daemon plus a host-side AAudio sink client.
 
-It does not replace PulseAudio. The supervisor is disabled on Android below API
-30 and otherwise starts only when the experimental native artifacts are bundled
+This is now the built-in Local Desktop audio path. The supervisor is disabled on
+Android below API 30 and otherwise starts when the native artifacts are bundled
 in the APK.
 
 ## Runtime Shape

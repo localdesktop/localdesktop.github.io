@@ -69,8 +69,8 @@ assets/libs/arm64-v8a/liblocaldesktop_pipewire_aaudio_sink.so
 ```
 
 The filename uses `.so` because Android reliably extracts native libraries from
-the APK. It is still an executable, following the existing
-`libpulseaudio_exec.so` pattern.
+the APK. It is still an executable, following the existing `libproot.so`
+packaging pattern.
 
 ## Guest Smoke Test
 

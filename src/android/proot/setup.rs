@@ -9,7 +9,7 @@ use crate::{
         utils::application_context::get_application_context,
         utils::ndk::run_in_jvm,
     },
-    core::config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL, PULSE_GUEST_SERVER},
+    core::config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL},
 };
 use jni::objects::JObject;
 use jni::sys::_jobject;
@@ -844,21 +844,6 @@ done
 
     None
 }
-/// Writing a PulseAudio conf, so all application know where to direkt the stream
-/// This way it is agnostic to the Desktop Environment
-fn setup_pulse_client_conf(_: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
-    let pulse_config_dir = fs_root.join("root/.config/pulse");
-    let _ = fs::create_dir_all(&pulse_config_dir);
-    let body = format!(
-        "# Local Desktop — host PulseAudio (written by setup, do not edit)\n\
-         default-server = {PULSE_GUEST_SERVER}\n\
-         autospawn = no\n"
-    );
-    fs::write(pulse_config_dir.join("client.conf"), body)
-        .expect("Failed to write pulse client.conf");
-    None
-}
 fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let xkb_path = fs_root.join("usr/share/X11/xkb");
@@ -927,15 +912,14 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     };
 
     let stages: Vec<SetupStage> = vec![
-        Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (extract)
-        Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
-        Box::new(install_dependencies),         // Step 3. Install dependencies
-        Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
+        Box::new(setup_arch_fs),                    // Step 1. Setup Arch FS (extract)
+        Box::new(simulate_linux_sysdata_stage),     // Step 2. Simulate Linux system data
+        Box::new(install_dependencies),             // Step 3. Install dependencies
+        Box::new(setup_firefox_config),             // Step 4. Setup Firefox config
         Box::new(setup_fake_bwrap), // Step 5. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
         Box::new(setup_onboard_signal_fix), // Step 6. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
         Box::new(setup_xfce_wayland),       // Step 7. Setup Xfce Wayland launch and HiDPI scaling
         Box::new(fix_xkb_symlink),          // Step 8. Fix xkb symlink
-        Box::new(setup_pulse_client_conf), // Step 9. Write PulseAudio conf (last)
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
