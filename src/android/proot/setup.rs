@@ -253,6 +253,8 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
         return None;
     }
 
+    clear_pipewire_package_lock_for_install();
+
     let mpsc_sender = mpsc_sender.clone();
     return Some(thread::spawn(move || {
         const MAX_INSTALL_ATTEMPTS: usize = 10;
@@ -304,6 +306,27 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
             }
         }
     }));
+}
+
+fn clear_pipewire_package_lock_for_install() {
+    let pacman_conf = Path::new(ARCH_FS_ROOT).join("etc/pacman.conf");
+    let content = match fs::read_to_string(&pacman_conf) {
+        Ok(content) => content,
+        Err(error) => {
+            log::warn!(
+                "Skipping PipeWire pacman unlock before install; failed to read {}: {error}",
+                pacman_conf.display()
+            );
+            return;
+        }
+    };
+
+    let updated = remove_pacman_ignore_pkg(&content, PIPEWIRE_GUEST_LOCK_PACKAGES);
+    if updated != content {
+        fs::write(&pacman_conf, updated)
+            .expect("Failed to clear PipeWire pacman lock before install");
+        log::info!("Temporarily cleared guest PipeWire package lock before dependency install");
+    }
 }
 
 fn setup_pipewire_package_lock(_: &SetupOptions) -> StageOutput {
@@ -535,6 +558,56 @@ fn merge_pacman_list(existing: &str, packages: &[&str]) -> String {
         }
     }
     values.join(" ")
+}
+
+fn remove_pacman_ignore_pkg(content: &str, packages: &[&str]) -> String {
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+
+    let Some(options_start) = lines.iter().position(|line| line.trim() == "[options]") else {
+        let mut out = lines.join("\n");
+        out.push('\n');
+        return out;
+    };
+
+    let options_end = lines
+        .iter()
+        .enumerate()
+        .skip(options_start + 1)
+        .find(|(_, line)| {
+            let trimmed = line.trim();
+            trimmed.starts_with('[') && trimmed.ends_with(']')
+        })
+        .map(|(index, _)| index)
+        .unwrap_or(lines.len());
+
+    for line in lines.iter_mut().take(options_end).skip(options_start + 1) {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+
+        let Some((key, existing)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "IgnorePkg" {
+            continue;
+        }
+
+        let remaining = existing
+            .split_whitespace()
+            .filter(|value| !packages.iter().any(|package| package == value))
+            .collect::<Vec<_>>()
+            .join(" ");
+        *line = if remaining.is_empty() {
+            "IgnorePkg   =".to_string()
+        } else {
+            format!("IgnorePkg   = {remaining}")
+        };
+    }
+
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
 }
 
 fn setup_fake_bwrap(_: &SetupOptions) -> StageOutput {
@@ -1027,8 +1100,8 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let stages: Vec<SetupStage> = vec![
         Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (extract)
         Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
-        Box::new(setup_pipewire_package_lock), // Step 3. Hold guest PipeWire packages for the Android-side PipeWire POC
-        Box::new(install_dependencies),        // Step 4. Install dependencies
+        Box::new(install_dependencies),         // Step 3. Install dependencies
+        Box::new(setup_pipewire_package_lock), // Step 4. Hold guest PipeWire packages for the Android-side PipeWire POC
         Box::new(setup_firefox_config),        // Step 5. Setup Firefox config
         Box::new(setup_fake_bwrap), // Step 6. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
         Box::new(setup_onboard_signal_fix), // Step 7. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
