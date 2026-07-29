@@ -14,6 +14,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::net::Shutdown;
 use std::os::raw::c_int;
+use std::os::unix::fs as unix_fs;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -162,14 +163,24 @@ fn ensure_running() -> Result<(), String> {
         .map_err(|e| format!("mkdir {}: {e}", env.runtime_dir.display()))?;
     fs::create_dir_all(&env.config_dir)
         .map_err(|e| format!("mkdir {}: {e}", env.config_dir.display()))?;
+    prepare_spa_plugin_layout(&env, &lib_dir)?;
     cleanup_socket(&env.runtime_dir);
 
     let config = write_pipewire_config(&env.config_dir, !wireplumber_bin.exists())?;
     let mut pipewire = spawn_pipewire_daemon(&pipewire_bin, &config, &env)?;
-    wait_for_socket(&mut pipewire, &env.runtime_dir.join(PIPEWIRE_SOCKET_NAME))?;
+    if let Err(e) = wait_for_socket(&mut pipewire, &env.runtime_dir.join(PIPEWIRE_SOCKET_NAME)) {
+        kill_child("pipewire", &mut pipewire);
+        return Err(e);
+    }
 
-    let wireplumber = if wireplumber_bin.exists() {
-        Some(spawn_wireplumber(&wireplumber_bin, &env)?)
+    let mut wireplumber = if wireplumber_bin.exists() {
+        match spawn_wireplumber(&wireplumber_bin, &env) {
+            Ok(child) => Some(child),
+            Err(e) => {
+                kill_child("pipewire", &mut pipewire);
+                return Err(e);
+            }
+        }
     } else {
         pw_info!(
             "policy",
@@ -179,7 +190,25 @@ fn ensure_running() -> Result<(), String> {
         None
     };
 
-    let sink = spawn_aaudio_sink(&sink_bin, &env)?;
+    let mut sink = match spawn_aaudio_sink(&sink_bin, &env) {
+        Ok(child) => child,
+        Err(e) => {
+            if let Some(child) = wireplumber.as_mut() {
+                kill_child("wireplumber", child);
+            }
+            kill_child("pipewire", &mut pipewire);
+            return Err(e);
+        }
+    };
+    if let Err(e) = verify_child_still_running("aaudio-sink", &mut sink, Duration::from_millis(300))
+    {
+        kill_child("aaudio-sink", &mut sink);
+        if let Some(child) = wireplumber.as_mut() {
+            kill_child("wireplumber", child);
+        }
+        kill_child("pipewire", &mut pipewire);
+        return Err(e);
+    }
 
     *AAUDIO_CHILDREN
         .lock()
@@ -206,10 +235,11 @@ fn build_pipewire_env(data_dir: &Path, lib_dir: &Path) -> Result<PipewireAaudioE
     let runtime_dir = PathBuf::from(config::ARCH_FS_ROOT).join("tmp");
     let config_dir = data_dir.join("pipewire-standalone-aaudio/config");
     // Local Desktop's APK packagers extract top-level `.so` files from
-    // `assets/libs/<abi>` into nativeLibraryDir. Keep PipeWire modules and SPA
-    // plugins flat there for this experiment instead of relying on subdirectories.
+    // `assets/libs/<abi>` into nativeLibraryDir. PipeWire modules can stay flat
+    // there, but SPA factory names resolve through the normal subdirectory
+    // layout below SPA_PLUGIN_DIR, for example support/libspa-support.
     let module_dir = lib_dir.to_path_buf();
-    let spa_dir = lib_dir.to_path_buf();
+    let spa_dir = data_dir.join("pipewire-standalone-aaudio/spa-0.2");
     let ld_library_path = lib_dir.display().to_string();
 
     Ok(PipewireAaudioEnv {
@@ -237,6 +267,40 @@ fn apply_pipewire_env(command: &mut Command, env: &PipewireAaudioEnv) {
     pw_debug!("env", "SPA_PLUGIN_DIR={}", env.spa_dir.display());
 }
 
+fn prepare_spa_plugin_layout(env: &PipewireAaudioEnv, lib_dir: &Path) -> Result<(), String> {
+    for (subdir, lib) in [
+        ("support", "libspa-support.so"),
+        ("audioconvert", "libspa-audioconvert.so"),
+        ("audiomixer", "libspa-audiomixer.so"),
+    ] {
+        let source = lib_dir.join(lib);
+        if !source.exists() {
+            return Err(format!("missing SPA plugin {}", source.display()));
+        }
+
+        let dir = env.spa_dir.join(subdir);
+        fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+
+        let dest = dir.join(lib);
+        let _ = fs::remove_file(&dest);
+        unix_fs::symlink(&source, &dest)
+            .or_else(|_| fs::copy(&source, &dest).map(|_| ()))
+            .map_err(|e| format!("link {} -> {}: {e}", dest.display(), source.display()))?;
+    }
+
+    Ok(())
+}
+
+fn spa_libs_config() -> &'static str {
+    r#"context.spa-libs = {
+    support.* = support/libspa-support
+    audio.convert.* = audioconvert/libspa-audioconvert
+    audio.adapt = audioconvert/libspa-audioconvert
+    audio.mixer.* = audiomixer/libspa-audiomixer
+}
+"#
+}
+
 fn write_pipewire_config(config_dir: &Path, use_embedded_policy: bool) -> Result<PathBuf, String> {
     let policy = if use_embedded_policy {
         "    { name = libpipewire-module-session-manager flags = [ ifexists nofail ] }\n"
@@ -261,12 +325,7 @@ context.properties = {{
     mem.warn-mlock = false
 }}
 
-context.spa-libs = {{
-    support.* = libspa-support
-    audio.convert.* = libspa-audioconvert
-    audio.adapt = libspa-audioconvert
-    audio.mixer.* = libspa-audiomixer
-}}
+{}
 
 context.modules = [
     {{ name = libpipewire-module-rt flags = [ ifexists nofail ] }}
@@ -278,11 +337,33 @@ context.modules = [
     {{ name = libpipewire-module-adapter }}
     {{ name = libpipewire-module-link-factory }}
 {policy}]
-"#
+"#,
+        spa_libs_config()
     );
 
     let path = config_dir.join("localdesktop-pipewire.conf");
     fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))?;
+
+    let client_config = format!(
+        r#"# Local Desktop PipeWire client config for the standalone AAudio sink.
+context.properties = {{
+    application.name = localdesktop-pipewire-aaudio-sink
+}}
+
+{}
+
+context.modules = [
+    {{ name = libpipewire-module-protocol-native }}
+    {{ name = libpipewire-module-client-node }}
+    {{ name = libpipewire-module-adapter }}
+]
+"#,
+        spa_libs_config()
+    );
+    let client_path = config_dir.join("client.conf");
+    fs::write(&client_path, client_config)
+        .map_err(|e| format!("write {}: {e}", client_path.display()))?;
+
     Ok(path)
 }
 
@@ -346,6 +427,21 @@ fn spawn_logged(mut command: Command, name: &'static str) -> Result<Child, Strin
     }
 
     Ok(child)
+}
+
+fn verify_child_still_running(
+    name: &str,
+    child: &mut Child,
+    delay: Duration,
+) -> Result<(), String> {
+    thread::sleep(delay);
+    if let Some(status) = child
+        .try_wait()
+        .map_err(|e| format!("{name} try_wait: {e}"))?
+    {
+        return Err(format!("{name} exited during startup (status {status})"));
+    }
+    Ok(())
 }
 
 fn stream_child_lines(name: &'static str, stream: &'static str, pipe: impl std::io::Read) {
