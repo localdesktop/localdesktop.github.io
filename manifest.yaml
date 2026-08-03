@@ -4,6 +4,7 @@ android:
     - assets/setup-progress.html
     - assets/unsupported.html
     - assets/ld-linux-aarch64.so.1
+    - assets/wireplumber-share.tar
   runtime_libs:
     - assets/libs
   gradle: true

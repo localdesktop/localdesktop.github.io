@@ -10,7 +10,9 @@
 #include <inttypes.h>
 #include <pipewire/pipewire.h>
 #include <signal.h>
+#include <spa/buffer/buffer.h>
 #include <spa/param/audio/format-utils.h>
+#include <spa/param/buffers.h>
 #include <spa/utils/result.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -69,6 +71,7 @@ struct app {
     atomic_uint_least64_t write_frame;
     atomic_uint_least64_t underrun_frames;
     atomic_uint_least64_t dropped_frames;
+    atomic_bool drive_enabled;
 };
 
 static void usage(const char *argv0)
@@ -131,6 +134,7 @@ static int alloc_ring(struct app *app)
     atomic_store(&app->write_frame, 0);
     atomic_store(&app->underrun_frames, 0);
     atomic_store(&app->dropped_frames, 0);
+    atomic_store(&app->drive_enabled, false);
     return 0;
 }
 
@@ -181,6 +185,8 @@ static aaudio_data_callback_result_t aaudio_data_callback(
 {
     (void)stream;
     struct app *app = userdata;
+    if (atomic_load_explicit(&app->drive_enabled, memory_order_acquire) && app->stream != NULL)
+        pw_stream_trigger_process(app->stream);
     ring_read(app, audio_data, (uint32_t)num_frames);
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
@@ -297,7 +303,11 @@ static void on_stream_state_changed(
     enum pw_stream_state state,
     const char *error)
 {
-    (void)userdata;
+    struct app *app = userdata;
+    atomic_store_explicit(
+        &app->drive_enabled,
+        state == PW_STREAM_STATE_STREAMING,
+        memory_order_release);
     fprintf(stderr,
         "[pipewire-aaudio-sink] stream state %s -> %s%s%s\n",
         pw_stream_state_as_string(old),
@@ -310,6 +320,12 @@ static void on_stream_param_changed(void *userdata, uint32_t id, const struct sp
 {
     struct app *app = userdata;
     struct spa_audio_info info = { 0 };
+    const struct spa_pod *params[2];
+    uint8_t buffer[1024];
+    struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    uint32_t buffer_frames;
+    uint32_t buffer_bytes;
+    int res;
 
     if (param == NULL || id != SPA_PARAM_Format)
         return;
@@ -329,6 +345,43 @@ static void on_stream_param_changed(void *userdata, uint32_t id, const struct sp
     if (info.info.raw.rate != app->rate || info.info.raw.channels != app->channels) {
         fprintf(stderr,
             "[pipewire-aaudio-sink] warning: negotiated format differs from AAudio stream\n");
+    }
+
+    buffer_frames = app->rate / 100;
+    if (buffer_frames < 256)
+        buffer_frames = 256;
+    buffer_bytes = buffer_frames * app->frame_bytes;
+
+    params[0] = spa_pod_builder_add_object(
+        &builder,
+        SPA_TYPE_OBJECT_ParamBuffers,
+        SPA_PARAM_Buffers,
+        SPA_PARAM_BUFFERS_buffers,
+        SPA_POD_CHOICE_RANGE_Int(8, 2, 16),
+        SPA_PARAM_BUFFERS_blocks,
+        SPA_POD_Int(1),
+        SPA_PARAM_BUFFERS_size,
+        SPA_POD_CHOICE_RANGE_Int(buffer_bytes, app->frame_bytes * 256, app->frame_bytes * 8192),
+        SPA_PARAM_BUFFERS_stride,
+        SPA_POD_Int((int32_t)app->frame_bytes),
+        SPA_PARAM_BUFFERS_align,
+        SPA_POD_Int(16),
+        SPA_PARAM_BUFFERS_dataType,
+        SPA_POD_CHOICE_FLAGS_Int((1 << SPA_DATA_MemPtr)));
+    params[1] = spa_pod_builder_add_object(
+        &builder,
+        SPA_TYPE_OBJECT_ParamMeta,
+        SPA_PARAM_Meta,
+        SPA_PARAM_META_type,
+        SPA_POD_Id(SPA_META_Header),
+        SPA_PARAM_META_size,
+        SPA_POD_Int(sizeof(struct spa_meta_header)));
+
+    res = pw_stream_update_params(app->stream, params, 2);
+    if (res < 0) {
+        fprintf(stderr,
+            "[pipewire-aaudio-sink] failed to update stream params: %s\n",
+            spa_strerror(res));
     }
 }
 
@@ -403,8 +456,10 @@ static int connect_pipewire(struct app *app)
         app->node_name,
         PW_KEY_NODE_DESCRIPTION,
         "Local Desktop AAudio Output",
-        PW_KEY_NODE_VIRTUAL,
+        PW_KEY_NODE_DRIVER,
         "true",
+        PW_KEY_NODE_SUSPEND_ON_IDLE,
+        "false",
         PW_KEY_AUDIO_RATE,
         rate,
         PW_KEY_AUDIO_CHANNELS,
@@ -434,7 +489,8 @@ static int connect_pipewire(struct app *app)
         app->stream,
         PW_DIRECTION_INPUT,
         PW_ID_ANY,
-        PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS,
+        PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_DRIVER |
+            PW_STREAM_FLAG_RT_PROCESS,
         params,
         n_params);
     if (res < 0)
@@ -497,6 +553,7 @@ int main(int argc, char *argv[])
     pw_main_loop_run(app.loop);
 
 done:
+    atomic_store(&app.drive_enabled, false);
     if (app.stream != NULL)
         pw_stream_destroy(app.stream);
     close_aaudio(&app);

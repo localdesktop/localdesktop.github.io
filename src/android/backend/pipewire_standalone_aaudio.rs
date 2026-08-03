@@ -10,8 +10,9 @@
 //! built-in audio backend; Local Desktop no longer starts or configures a
 //! separate legacy audio server.
 
+use std::ffi::CString;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Cursor, Read};
 use std::net::Shutdown;
 use std::os::raw::c_int;
 use std::os::unix::fs as unix_fs;
@@ -54,6 +55,7 @@ const WIREPLUMBER_DAEMON_LIB: &str = "libwireplumber_exec.so";
 const AAUDIO_SINK_LIB: &str = "liblocaldesktop_pipewire_aaudio_sink.so";
 const PIPEWIRE_SOCKET_NAME: &str = "pipewire-0";
 const MIN_PIPEWIRE_API_LEVEL: c_int = 30;
+const WIREPLUMBER_SHARE_TAR_ASSET: &str = "wireplumber-share.tar";
 
 #[link(name = "android")]
 extern "C" {
@@ -75,11 +77,13 @@ struct PipewireAaudioEnv {
     config_dir: PathBuf,
     module_dir: PathBuf,
     spa_dir: PathBuf,
+    wireplumber_share_dir: PathBuf,
+    wireplumber_module_dir: PathBuf,
     ld_library_path: String,
 }
 
 /// Start the experimental PipeWire/AAudio bridge after the compositor is ready.
-pub fn spawn_after_ready(_android_app: AndroidApp) {
+pub fn spawn_after_ready(android_app: AndroidApp) {
     if AAUDIO_START_IN_PROGRESS
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
@@ -94,7 +98,7 @@ pub fn spawn_after_ready(_android_app: AndroidApp) {
     );
     thread::spawn(move || {
         let started = phase_begin("ensure_pipewire_aaudio");
-        let result = ensure_running();
+        let result = ensure_running(&android_app);
         AAUDIO_START_IN_PROGRESS.store(false, Ordering::SeqCst);
         match &result {
             Ok(()) => pw_info!(
@@ -123,7 +127,7 @@ pub fn shutdown() {
     cleanup_socket(&runtime_dir);
 }
 
-fn ensure_running() -> Result<(), String> {
+fn ensure_running(android_app: &AndroidApp) -> Result<(), String> {
     let stale_children = {
         let mut slot = AAUDIO_CHILDREN
             .lock()
@@ -181,6 +185,9 @@ fn ensure_running() -> Result<(), String> {
     fs::create_dir_all(&env.config_dir)
         .map_err(|e| format!("mkdir {}: {e}", env.config_dir.display()))?;
     prepare_spa_plugin_layout(&env, &lib_dir)?;
+    if wireplumber_bin.exists() {
+        prepare_wireplumber_share(android_app, &env)?;
+    }
     cleanup_socket(&env.runtime_dir);
 
     let config = write_pipewire_config(&env.config_dir, !wireplumber_bin.exists())?;
@@ -337,6 +344,8 @@ fn build_pipewire_env(data_dir: &Path, lib_dir: &Path) -> Result<PipewireAaudioE
     // layout below SPA_PLUGIN_DIR, for example support/libspa-support.
     let module_dir = lib_dir.to_path_buf();
     let spa_dir = data_dir.join("pipewire-standalone-aaudio/spa-0.2");
+    let wireplumber_share_dir = data_dir.join("pipewire-standalone-aaudio/share");
+    let wireplumber_module_dir = lib_dir.to_path_buf();
     let ld_library_path = lib_dir.display().to_string();
 
     Ok(PipewireAaudioEnv {
@@ -345,6 +354,8 @@ fn build_pipewire_env(data_dir: &Path, lib_dir: &Path) -> Result<PipewireAaudioE
         config_dir,
         module_dir,
         spa_dir,
+        wireplumber_share_dir,
+        wireplumber_module_dir,
         ld_library_path,
     })
 }
@@ -362,6 +373,34 @@ fn apply_pipewire_env(command: &mut Command, env: &PipewireAaudioEnv) {
     pw_debug!("env", "XDG_RUNTIME_DIR={}", env.runtime_dir.display());
     pw_debug!("env", "PIPEWIRE_MODULE_DIR={}", env.module_dir.display());
     pw_debug!("env", "SPA_PLUGIN_DIR={}", env.spa_dir.display());
+    pw_debug!("env", "LD_LIBRARY_PATH={}", env.ld_library_path);
+}
+
+fn apply_wireplumber_env(command: &mut Command, env: &PipewireAaudioEnv) {
+    apply_pipewire_env(command, env);
+    command
+        .env(
+            "WIREPLUMBER_CONFIG_DIR",
+            env.wireplumber_share_dir.join("wireplumber"),
+        )
+        .env("WIREPLUMBER_MODULE_DIR", &env.wireplumber_module_dir)
+        .env("XDG_DATA_DIRS", &env.wireplumber_share_dir);
+
+    pw_debug!(
+        "env",
+        "WIREPLUMBER_CONFIG_DIR={}",
+        env.wireplumber_share_dir.join("wireplumber").display()
+    );
+    pw_debug!(
+        "env",
+        "WIREPLUMBER_MODULE_DIR={}",
+        env.wireplumber_module_dir.display()
+    );
+    pw_debug!(
+        "env",
+        "XDG_DATA_DIRS={}",
+        env.wireplumber_share_dir.display()
+    );
 }
 
 fn prepare_spa_plugin_layout(env: &PipewireAaudioEnv, lib_dir: &Path) -> Result<(), String> {
@@ -386,6 +425,44 @@ fn prepare_spa_plugin_layout(env: &PipewireAaudioEnv, lib_dir: &Path) -> Result<
     }
 
     Ok(())
+}
+
+fn prepare_wireplumber_share(
+    android_app: &AndroidApp,
+    env: &PipewireAaudioEnv,
+) -> Result<(), String> {
+    let bytes = read_android_asset(android_app, WIREPLUMBER_SHARE_TAR_ASSET)?;
+    fs::create_dir_all(&env.wireplumber_share_dir)
+        .map_err(|e| format!("mkdir {}: {e}", env.wireplumber_share_dir.display()))?;
+
+    let mut archive = tar::Archive::new(Cursor::new(bytes));
+    archive.unpack(&env.wireplumber_share_dir).map_err(|e| {
+        format!(
+            "unpack {WIREPLUMBER_SHARE_TAR_ASSET} to {}: {e}",
+            env.wireplumber_share_dir.display()
+        )
+    })?;
+
+    pw_info!(
+        "policy",
+        "prepared WirePlumber assets under {}",
+        env.wireplumber_share_dir.join("wireplumber").display()
+    );
+    Ok(())
+}
+
+fn read_android_asset(android_app: &AndroidApp, asset_name: &str) -> Result<Vec<u8>, String> {
+    let c_name = CString::new(asset_name).map_err(|e| format!("asset name {asset_name}: {e}"))?;
+    let mut asset = android_app
+        .asset_manager()
+        .open(&c_name)
+        .ok_or_else(|| format!("missing Android asset {asset_name}"))?;
+
+    let mut bytes = Vec::with_capacity(asset.length());
+    asset
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("read Android asset {asset_name}: {e}"))?;
+    Ok(bytes)
 }
 
 fn spa_libs_config() -> &'static str {
@@ -429,11 +506,41 @@ context.modules = [
     {{ name = libpipewire-module-protocol-native }}
     {{ name = libpipewire-module-profiler flags = [ ifexists nofail ] }}
     {{ name = libpipewire-module-metadata }}
+    {{ name = libpipewire-module-spa-device-factory }}
     {{ name = libpipewire-module-spa-node-factory }}
     {{ name = libpipewire-module-client-node }}
+    {{ name = libpipewire-module-client-device }}
+    {{ name = libpipewire-module-access args = {{
+        access.socket = {{
+            pipewire-0 = "unrestricted"
+            pipewire-0-manager = "unrestricted"
+        }}
+    }} }}
     {{ name = libpipewire-module-adapter }}
     {{ name = libpipewire-module-link-factory }}
 {policy}]
+
+context.objects = [
+    {{ factory = spa-node-factory
+        args = {{
+            factory.name = support.node.driver
+            node.name = Dummy-Driver
+            node.group = pipewire.dummy
+            node.sync-group = sync.dummy
+            priority.driver = 200000
+        }}
+    }}
+    {{ factory = spa-node-factory
+        args = {{
+            factory.name = support.node.driver
+            node.name = Freewheel-Driver
+            priority.driver = 190000
+            node.group = pipewire.freewheel
+            node.sync-group = sync.dummy
+            node.freewheel = true
+        }}
+    }}
+]
 "#,
         spa_libs_config()
     );
@@ -484,7 +591,7 @@ fn spawn_pipewire_daemon(
 fn spawn_wireplumber(binary: &Path, env: &PipewireAaudioEnv) -> Result<Child, String> {
     pw_info!("spawn", "exec {}", binary.display());
     let mut command = Command::new(binary);
-    apply_pipewire_env(&mut command, env);
+    apply_wireplumber_env(&mut command, env);
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -582,7 +689,12 @@ fn wait_for_socket(child: &mut Child, socket: &Path) -> Result<(), String> {
 }
 
 fn cleanup_socket(runtime_dir: &Path) {
-    for name in [PIPEWIRE_SOCKET_NAME, "pipewire-0.lock"] {
+    for name in [
+        PIPEWIRE_SOCKET_NAME,
+        "pipewire-0.lock",
+        "pipewire-0-manager",
+        "pipewire-0-manager.lock",
+    ] {
         let path = runtime_dir.join(name);
         if path.exists() {
             if let Err(e) = fs::remove_file(&path) {
