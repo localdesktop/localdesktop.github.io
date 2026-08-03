@@ -72,6 +72,8 @@ struct app {
     atomic_uint_least64_t underrun_frames;
     atomic_uint_least64_t dropped_frames;
     atomic_bool drive_enabled;
+    atomic_bool process_pending;
+    atomic_uint_least32_t pipewire_buffer_frames;
 };
 
 static void usage(const char *argv0)
@@ -135,7 +137,51 @@ static int alloc_ring(struct app *app)
     atomic_store(&app->underrun_frames, 0);
     atomic_store(&app->dropped_frames, 0);
     atomic_store(&app->drive_enabled, false);
+    atomic_store(&app->process_pending, false);
+    atomic_store(&app->pipewire_buffer_frames, app->rate / 50);
     return 0;
+}
+
+static uint64_t ring_buffered_frames(struct app *app)
+{
+    uint64_t read = atomic_load_explicit(&app->read_frame, memory_order_acquire);
+    uint64_t write = atomic_load_explicit(&app->write_frame, memory_order_acquire);
+    return write > read ? write - read : 0;
+}
+
+static void ring_clear(struct app *app)
+{
+    uint64_t write = atomic_load_explicit(&app->write_frame, memory_order_acquire);
+    atomic_store_explicit(&app->read_frame, write, memory_order_release);
+}
+
+static void maybe_trigger_process(struct app *app)
+{
+    uint32_t pw_frames;
+    uint32_t low_watermark;
+
+    if (!atomic_load_explicit(&app->drive_enabled, memory_order_acquire) || app->stream == NULL)
+        return;
+
+    pw_frames = atomic_load_explicit(&app->pipewire_buffer_frames, memory_order_acquire);
+    if (pw_frames == 0)
+        pw_frames = app->rate / 50;
+    low_watermark = pw_frames / 2;
+    if (low_watermark < 256)
+        low_watermark = 256;
+
+    if (ring_buffered_frames(app) > low_watermark)
+        return;
+
+    bool expected = false;
+    if (atomic_compare_exchange_strong_explicit(
+            &app->process_pending,
+            &expected,
+            true,
+            memory_order_acq_rel,
+            memory_order_acquire)) {
+        pw_stream_trigger_process(app->stream);
+    }
 }
 
 static void ring_write(struct app *app, const float *src, uint32_t frames)
@@ -185,9 +231,8 @@ static aaudio_data_callback_result_t aaudio_data_callback(
 {
     (void)stream;
     struct app *app = userdata;
-    if (atomic_load_explicit(&app->drive_enabled, memory_order_acquire) && app->stream != NULL)
-        pw_stream_trigger_process(app->stream);
     ring_read(app, audio_data, (uint32_t)num_frames);
+    maybe_trigger_process(app);
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
@@ -304,10 +349,15 @@ static void on_stream_state_changed(
     const char *error)
 {
     struct app *app = userdata;
-    atomic_store_explicit(
-        &app->drive_enabled,
-        state == PW_STREAM_STATE_STREAMING,
-        memory_order_release);
+    if (state == PW_STREAM_STATE_STREAMING) {
+        ring_clear(app);
+        atomic_store_explicit(&app->process_pending, false, memory_order_release);
+        atomic_store_explicit(&app->drive_enabled, true, memory_order_release);
+        maybe_trigger_process(app);
+    } else {
+        atomic_store_explicit(&app->drive_enabled, false, memory_order_release);
+        atomic_store_explicit(&app->process_pending, false, memory_order_release);
+    }
     fprintf(stderr,
         "[pipewire-aaudio-sink] stream state %s -> %s%s%s\n",
         pw_stream_state_as_string(old),
@@ -415,10 +465,13 @@ static void on_stream_process(void *userdata)
 
         frames = size / app->frame_bytes;
         samples = (const float *)((const uint8_t *)data->data + offset);
+        if (frames > 0)
+            atomic_store_explicit(&app->pipewire_buffer_frames, frames, memory_order_release);
         ring_write(app, samples, frames);
     }
 
     pw_stream_queue_buffer(app->stream, pw_buf);
+    atomic_store_explicit(&app->process_pending, false, memory_order_release);
 }
 
 static const struct pw_stream_events stream_events = {
@@ -554,6 +607,7 @@ int main(int argc, char *argv[])
 
 done:
     atomic_store(&app.drive_enabled, false);
+    atomic_store(&app.process_pending, false);
     if (app.stream != NULL)
         pw_stream_destroy(app.stream);
     close_aaudio(&app);
