@@ -305,6 +305,7 @@ fn setup_firefox_config(_: &SetupOptions) -> StageOutput {
     // Create autoconfig.js in defaults/pref
     let autoconfig_js = r#"pref("general.config.filename", "localdesktop.cfg");
 pref("general.config.obscure_value", 0);
+pref("general.config.sandbox_enabled", false);
 "#;
 
     let _ = fs::write(format!("{}/autoconfig.js", pref_dir), autoconfig_js)
@@ -314,6 +315,14 @@ pref("general.config.obscure_value", 0);
     let firefox_cfg = r#"// Auto updated by Local Desktop on each startup, do not edit manually
 defaultPref("media.cubeb.sandbox", false);
 defaultPref("security.sandbox.content.level", 0);
+defaultPref("media.allow-audio-non-utility", true);
+defaultPref("media.rdd-process.enabled", false);
+
+try {
+  var { SandboxUtils } = ChromeUtils.importESModule("resource://gre/modules/SandboxUtils.sys.mjs");
+  SandboxUtils.maybeWarnAboutDisabledContentSandbox = () => {};
+  SandboxUtils.observeContentSandboxPref = () => {};
+} catch (_) {}
 "#; // It is required that the first line of this file is a comment, even if you have nothing to comment. Docs: https://support.mozilla.org/en-US/kb/customizing-firefox-using-autoconfig
 
     let _ = fs::write(format!("{}/localdesktop.cfg", firefox_root), firefox_cfg)
