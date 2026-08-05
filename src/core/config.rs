@@ -33,6 +33,9 @@ pub const SENTRY_DSN: &str = "https://d8af27f864ade027ff81ecadea91b02e@o45095483
 /// PipeWire runtime path as seen from inside the proot guest.
 pub const PIPEWIRE_GUEST_RUNTIME_DIR: &str = "/tmp";
 
+/// PipeWire-Pulse socket as seen from inside the proot guest.
+pub const PULSE_GUEST_SERVER: &str = "unix:/tmp/pulse/native";
+
 /// Make sure the config keys are all lowercase, and config values are single-line. Use \n for multi-line config values if needed
 /// If a key exists multiple time, the first entry is applied
 /// If a `try_` config exsists multiple time, the last entry is applied
@@ -86,7 +89,7 @@ fn default_install() -> String {
 }
 /// Direct the desktop session to the compositor and the host PipeWire socket.
 fn default_launch() -> String {
-    format!("export PIPEWIRE_RUNTIME_DIR={PIPEWIRE_GUEST_RUNTIME_DIR}; XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=XFCE /usr/local/bin/startxfce4-localdesktop 2>&1")
+    format!("export PIPEWIRE_RUNTIME_DIR={PIPEWIRE_GUEST_RUNTIME_DIR} PULSE_SERVER={PULSE_GUEST_SERVER}; XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=XFCE /usr/local/bin/startxfce4-localdesktop 2>&1")
         .to_string()
 }
 

@@ -15,11 +15,13 @@ assets/libs/arm64-v8a/libpipewire-module-link-factory.so
 assets/libs/arm64-v8a/libpipewire-module-metadata.so
 assets/libs/arm64-v8a/libpipewire-module-profiler.so
 assets/libs/arm64-v8a/libpipewire-module-protocol-native.so
+assets/libs/arm64-v8a/libpipewire-module-protocol-pulse.so
 assets/libs/arm64-v8a/libpipewire-module-rt.so
 assets/libs/arm64-v8a/libpipewire-module-session-manager.so
 assets/libs/arm64-v8a/libpipewire-module-spa-device-factory.so
 assets/libs/arm64-v8a/libpipewire-module-spa-node-factory.so
 assets/libs/arm64-v8a/libpipewire_exec.so
+assets/libs/arm64-v8a/libpipewire_pulse_exec.so
 assets/libs/arm64-v8a/libspa-audioconvert.so
 assets/libs/arm64-v8a/libspa-audiomixer.so
 assets/libs/arm64-v8a/libspa-support.so
@@ -73,6 +75,11 @@ The app extracts it into pipewire-standalone-aaudio/share before launching
 libwireplumber_exec.so. The directory is packaged as a tar file because the
 Android build path accepts regular asset files, not nested generated asset
 directories.
+
+Note: libpipewire_pulse_exec.so and libpipewire-module-protocol-pulse.so provide
+PipeWire's PulseAudio-compatible protocol service. This is not the standalone
+PulseAudio daemon; Firefox/libpulse clients connect to /tmp/pulse/native in the
+guest and are translated into normal PipeWire streams.
 
 Additional packages used:
 glib 2.88.3

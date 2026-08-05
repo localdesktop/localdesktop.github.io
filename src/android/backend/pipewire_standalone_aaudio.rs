@@ -51,9 +51,11 @@ macro_rules! pw_error {
 }
 
 const PIPEWIRE_DAEMON_LIB: &str = "libpipewire_exec.so";
+const PIPEWIRE_PULSE_DAEMON_LIB: &str = "libpipewire_pulse_exec.so";
 const WIREPLUMBER_DAEMON_LIB: &str = "libwireplumber_exec.so";
 const AAUDIO_SINK_LIB: &str = "liblocaldesktop_pipewire_aaudio_sink.so";
 const PIPEWIRE_SOCKET_NAME: &str = "pipewire-0";
+const PULSE_SOCKET_NAME: &str = "pulse/native";
 const MIN_PIPEWIRE_API_LEVEL: c_int = 30;
 const WIREPLUMBER_SHARE_TAR_ASSET: &str = "wireplumber-share.tar";
 
@@ -67,6 +69,7 @@ static AAUDIO_START_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 struct PipewireAaudioChildren {
     pipewire: Child,
+    pulse: Option<Child>,
     wireplumber: Option<Child>,
     sink: Child,
 }
@@ -77,6 +80,7 @@ struct PipewireAaudioEnv {
     config_dir: PathBuf,
     module_dir: PathBuf,
     spa_dir: PathBuf,
+    pulse_dir: PathBuf,
     wireplumber_share_dir: PathBuf,
     wireplumber_module_dir: PathBuf,
     ld_library_path: String,
@@ -166,6 +170,7 @@ fn ensure_running(android_app: &AndroidApp) -> Result<(), String> {
     let ctx = get_application_context();
     let lib_dir = ctx.native_library_dir.clone();
     let pipewire_bin = lib_dir.join(PIPEWIRE_DAEMON_LIB);
+    let pulse_bin = lib_dir.join(PIPEWIRE_PULSE_DAEMON_LIB);
     let sink_bin = lib_dir.join(AAUDIO_SINK_LIB);
     let wireplumber_bin = lib_dir.join(WIREPLUMBER_DAEMON_LIB);
 
@@ -184,6 +189,8 @@ fn ensure_running(android_app: &AndroidApp) -> Result<(), String> {
         .map_err(|e| format!("mkdir {}: {e}", env.runtime_dir.display()))?;
     fs::create_dir_all(&env.config_dir)
         .map_err(|e| format!("mkdir {}: {e}", env.config_dir.display()))?;
+    fs::create_dir_all(&env.pulse_dir)
+        .map_err(|e| format!("mkdir {}: {e}", env.pulse_dir.display()))?;
     prepare_spa_plugin_layout(&env, &lib_dir)?;
     if wireplumber_bin.exists() {
         prepare_wireplumber_share(android_app, &env)?;
@@ -192,7 +199,11 @@ fn ensure_running(android_app: &AndroidApp) -> Result<(), String> {
 
     let config = write_pipewire_config(&env.config_dir, !wireplumber_bin.exists())?;
     let mut pipewire = spawn_pipewire_daemon(&pipewire_bin, &config, &env)?;
-    if let Err(e) = wait_for_socket(&mut pipewire, &env.runtime_dir.join(PIPEWIRE_SOCKET_NAME)) {
+    if let Err(e) = wait_for_socket(
+        "pipewire",
+        &mut pipewire,
+        &env.runtime_dir.join(PIPEWIRE_SOCKET_NAME),
+    ) {
         kill_child("pipewire", &mut pipewire);
         return Err(e);
     }
@@ -234,10 +245,47 @@ fn ensure_running(android_app: &AndroidApp) -> Result<(), String> {
         return Err(e);
     }
 
+    let pulse = if pulse_bin.exists() {
+        let config = write_pipewire_pulse_config(&env.config_dir, &env)?;
+        let mut child = match spawn_pipewire_pulse(&pulse_bin, &config, &env) {
+            Ok(child) => child,
+            Err(e) => {
+                kill_child("aaudio-sink", &mut sink);
+                if let Some(child) = wireplumber.as_mut() {
+                    kill_child("wireplumber", child);
+                }
+                kill_child("pipewire", &mut pipewire);
+                return Err(e);
+            }
+        };
+        if let Err(e) = wait_for_socket(
+            "pipewire-pulse",
+            &mut child,
+            &env.runtime_dir.join(PULSE_SOCKET_NAME),
+        ) {
+            kill_child("pipewire-pulse", &mut child);
+            kill_child("aaudio-sink", &mut sink);
+            if let Some(child) = wireplumber.as_mut() {
+                kill_child("wireplumber", child);
+            }
+            kill_child("pipewire", &mut pipewire);
+            return Err(e);
+        }
+        Some(child)
+    } else {
+        pw_info!(
+            "pulse",
+            "{} missing; PulseAudio-compatible clients such as Firefox will not have audio",
+            PIPEWIRE_PULSE_DAEMON_LIB
+        );
+        None
+    };
+
     *AAUDIO_CHILDREN
         .lock()
         .map_err(|e| format!("pipewire aaudio child lock: {e}"))? = Some(PipewireAaudioChildren {
         pipewire,
+        pulse,
         wireplumber,
         sink,
     });
@@ -245,8 +293,9 @@ fn ensure_running(android_app: &AndroidApp) -> Result<(), String> {
 
     pw_info!(
         "server",
-        "guest: export PIPEWIRE_RUNTIME_DIR={} XDG_RUNTIME_DIR={}",
+        "guest: export PIPEWIRE_RUNTIME_DIR={} PULSE_SERVER={} XDG_RUNTIME_DIR={}",
         config::PIPEWIRE_GUEST_RUNTIME_DIR,
+        config::PULSE_GUEST_SERVER,
         config::PIPEWIRE_GUEST_RUNTIME_DIR
     );
     Ok(())
@@ -317,6 +366,18 @@ fn poll_child_exit(children: &mut PipewireAaudioChildren) -> Result<Option<Strin
         }
     }
 
+    if let Some(pulse) = children.pulse.as_mut() {
+        if let Some(status) = pulse
+            .try_wait()
+            .map_err(|e| format!("pipewire-pulse try_wait: {e}"))?
+        {
+            return Ok(Some(format!(
+                "pipewire-pulse pid={} exited (status {status})",
+                pulse.id()
+            )));
+        }
+    }
+
     if let Some(status) = children
         .sink
         .try_wait()
@@ -344,6 +405,7 @@ fn build_pipewire_env(data_dir: &Path, lib_dir: &Path) -> Result<PipewireAaudioE
     // layout below SPA_PLUGIN_DIR, for example support/libspa-support.
     let module_dir = lib_dir.to_path_buf();
     let spa_dir = data_dir.join("pipewire-standalone-aaudio/spa-0.2");
+    let pulse_dir = runtime_dir.join("pulse");
     let wireplumber_share_dir = data_dir.join("pipewire-standalone-aaudio/share");
     let wireplumber_module_dir = lib_dir.to_path_buf();
     let ld_library_path = lib_dir.display().to_string();
@@ -354,6 +416,7 @@ fn build_pipewire_env(data_dir: &Path, lib_dir: &Path) -> Result<PipewireAaudioE
         config_dir,
         module_dir,
         spa_dir,
+        pulse_dir,
         wireplumber_share_dir,
         wireplumber_module_dir,
         ld_library_path,
@@ -571,6 +634,57 @@ context.modules = [
     Ok(path)
 }
 
+fn write_pipewire_pulse_config(
+    config_dir: &Path,
+    env: &PipewireAaudioEnv,
+) -> Result<PathBuf, String> {
+    let pulse_socket = env.runtime_dir.join(PULSE_SOCKET_NAME);
+    let body = format!(
+        r#"# Local Desktop PipeWire Pulse compatibility service.
+#
+# This is not the PulseAudio daemon. It is PipeWire's PulseAudio-compatible
+# protocol front door for applications such as Firefox that still use libpulse.
+context.properties = {{
+    mem.warn-mlock = false
+}}
+
+{}
+
+context.modules = [
+    {{ name = libpipewire-module-rt flags = [ ifexists nofail ] }}
+    {{ name = libpipewire-module-protocol-native }}
+    {{ name = libpipewire-module-client-node }}
+    {{ name = libpipewire-module-adapter }}
+    {{ name = libpipewire-module-metadata }}
+    {{ name = libpipewire-module-protocol-pulse }}
+]
+
+pulse.properties = {{
+    server.address = [ "unix:{}" ]
+    pulse.allow-module-loading = false
+    pulse.min.req = 256/48000
+    pulse.default.req = 960/48000
+    pulse.min.quantum = 256/48000
+    pulse.idle.timeout = 0
+}}
+
+stream.properties = {{
+    node.autoconnect = true
+    resample.quality = 4
+}}
+
+pulse.cmd = [ ]
+pulse.rules = [ ]
+"#,
+        spa_libs_config(),
+        pulse_socket.display()
+    );
+
+    let path = config_dir.join("localdesktop-pipewire-pulse.conf");
+    fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(path)
+}
+
 fn spawn_pipewire_daemon(
     binary: &Path,
     config: &Path,
@@ -597,6 +711,23 @@ fn spawn_wireplumber(binary: &Path, env: &PipewireAaudioEnv) -> Result<Child, St
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     spawn_logged(command, "wireplumber")
+}
+
+fn spawn_pipewire_pulse(
+    binary: &Path,
+    config: &Path,
+    env: &PipewireAaudioEnv,
+) -> Result<Child, String> {
+    pw_info!("spawn", "exec {} -c {}", binary.display(), config.display());
+    let mut command = Command::new(binary);
+    apply_pipewire_env(&mut command, env);
+    command
+        .arg("-c")
+        .arg(config)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    spawn_logged(command, "pipewire-pulse")
 }
 
 fn spawn_aaudio_sink(binary: &Path, env: &PipewireAaudioEnv) -> Result<Child, String> {
@@ -655,7 +786,7 @@ fn stream_child_lines(name: &'static str, stream: &'static str, pipe: impl std::
     pw_debug!("daemon", "[{name}:{stream}] stream closed");
 }
 
-fn wait_for_socket(child: &mut Child, socket: &Path) -> Result<(), String> {
+fn wait_for_socket(name: &str, child: &mut Child, socket: &Path) -> Result<(), String> {
     let started = phase_begin("wait_socket");
     pw_info!("wait_socket", "polling {}", socket.display());
 
@@ -669,11 +800,11 @@ fn wait_for_socket(child: &mut Child, socket: &Path) -> Result<(), String> {
 
         if let Some(status) = child
             .try_wait()
-            .map_err(|e| format!("pipewire try_wait: {e}"))?
+            .map_err(|e| format!("{name} try_wait: {e}"))?
         {
             phase_end("wait_socket", started);
             return Err(format!(
-                "pipewire exited before socket {} (status {status})",
+                "{name} exited before socket {} (status {status})",
                 socket.display()
             ));
         }
@@ -694,6 +825,8 @@ fn cleanup_socket(runtime_dir: &Path) {
         "pipewire-0.lock",
         "pipewire-0-manager",
         "pipewire-0-manager.lock",
+        PULSE_SOCKET_NAME,
+        "pulse/native.lock",
     ] {
         let path = runtime_dir.join(name);
         if path.exists() {
@@ -705,6 +838,9 @@ fn cleanup_socket(runtime_dir: &Path) {
 }
 
 fn stop_children(mut children: PipewireAaudioChildren) {
+    if let Some(mut pulse) = children.pulse.take() {
+        kill_child("pipewire-pulse", &mut pulse);
+    }
     kill_child("aaudio-sink", &mut children.sink);
     if let Some(mut wireplumber) = children.wireplumber.take() {
         kill_child("wireplumber", &mut wireplumber);

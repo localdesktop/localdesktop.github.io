@@ -9,7 +9,10 @@ use crate::{
         utils::application_context::get_application_context,
         utils::ndk::run_in_jvm,
     },
-    core::config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL},
+    core::config::{
+        CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL, PIPEWIRE_GUEST_RUNTIME_DIR,
+        PULSE_GUEST_SERVER,
+    },
 };
 use jni::objects::JObject;
 use jni::sys::_jobject;
@@ -814,9 +817,15 @@ fn setup_xfce_wayland(options: &SetupOptions) -> StageOutput {
     // session manager, panel, compositor (labwc), and desktop manager.
     write_executable(
         &fs_root.join("usr/local/bin/startxfce4-localdesktop"),
-        r#"#!/bin/sh
+        &format!(
+            r#"#!/bin/sh
+export PIPEWIRE_RUNTIME_DIR={PIPEWIRE_GUEST_RUNTIME_DIR}
+export PULSE_SERVER={PULSE_GUEST_SERVER}
+: "${{XDG_RUNTIME_DIR:={PIPEWIRE_GUEST_RUNTIME_DIR}}}"
+export XDG_RUNTIME_DIR
 exec startxfce4 --wayland "$@"
-"#,
+"#
+        ),
     );
 
     // Runs from ~/.config/autostart once xfsettingsd is up; reinforces pre-seeded /Xft/DPI.
