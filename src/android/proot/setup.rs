@@ -20,14 +20,16 @@ use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
     fs::{self, File},
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
     path::{Path, PathBuf},
+    process,
     sync::{
         mpsc::{self, Sender},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tar::Archive;
 use winit::platform::android::activity::AndroidApp;
@@ -226,6 +228,60 @@ fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
         }));
     }
     None
+}
+
+fn setup_machine_id(_: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let machine_id = fs_root.join("etc/machine-id");
+
+    let existing = fs::read_to_string(&machine_id).unwrap_or_default();
+    if !is_valid_machine_id(&existing) {
+        if let Some(parent) = machine_id.parent() {
+            fs::create_dir_all(parent).expect("Failed to create /etc for machine-id");
+        }
+
+        let _ = fs::set_permissions(&machine_id, fs::Permissions::from_mode(0o644));
+        fs::write(&machine_id, format!("{}\n", generate_machine_id()))
+            .expect("Failed to write machine-id");
+        let _ = fs::set_permissions(&machine_id, fs::Permissions::from_mode(0o444));
+        log::info!("Seeded guest /etc/machine-id");
+    }
+
+    let dbus_dir = fs_root.join("var/lib/dbus");
+    fs::create_dir_all(&dbus_dir).expect("Failed to create /var/lib/dbus");
+    let dbus_machine_id = dbus_dir.join("machine-id");
+    match fs::symlink_metadata(&dbus_machine_id) {
+        Ok(_) => {}
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            symlink("/etc/machine-id", &dbus_machine_id)
+                .expect("Failed to symlink /var/lib/dbus/machine-id");
+        }
+        Err(err) => panic!("Failed to inspect /var/lib/dbus/machine-id: {}", err),
+    }
+
+    None
+}
+
+fn is_valid_machine_id(value: &str) -> bool {
+    let value = value.trim();
+    value.len() == 32
+        && value.chars().all(|c| c.is_ascii_hexdigit())
+        && value.chars().any(|c| c != '0')
+}
+
+fn generate_machine_id() -> String {
+    if let Ok(uuid) = fs::read_to_string("/proc/sys/kernel/random/uuid") {
+        let id = uuid.trim().replace('-', "").to_ascii_lowercase();
+        if is_valid_machine_id(&id) {
+            return id;
+        }
+    }
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{:016x}{:016x}", nanos as u64, process::id() as u64)
 }
 
 fn install_dependencies(options: &SetupOptions) -> StageOutput {
@@ -1110,12 +1166,13 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (extract)
         Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
         Box::new(install_dependencies),         // Step 3. Install dependencies
-        Box::new(setup_pipewire_package_lock), // Step 4. Hold guest PipeWire packages for the Android-side PipeWire POC
-        Box::new(setup_firefox_config),        // Step 5. Setup Firefox config
-        Box::new(setup_fake_bwrap), // Step 6. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
-        Box::new(setup_onboard_signal_fix), // Step 7. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
-        Box::new(setup_xfce_wayland),       // Step 8. Setup Xfce Wayland launch and HiDPI scaling
-        Box::new(fix_xkb_symlink),          // Step 9. Fix xkb symlink
+        Box::new(setup_machine_id),             // Step 4. Seed /etc/machine-id for D-Bus clients
+        Box::new(setup_pipewire_package_lock), // Step 5. Hold guest PipeWire packages for the Android-side PipeWire POC
+        Box::new(setup_firefox_config),        // Step 6. Setup Firefox config
+        Box::new(setup_fake_bwrap), // Step 7. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
+        Box::new(setup_onboard_signal_fix), // Step 8. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
+        Box::new(setup_xfce_wayland),       // Step 9. Setup Xfce Wayland launch and HiDPI scaling
+        Box::new(fix_xkb_symlink),          // Step 10. Fix xkb symlink
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
