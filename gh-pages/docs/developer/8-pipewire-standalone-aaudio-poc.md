@@ -62,6 +62,58 @@ Optional:
 - `libwireplumber_exec.so`: renamed `wireplumber` executable. Without it, the
   generated config tries `libpipewire-module-session-manager` with `nofail`.
 
+The supervisor also points PipeWire at Android `nativeLibraryDir` through both
+`PIPEWIRE_MODULE_DIR` and `SPA_PLUGIN_DIR`.
+
+## Building the Sink
+
+The sink is a normal Cargo binary, but it links `libpipewire-0.3`, so it sits
+behind the `pipewire-sink` feature and is excluded from the default APK build.
+Point `PIPEWIRE_PREFIX` at an Android/Termux sysroot that has `libpipewire-0.3`
+plus the PipeWire and SPA headers, then run:
+
+```sh
+ANDROID_NDK_HOME=... PIPEWIRE_PREFIX=... ./scripts/build-pipewire-aaudio-sink.sh
+```
+
+The script cross-compiles for `aarch64-linux-android` (API 30 by default, to
+match the bundled Termux PipeWire) and writes:
+
+```text
+assets/libs/arm64-v8a/liblocaldesktop_pipewire_aaudio_sink.so
+```
+
+The filename uses `.so` because Android reliably extracts native libraries from
+the APK. It is still an executable, following the existing `libproot.so`
+packaging pattern.
+
+The ring buffer and argument parsing compile on any host, so they can be tested
+without an Android sysroot:
+
+```sh
+cargo test --features pipewire-sink --bin localdesktop_pipewire_aaudio_sink
+```
+
+## Guest Smoke Test
+
+Once the APK includes the PipeWire daemon, modules, SPA plugins, and sink:
+
+```sh
+export XDG_RUNTIME_DIR=/tmp
+export PIPEWIRE_RUNTIME_DIR=/tmp
+pw-cli info 0
+pw-play /path/to/test.wav
+```
+
+If policy auto-linking is not active, inspect and link manually:
+
+```sh
+pw-link -o
+pw-link -i
+pw-link <playback-output-port> localdesktop-aaudio-sink:input_FL
+pw-link <playback-output-port> localdesktop-aaudio-sink:input_FR
+```
+
 ## Current Limits
 
 - Playback only.
