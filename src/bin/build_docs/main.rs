@@ -417,8 +417,9 @@ fn clean_markdown(path: &Path) -> Result<String> {
     let (title, mut body) = split_frontmatter(&raw);
 
     // Drop installer-only regions and any MDX comments.
-    let hide = regex::Regex::new(r"(?s)\{/\*\s*hide-in-pdf\b.*?\*/\}.*?\{/\*\s*/hide-in-pdf\s*\*/\}")
-        .unwrap();
+    let hide =
+        regex::Regex::new(r"(?s)\{/\*\s*hide-in-pdf\b.*?\*/\}.*?\{/\*\s*/hide-in-pdf\s*\*/\}")
+            .unwrap();
     body = hide.replace_all(&body, "").into_owned();
     let mdx = regex::Regex::new(r"(?s)\{/\*.*?\*/\}").unwrap();
     body = mdx.replace_all(&body, "").into_owned();
@@ -447,11 +448,17 @@ fn clean_markdown(path: &Path) -> Result<String> {
             continue;
         }
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            let marker: String = trimmed.chars().take_while(|&c| c == '`' || c == '~').collect();
+            let marker: String = trimmed
+                .chars()
+                .take_while(|&c| c == '`' || c == '~')
+                .collect();
             let info = trimmed[marker.len()..].trim();
             // Tag bare fences so the converter still styles them.
             if info.is_empty() {
-                out.push_str(&format!("{}text\n", &line[..line.len() - trimmed.len() + marker.len()]));
+                out.push_str(&format!(
+                    "{}text\n",
+                    &line[..line.len() - trimmed.len() + marker.len()]
+                ));
             } else {
                 out.push_str(line);
                 out.push('\n');
@@ -607,14 +614,22 @@ fn preamble(opts: &Opts) -> String {
         // page fits the viewport at 100% and text stays readable without zooming.
         Size::Phone => s.push_str("#set page(width: 72mm, height: 156mm, margin: 4mm)\n"),
         Size::Desktop => {
-            let margin = if opts.manual == Manual::User { "2.4cm" } else { "2cm" };
+            let margin = if opts.manual == Manual::User {
+                "2.4cm"
+            } else {
+                "2cm"
+            };
             s.push_str(&format!("#set page(paper: \"a4\", margin: {margin})\n"));
         }
     }
     if let Some(bg) = t.page_bg {
         s.push_str(&format!("#set page(fill: rgb(\"#{bg}\"))\n"));
     }
-    let size = if opts.size == Size::Desktop { "11pt" } else { "9pt" };
+    let size = if opts.size == Size::Desktop {
+        "11pt"
+    } else {
+        "9pt"
+    };
     s.push_str(&format!(
         "#set text(font: \"{}\", size: {size}, fill: rgb(\"#{}\"))\n",
         t.font, t.ink
@@ -665,7 +680,11 @@ fn cover_and_toc(opts: &Opts, version: &str) -> Result<String> {
         format!("v{version}")
     };
     // Smaller on the narrow fold/phone pages so the title stays on one line.
-    let title_size = if opts.size == Size::Desktop { "22pt" } else { "16pt" };
+    let title_size = if opts.size == Size::Desktop {
+        "22pt"
+    } else {
+        "16pt"
+    };
     s.push_str(&format!(
         "#align(center, text(size: {title_size}, weight: \"bold\", fill: rgb(\"#{}\"))[{}])\n\n",
         t.ink,
@@ -708,7 +727,9 @@ fn assemble(opts: &Opts) -> Result<String> {
             }
             first = false;
             let md = clean_markdown(p)?;
-            doc.push_str(&MdToTypst::new(p.parent().unwrap().to_path_buf(), 0, &mut images).convert(&md));
+            doc.push_str(
+                &MdToTypst::new(p.parent().unwrap().to_path_buf(), 0, &mut images).convert(&md),
+            );
         }
         doc.push_str("#pagebreak()\n= Blog\n\n");
         let mut blog = glob_sorted("gh-pages/blog", "md");
@@ -716,7 +737,9 @@ fn assemble(opts: &Opts) -> Result<String> {
         for p in &blog {
             doc.push_str("#pagebreak(weak: true)\n");
             let md = clean_markdown(p)?;
-            doc.push_str(&MdToTypst::new(p.parent().unwrap().to_path_buf(), 1, &mut images).convert(&md));
+            doc.push_str(
+                &MdToTypst::new(p.parent().unwrap().to_path_buf(), 1, &mut images).convert(&md),
+            );
         }
     } else {
         // Developer manual: README, gh-pages docs + blog, then architecture.
@@ -733,13 +756,17 @@ fn assemble(opts: &Opts) -> Result<String> {
         for p in &docs {
             doc.push_str("#pagebreak(weak: true)\n");
             let md = clean_markdown(p)?;
-            doc.push_str(&MdToTypst::new(p.parent().unwrap().to_path_buf(), 1, &mut images).convert(&md));
+            doc.push_str(
+                &MdToTypst::new(p.parent().unwrap().to_path_buf(), 1, &mut images).convert(&md),
+            );
         }
         doc.push_str(&part("Blog"));
         for p in &glob_sorted("gh-pages/blog", "md") {
             doc.push_str("#pagebreak(weak: true)\n");
             let md = clean_markdown(p)?;
-            doc.push_str(&MdToTypst::new(p.parent().unwrap().to_path_buf(), 1, &mut images).convert(&md));
+            doc.push_str(
+                &MdToTypst::new(p.parent().unwrap().to_path_buf(), 1, &mut images).convert(&md),
+            );
         }
 
         if opts.callgraph {

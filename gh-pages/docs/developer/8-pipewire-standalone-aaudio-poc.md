@@ -47,7 +47,7 @@ Place these in `assets/libs/arm64-v8a` before building the APK:
 
 - `libpipewire_exec.so`: renamed `pipewire` executable.
 - `liblocaldesktop_pipewire_aaudio_sink.so`: built from
-  `native/pipewire-aaudio-sink`.
+  `src/bin/localdesktop_pipewire_aaudio_sink.rs`.
 - PipeWire module `.so` files, for example
   `libpipewire-module-protocol-native.so`.
 - SPA plugin `.so` files, for example `libspa-support.so` and
