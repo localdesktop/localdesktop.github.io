@@ -9,7 +9,10 @@ use crate::{
         utils::application_context::get_application_context,
         utils::ndk::run_in_jvm,
     },
-    core::config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL, PULSE_GUEST_SERVER},
+    core::{
+        config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL, PULSE_GUEST_SERVER},
+        guest_user::GuestUser,
+    },
 };
 use jni::objects::JObject;
 use jni::sys::_jobject;
@@ -19,7 +22,7 @@ use std::{
     fs::{self, File},
     io::{Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         mpsc::{self, Sender},
         Arc, Mutex,
@@ -510,14 +513,6 @@ runpy.run_path('/usr/sbin/onboard', run_name='__main__')
     None
 }
 
-fn chroot_home_dir(fs_root: &Path, username: &str) -> PathBuf {
-    if username == "root" {
-        fs_root.join("root")
-    } else {
-        fs_root.join(format!("home/{username}"))
-    }
-}
-
 fn write_executable(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -570,8 +565,9 @@ fn android_ui_scale(density_dpi: i32) -> i32 {
 
 fn setup_xfce_wayland(options: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
-    let username = get_application_context().local_config.user.username;
-    let home_dir = chroot_home_dir(fs_root, &username);
+    let configured_username = get_application_context().local_config.user.username;
+    let guest_user = GuestUser::resolve(fs_root, &configured_username);
+    let home_dir = guest_user.host_home_dir(fs_root);
     let labwc_dir = home_dir.join(".config/xfce4/labwc");
 
     let density_dpi = read_android_density_dpi(options.android_app.clone());
@@ -935,7 +931,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(setup_onboard_signal_fix), // Step 6. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
         Box::new(setup_xfce_wayland),       // Step 7. Setup Xfce Wayland launch and HiDPI scaling
         Box::new(fix_xkb_symlink),          // Step 8. Fix xkb symlink
-        Box::new(setup_pulse_client_conf), // Step 9. Write PulseAudio conf (last)
+        Box::new(setup_pulse_client_conf),  // Step 9. Write PulseAudio conf (last)
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
