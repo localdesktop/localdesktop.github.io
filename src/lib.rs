@@ -12,7 +12,7 @@ pub mod android {
         pub mod run;
     }
     pub mod backend {
-        pub mod pulse_server;
+        pub mod pipewire_standalone_aaudio;
         pub mod wayland;
         pub mod webview;
     }

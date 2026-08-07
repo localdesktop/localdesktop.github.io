@@ -5,6 +5,7 @@ use crate::android::{
         write_guest_output_state, CentralizedEvent, WaylandBackend,
     },
 };
+use smithay::backend::input::ButtonState;
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
@@ -13,7 +14,6 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::draw_render_elements;
 use smithay::backend::renderer::{Color32F, Frame, Renderer};
 use smithay::input::keyboard::FilterResult;
-use smithay::backend::input::ButtonState;
 use smithay::input::pointer;
 use smithay::reexports::wayland_server::protocol::wl_pointer::ButtonState as WlButtonState;
 use smithay::utils::{Point, Rectangle, Transform, SERIAL_COUNTER};
@@ -45,11 +45,21 @@ fn get_surface(state: &State) -> Option<ToplevelSurface> {
         .cloned()
 }
 
-fn pointer_focus(state: &State) -> Option<(smithay::reexports::wayland_server::protocol::wl_surface::WlSurface, Point<f64, smithay::utils::Logical>)> {
+fn pointer_focus(
+    state: &State,
+) -> Option<(
+    smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    Point<f64, smithay::utils::Logical>,
+)> {
     get_surface(state).map(|surface| (surface.wl_surface().clone(), (0f64, 0f64).into()))
 }
 
-fn emit_pointer_motion(compositor: &mut crate::android::backend::wayland::Compositor, x: f64, y: f64, time: u32) {
+fn emit_pointer_motion(
+    compositor: &mut crate::android::backend::wayland::Compositor,
+    x: f64,
+    y: f64,
+    time: u32,
+) {
     let pointer = compositor.pointer.clone();
     let state = &mut compositor.state;
     if let Some(focus) = pointer_focus(state) {
@@ -110,7 +120,12 @@ fn emit_pointer_release(compositor: &mut crate::android::backend::wayland::Compo
 }
 
 /// A full tap: move to the location, then a press immediately followed by a release.
-fn emit_pointer_click(compositor: &mut crate::android::backend::wayland::Compositor, x: f64, y: f64, time: u32) {
+fn emit_pointer_click(
+    compositor: &mut crate::android::backend::wayland::Compositor,
+    x: f64,
+    y: f64,
+    time: u32,
+) {
     emit_pointer_motion(compositor, x, y, time);
     emit_pointer_press(compositor, time);
     emit_pointer_release(compositor, time);
@@ -169,7 +184,12 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                 // Just move the cursor. Defer the button press until the finger moves
                 // (a drag) or lifts (a tap), so a second finger landing for a scroll
                 // doesn't leave a stray press held down.
-                emit_pointer_motion(&mut backend.compositor, event.x(), event.y(), event.time_msec());
+                emit_pointer_motion(
+                    &mut backend.compositor,
+                    event.x(),
+                    event.y(),
+                    event.time_msec(),
+                );
             }
             InputEvent::TouchMotion { event } => {
                 let time = event.time_msec();

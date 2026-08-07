@@ -9,7 +9,10 @@ use crate::{
         utils::application_context::get_application_context,
         utils::ndk::run_in_jvm,
     },
-    core::config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL, PULSE_GUEST_SERVER},
+    core::config::{
+        CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL, PIPEWIRE_GUEST_RUNTIME_DIR,
+        PULSE_GUEST_SERVER,
+    },
 };
 use jni::objects::JObject;
 use jni::sys::_jobject;
@@ -17,14 +20,16 @@ use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
     fs::{self, File},
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
     path::{Path, PathBuf},
+    process,
     sync::{
         mpsc::{self, Sender},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tar::Archive;
 use winit::platform::android::activity::AndroidApp;
@@ -54,6 +59,19 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 /// - Heavy/long work belongs inside the spawned thread of a returned `Some(JoinHandle)`, so it runs once at install and surfaces as setup progress.
 /// - Simple/light tasks or important settings that must be run every launch (e.g. the Firefox config) can be done inline on the `None` path.
 type StageOutput = Option<JoinHandle<()>>;
+
+const PIPEWIRE_GUEST_LOCK_PACKAGES: &[&str] = &[
+    "libpipewire",
+    "pipewire",
+    "pipewire-alsa",
+    "pipewire-audio",
+    "pipewire-jack",
+    "pipewire-pulse",
+    "pipewire-v4l2",
+    "pipewire-zeroconf",
+    "gst-plugin-pipewire",
+    "wireplumber",
+];
 
 fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     let context = get_application_context();
@@ -212,6 +230,60 @@ fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
     None
 }
 
+fn setup_machine_id(_: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let machine_id = fs_root.join("etc/machine-id");
+
+    let existing = fs::read_to_string(&machine_id).unwrap_or_default();
+    if !is_valid_machine_id(&existing) {
+        if let Some(parent) = machine_id.parent() {
+            fs::create_dir_all(parent).expect("Failed to create /etc for machine-id");
+        }
+
+        let _ = fs::set_permissions(&machine_id, fs::Permissions::from_mode(0o644));
+        fs::write(&machine_id, format!("{}\n", generate_machine_id()))
+            .expect("Failed to write machine-id");
+        let _ = fs::set_permissions(&machine_id, fs::Permissions::from_mode(0o444));
+        log::info!("Seeded guest /etc/machine-id");
+    }
+
+    let dbus_dir = fs_root.join("var/lib/dbus");
+    fs::create_dir_all(&dbus_dir).expect("Failed to create /var/lib/dbus");
+    let dbus_machine_id = dbus_dir.join("machine-id");
+    match fs::symlink_metadata(&dbus_machine_id) {
+        Ok(_) => {}
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            symlink("/etc/machine-id", &dbus_machine_id)
+                .expect("Failed to symlink /var/lib/dbus/machine-id");
+        }
+        Err(err) => panic!("Failed to inspect /var/lib/dbus/machine-id: {}", err),
+    }
+
+    None
+}
+
+fn is_valid_machine_id(value: &str) -> bool {
+    let value = value.trim();
+    value.len() == 32
+        && value.chars().all(|c| c.is_ascii_hexdigit())
+        && value.chars().any(|c| c != '0')
+}
+
+fn generate_machine_id() -> String {
+    if let Ok(uuid) = fs::read_to_string("/proc/sys/kernel/random/uuid") {
+        let id = uuid.trim().replace('-', "").to_ascii_lowercase();
+        if is_valid_machine_id(&id) {
+            return id;
+        }
+    }
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{:016x}{:016x}", nanos as u64, process::id() as u64)
+}
+
 fn install_dependencies(options: &SetupOptions) -> StageOutput {
     let SetupOptions {
         mpsc_sender,
@@ -239,6 +311,8 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
     if installed() {
         return None;
     }
+
+    clear_pipewire_package_lock_for_install();
 
     let mpsc_sender = mpsc_sender.clone();
     return Some(thread::spawn(move || {
@@ -291,6 +365,53 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
             }
         }
     }));
+}
+
+fn clear_pipewire_package_lock_for_install() {
+    let pacman_conf = Path::new(ARCH_FS_ROOT).join("etc/pacman.conf");
+    let content = match fs::read_to_string(&pacman_conf) {
+        Ok(content) => content,
+        Err(error) => {
+            log::warn!(
+                "Skipping PipeWire pacman unlock before install; failed to read {}: {error}",
+                pacman_conf.display()
+            );
+            return;
+        }
+    };
+
+    let updated = remove_pacman_ignore_pkg(&content, PIPEWIRE_GUEST_LOCK_PACKAGES);
+    if updated != content {
+        fs::write(&pacman_conf, updated)
+            .expect("Failed to clear PipeWire pacman lock before install");
+        log::info!("Temporarily cleared guest PipeWire package lock before dependency install");
+    }
+}
+
+fn setup_pipewire_package_lock(_: &SetupOptions) -> StageOutput {
+    let pacman_conf = Path::new(ARCH_FS_ROOT).join("etc/pacman.conf");
+    let content = match fs::read_to_string(&pacman_conf) {
+        Ok(content) => content,
+        Err(error) => {
+            log::warn!(
+                "Skipping PipeWire pacman lock; failed to read {}: {error}",
+                pacman_conf.display()
+            );
+            return None;
+        }
+    };
+
+    let updated = ensure_pacman_ignore_pkg(&content, PIPEWIRE_GUEST_LOCK_PACKAGES);
+    if updated != content {
+        fs::write(&pacman_conf, updated).expect("Failed to write PipeWire pacman lock");
+        log::info!(
+            "Locked guest PipeWire packages in {}: {}",
+            pacman_conf.display(),
+            PIPEWIRE_GUEST_LOCK_PACKAGES.join(" ")
+        );
+    }
+
+    None
 }
 
 fn setup_firefox_config(_: &SetupOptions) -> StageOutput {
@@ -422,6 +543,130 @@ fn upsert_kv_file(path: &Path, delimiter: char, updates: &[(&str, String)]) {
     }
     let content = render_kv_lines(&lines);
     fs::write(path, content).expect("Failed to write key/value file");
+}
+
+fn ensure_pacman_ignore_pkg(content: &str, packages: &[&str]) -> String {
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let value = packages.join(" ");
+
+    let Some(options_start) = lines.iter().position(|line| line.trim() == "[options]") else {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push("[options]".to_string());
+        lines.push(format!("IgnorePkg   = {value}"));
+        let mut out = lines.join("\n");
+        out.push('\n');
+        return out;
+    };
+
+    let options_end = lines
+        .iter()
+        .enumerate()
+        .skip(options_start + 1)
+        .find(|(_, line)| {
+            let trimmed = line.trim();
+            trimmed.starts_with('[') && trimmed.ends_with(']')
+        })
+        .map(|(index, _)| index)
+        .unwrap_or(lines.len());
+
+    let mut insert_after_comment = None;
+    for index in options_start + 1..options_end {
+        let trimmed = lines[index].trim_start();
+        let active = !trimmed.starts_with('#');
+        let candidate = if active {
+            trimmed
+        } else {
+            trimmed.trim_start_matches('#').trim_start()
+        };
+
+        let Some((key, existing)) = candidate.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "IgnorePkg" {
+            continue;
+        }
+
+        if active {
+            let merged = merge_pacman_list(existing, packages);
+            lines[index] = format!("IgnorePkg   = {merged}");
+            let mut out = lines.join("\n");
+            out.push('\n');
+            return out;
+        }
+
+        insert_after_comment = Some(index + 1);
+    }
+
+    lines.insert(
+        insert_after_comment.unwrap_or(options_start + 1),
+        format!("IgnorePkg   = {value}"),
+    );
+
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+fn merge_pacman_list(existing: &str, packages: &[&str]) -> String {
+    let mut values: Vec<String> = existing.split_whitespace().map(str::to_string).collect();
+    for package in packages {
+        if !values.iter().any(|value| value == package) {
+            values.push((*package).to_string());
+        }
+    }
+    values.join(" ")
+}
+
+fn remove_pacman_ignore_pkg(content: &str, packages: &[&str]) -> String {
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+
+    let Some(options_start) = lines.iter().position(|line| line.trim() == "[options]") else {
+        let mut out = lines.join("\n");
+        out.push('\n');
+        return out;
+    };
+
+    let options_end = lines
+        .iter()
+        .enumerate()
+        .skip(options_start + 1)
+        .find(|(_, line)| {
+            let trimmed = line.trim();
+            trimmed.starts_with('[') && trimmed.ends_with(']')
+        })
+        .map(|(index, _)| index)
+        .unwrap_or(lines.len());
+
+    for line in lines.iter_mut().take(options_end).skip(options_start + 1) {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+
+        let Some((key, existing)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "IgnorePkg" {
+            continue;
+        }
+
+        let remaining = existing
+            .split_whitespace()
+            .filter(|value| !packages.iter().any(|package| package == value))
+            .collect::<Vec<_>>()
+            .join(" ");
+        *line = if remaining.is_empty() {
+            "IgnorePkg   =".to_string()
+        } else {
+            format!("IgnorePkg   = {remaining}")
+        };
+    }
+
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
 }
 
 fn setup_fake_bwrap(_: &SetupOptions) -> StageOutput {
@@ -628,9 +873,15 @@ fn setup_xfce_wayland(options: &SetupOptions) -> StageOutput {
     // session manager, panel, compositor (labwc), and desktop manager.
     write_executable(
         &fs_root.join("usr/local/bin/startxfce4-localdesktop"),
-        r#"#!/bin/sh
+        &format!(
+            r#"#!/bin/sh
+export PIPEWIRE_RUNTIME_DIR={PIPEWIRE_GUEST_RUNTIME_DIR}
+export PULSE_SERVER={PULSE_GUEST_SERVER}
+: "${{XDG_RUNTIME_DIR:={PIPEWIRE_GUEST_RUNTIME_DIR}}}"
+export XDG_RUNTIME_DIR
 exec startxfce4 --wayland "$@"
-"#,
+"#
+        ),
     );
 
     // Runs from ~/.config/autostart once xfsettingsd is up; reinforces pre-seeded /Xft/DPI.
@@ -844,21 +1095,6 @@ done
 
     None
 }
-/// Writing a PulseAudio conf, so all application know where to direkt the stream
-/// This way it is agnostic to the Desktop Environment
-fn setup_pulse_client_conf(_: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
-    let pulse_config_dir = fs_root.join("root/.config/pulse");
-    let _ = fs::create_dir_all(&pulse_config_dir);
-    let body = format!(
-        "# Local Desktop — host PulseAudio (written by setup, do not edit)\n\
-         default-server = {PULSE_GUEST_SERVER}\n\
-         autospawn = no\n"
-    );
-    fs::write(pulse_config_dir.join("client.conf"), body)
-        .expect("Failed to write pulse client.conf");
-    None
-}
 fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let xkb_path = fs_root.join("usr/share/X11/xkb");
@@ -930,12 +1166,13 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (extract)
         Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
         Box::new(install_dependencies),         // Step 3. Install dependencies
-        Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
-        Box::new(setup_fake_bwrap), // Step 5. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
-        Box::new(setup_onboard_signal_fix), // Step 6. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
-        Box::new(setup_xfce_wayland),       // Step 7. Setup Xfce Wayland launch and HiDPI scaling
-        Box::new(fix_xkb_symlink),          // Step 8. Fix xkb symlink
-        Box::new(setup_pulse_client_conf), // Step 9. Write PulseAudio conf (last)
+        Box::new(setup_machine_id),             // Step 4. Seed /etc/machine-id for D-Bus clients
+        Box::new(setup_pipewire_package_lock), // Step 5. Hold guest PipeWire packages for the Android-side PipeWire POC
+        Box::new(setup_firefox_config),        // Step 6. Setup Firefox config
+        Box::new(setup_fake_bwrap), // Step 7. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
+        Box::new(setup_onboard_signal_fix), // Step 8. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
+        Box::new(setup_xfce_wayland),       // Step 9. Setup Xfce Wayland launch and HiDPI scaling
+        Box::new(fix_xkb_symlink),          // Step 10. Fix xkb symlink
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {

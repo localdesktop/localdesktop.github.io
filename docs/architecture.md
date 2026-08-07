@@ -1,5 +1,5 @@
 <!--
-  This is the SPINE of the generated architecture PDF (see src/bin/build_docs/).
+  This is the SPINE of the generated architecture PDF (see src/bin/build_docs.rs).
   The prose is curated; the code is not. Each snippet directive (the HTML-comment
   lines beginning with "snippet", expanded by build_docs) is replaced at build
   time with the named function pulled fresh from source, so the walkthrough can

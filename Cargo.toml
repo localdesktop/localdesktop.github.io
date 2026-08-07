@@ -9,6 +9,17 @@ default-run = "build_apk"
 [lib]
 crate-type = ["lib", "cdylib"]
 
+# The standalone PipeWire client that owns the Android AAudio output stream. Off
+# by default: it links libpipewire-0.3, so it needs an Android PipeWire sysroot
+# that the normal APK build does not. See scripts/build-pipewire-aaudio-sink.sh.
+[[bin]]
+name = "localdesktop_pipewire_aaudio_sink"
+path = "src/bin/localdesktop_pipewire_aaudio_sink.rs"
+required-features = ["pipewire-sink"]
+
+[features]
+pipewire-sink = ["dep:pipewire"]
+
 [profile.release]
 strip = true      # Automatically strip symbols from the binary.
 opt-level = "z"   # Optimize for size.
@@ -41,6 +52,7 @@ sentry = { version = "0.41.0", default-features = false, features = [
     "log",
 ] }
 pathdiff = "0.2"
+pipewire = { version = "0.10", features = ["v1_0_0"], optional = true }
 smithay = { version = "0.5.0", default-features = false, features = [
     "wayland-protocols",
     "wayland-server",
