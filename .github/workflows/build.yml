@@ -2,12 +2,26 @@ name: Build APK & AAB
 
 on:
   workflow_dispatch:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+      - ready_for_review
+    branches:
+      - main
   push:
     tags:
       - "v*.*.*"
 
 permissions:
   contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,7 +30,48 @@ env:
   ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
 jobs:
+  classify-pr-apk:
+    name: Classify PR APK build
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.classify.outputs.should_build }}
+
+    steps:
+      - name: Classify PR
+        id: classify
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (context.eventName !== "pull_request") {
+              core.setOutput("should_build", "true");
+              return;
+            }
+
+            const pr = context.payload.pull_request;
+            const appReleaseLabels = new Set([
+              "release:breaking",
+              "release:feature",
+              "release:bugfix",
+              "release:patch",
+              "release:improvement",
+              "release:optimisation",
+            ]);
+            const labels = pr.labels.map((label) => label.name);
+            const selected = labels.filter((label) => appReleaseLabels.has(label));
+            const sameRepo = pr.head.repo.full_name === `${context.repo.owner}/${context.repo.repo}`;
+            const shouldBuild =
+              sameRepo &&
+              selected.length === 1 &&
+              !labels.includes("release:docs");
+
+            core.info(`same-repo PR: ${sameRepo}`);
+            core.info(`app release labels: ${selected.join(", ") || "none"}`);
+            core.info(`build signed APK: ${shouldBuild}`);
+            core.setOutput("should_build", shouldBuild ? "true" : "false");
+
   build:
+    needs: classify-pr-apk
+    if: github.event_name != 'pull_request' || needs.classify-pr-apk.outputs.should_build == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -32,6 +87,7 @@ jobs:
         run: echo "version=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].version')" >> "$GITHUB_OUTPUT"
 
       - name: Extract release notes
+        if: github.ref_type == 'tag'
         id: release_notes
         uses: actions/github-script@v7
         with:
@@ -67,7 +123,7 @@ jobs:
             core.setOutput("path", notesPath);
 
       - name: Fallback release notes to commit message
-        if: steps.release_notes.outputs.found != 'true'
+        if: github.ref_type == 'tag' && steps.release_notes.outputs.found != 'true'
         run: |
           git log -1 --pretty=%B > "${{ steps.release_notes.outputs.path }}"
 
@@ -123,10 +179,37 @@ jobs:
         run: |
           mv target/x/release/android/gradle/app/build/outputs/apk/debug/app-debug.apk target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.apk
           mv target/x/release/android/gradle/app/build/outputs/apk/release/app-release.apk target/x/localdesktop-${{ steps.extract_version.outputs.version }}.apk
+
+      - name: Compute PR APK artifact name
+        id: pr_apk_artifact
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          VERSION: ${{ steps.extract_version.outputs.version }}
+        run: |
+          SAFE_REF=$(printf '%s' "$HEAD_REF" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g' | cut -c1-60)
+          if [ -z "$SAFE_REF" ]; then
+            SAFE_REF="pr-${PR_NUMBER}"
+          fi
+          SHORT_SHA="${HEAD_SHA:0:7}"
+          echo "name=localdesktop-${VERSION}-${SAFE_REF}-${SHORT_SHA}-release-apk" >> "$GITHUB_OUTPUT"
+
+      - name: Upload PR release APK
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pr_apk_artifact.outputs.name }}
+          path: target/x/localdesktop-${{ steps.extract_version.outputs.version }}.apk
+          if-no-files-found: error
+
       - name: Build AAB
+        if: github.event_name != 'pull_request'
         run: x build --release --platform=android --arch=arm64 --format=aab
 
       - name: Rename AAB
+        if: github.event_name != 'pull_request'
         run: |
           mv target/x/release/android/gradle/app/build/outputs/bundle/debug/app-debug.aab target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.aab
           mv target/x/release/android/gradle/app/build/outputs/bundle/release/app-release.aab target/x/localdesktop-${{ steps.extract_version.outputs.version }}.aab
