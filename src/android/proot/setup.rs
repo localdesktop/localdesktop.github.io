@@ -1275,7 +1275,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             graphic_renderer: None,
             clock: Clock::new(),
             key_counter: 0,
-            scale_factor: scale_factor(&android_app),
+            guest_scale_factor: scale_factor(&android_app),
             touch_points: std::collections::HashMap::new(),
             scroll_centroid: None,
             touch_mode: TouchMode::Undecided,

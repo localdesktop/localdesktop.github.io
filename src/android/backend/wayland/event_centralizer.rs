@@ -20,8 +20,7 @@ pub enum CentralizedEvent {
     Resized {
         /// The new physical size (in pixels)
         size: Size<i32, Physical>,
-        /// The new scale factor
-        scale_factor: f64,
+        guest_scale_factor: f64,
     },
 
     /// The focus state of the window changed
@@ -78,15 +77,15 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
     return match event {
         WindowEvent::Resized(size) => {
             let (w, h): (i32, i32) = size.into();
-            backend.scale_factor = ndk::scale_factor(&backend.android_app);
+            backend.guest_scale_factor = ndk::scale_factor(&backend.android_app);
 
             CentralizedEvent::Resized {
                 size: (w, h).into(),
-                scale_factor: backend.scale_factor,
+                guest_scale_factor: backend.guest_scale_factor,
             }
         }
         WindowEvent::ScaleFactorChanged { .. } => {
-            backend.scale_factor = ndk::scale_factor(&backend.android_app);
+            backend.guest_scale_factor = ndk::scale_factor(&backend.android_app);
             let (w, h): (i32, i32) = backend
                 .graphic_renderer
                 .as_ref()
@@ -96,7 +95,7 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
                 .into();
             CentralizedEvent::Resized {
                 size: (w, h).into(),
-                scale_factor: backend.scale_factor,
+                guest_scale_factor: backend.guest_scale_factor,
             }
         }
         WindowEvent::RedrawRequested => CentralizedEvent::Redraw,

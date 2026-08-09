@@ -63,7 +63,7 @@ pub fn density_dpi(android_app: &AndroidApp) -> i32 {
     .unwrap_or(BASELINE_DPI as i32)
 }
 
-/// Display scale factor derived from the device density, never below 1x.
+/// Guest UI scale factor derived from the device density, never below 1x.
 pub fn scale_factor(android_app: &AndroidApp) -> f64 {
     (density_dpi(android_app) as f64 / BASELINE_DPI).max(1.0)
 }

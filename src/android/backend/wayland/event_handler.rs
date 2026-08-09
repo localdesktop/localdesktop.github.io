@@ -376,7 +376,10 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
             }
             _ => {}
         },
-        CentralizedEvent::Resized { size, scale_factor } => {
+        CentralizedEvent::Resized {
+            size,
+            guest_scale_factor,
+        } => {
             backend.compositor.state.size = (size.w, size.h).into();
 
             if let Some(output) = &backend.compositor.output {
@@ -386,12 +389,12 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                         refresh: 60000,
                     }),
                     Some(Transform::Normal),
-                    Some(Scale::Fractional(scale_factor)),
+                    Some(Scale::Integer(1)),
                     Some((0, 0).into()),
                 );
             }
 
-            let guest_scale = scale_factor.round().max(1.0) as i32;
+            let guest_scale = guest_scale_factor.round().max(1.0) as i32;
             write_guest_output_state(size.w, size.h, guest_scale);
 
             if let Some(surface) = get_surface(&backend.compositor.state) {

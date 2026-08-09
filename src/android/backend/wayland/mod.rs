@@ -41,7 +41,7 @@ pub struct WaylandBackend {
     pub android_app: AndroidApp,
     pub clock: Clock<Monotonic>,
     pub key_counter: u32,
-    pub scale_factor: f64,
+    pub guest_scale_factor: f64,
     /// Active touch points keyed by pointer id.
     pub touch_points: HashMap<u64, PhysicalPosition<f64>>,
     /// Centroid of the active touch points at the last scroll update.

@@ -36,8 +36,8 @@ fn configure_output(backend: &mut crate::android::backend::wayland::WaylandBacke
     let size = (window_size.w, window_size.h);
     // Not `winit.scale_factor()`: that reads `AConfiguration`, which still reports the 160 dpi
     // default on the first launch and only becomes accurate after a configuration change.
-    let scale_factor = ndk::scale_factor(&backend.android_app);
-    backend.scale_factor = scale_factor;
+    let guest_scale_factor = ndk::scale_factor(&backend.android_app);
+    backend.guest_scale_factor = guest_scale_factor;
     backend.compositor.state.size = size.into();
 
     let output = backend
@@ -67,11 +67,11 @@ fn configure_output(backend: &mut crate::android::backend::wayland::WaylandBacke
             refresh: 60000,
         }),
         Some(Transform::Normal),
-        Some(Scale::Fractional(scale_factor)),
+        Some(Scale::Integer(1)),
         Some((0, 0).into()),
     );
 
-    let guest_scale = scale_factor.round().max(1.0) as i32;
+    let guest_scale = guest_scale_factor.round().max(1.0) as i32;
     write_guest_output_state(window_size.w, window_size.h, guest_scale);
 
     for surface in backend.compositor.state.xdg_shell_state.toplevel_surfaces() {
