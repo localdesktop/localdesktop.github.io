@@ -30,8 +30,8 @@ env:
   ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
 jobs:
-  classify-pr-apk:
-    name: Classify PR APK build
+  validate-release-label:
+    name: Validate Release Label
     runs-on: ubuntu-latest
     outputs:
       should_build: ${{ steps.classify.outputs.should_build }}
@@ -56,22 +56,31 @@ jobs:
               "release:improvement",
               "release:optimisation",
             ]);
+            const releaseLabels = new Set([...appReleaseLabels, "release:docs"]);
             const labels = pr.labels.map((label) => label.name);
-            const selected = labels.filter((label) => appReleaseLabels.has(label));
+            const selected = labels.filter((label) => releaseLabels.has(label));
             const sameRepo = pr.head.repo.full_name === `${context.repo.owner}/${context.repo.repo}`;
+            if (selected.length !== 1) {
+              core.setFailed(
+                `PRs to main must have exactly one release label. Found: ${
+                  selected.join(", ") || "none"
+                }`
+              );
+              return;
+            }
+
             const shouldBuild =
               sameRepo &&
-              selected.length === 1 &&
-              !labels.includes("release:docs");
+              appReleaseLabels.has(selected[0]);
 
             core.info(`same-repo PR: ${sameRepo}`);
-            core.info(`app release labels: ${selected.join(", ") || "none"}`);
+            core.info(`release label: ${selected[0]}`);
             core.info(`build signed APK: ${shouldBuild}`);
             core.setOutput("should_build", shouldBuild ? "true" : "false");
 
   build:
-    needs: classify-pr-apk
-    if: github.event_name != 'pull_request' || needs.classify-pr-apk.outputs.should_build == 'true'
+    needs: validate-release-label
+    if: github.event_name != 'pull_request' || needs.validate-release-label.outputs.should_build == 'true'
     runs-on: ubuntu-latest
 
     steps:
