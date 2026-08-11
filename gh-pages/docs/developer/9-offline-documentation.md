@@ -43,7 +43,8 @@ cargo run --bin build_docs -- user phone dark     # user manual, dark, phone pag
 The User Manual ships as release artifacts in **6 variants** — every size
 (desktop/fold/phone) × theme (light/dark) — attached alongside the APK/AAB as
 `Local-Desktop-v<version>-User-Manual[-Fold|-Phone][-Dark].pdf`. The app also
-pre-downloads the matching desktop/light manual onto the Linux desktop during setup.
+pre-downloads the matching desktop/light manual onto the Linux desktop as
+`Local Desktop - User Manual.pdf`.
 
 The Developer Manual's architecture part comes in two modes:
 

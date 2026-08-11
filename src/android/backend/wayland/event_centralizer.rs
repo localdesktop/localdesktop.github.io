@@ -5,8 +5,9 @@ use crate::android::backend::wayland::{
         WinitTouchMovedEvent, WinitTouchStartedEvent,
     },
     keymap::physicalkey_to_scancode,
-    WaylandBackend,
+    TouchMode, WaylandBackend,
 };
+use crate::android::utils::ndk;
 use smithay::backend::input::InputEvent;
 use smithay::utils::{Physical, Size};
 use winit::dpi::PhysicalPosition;
@@ -19,8 +20,7 @@ pub enum CentralizedEvent {
     Resized {
         /// The new physical size (in pixels)
         size: Size<i32, Physical>,
-        /// The new scale factor
-        scale_factor: f64,
+        guest_scale_factor: f64,
     },
 
     /// The focus state of the window changed
@@ -77,17 +77,15 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
     return match event {
         WindowEvent::Resized(size) => {
             let (w, h): (i32, i32) = size.into();
+            backend.guest_scale_factor = ndk::scale_factor(&backend.android_app);
 
             CentralizedEvent::Resized {
                 size: (w, h).into(),
-                scale_factor: backend.scale_factor,
+                guest_scale_factor: backend.guest_scale_factor,
             }
         }
-        WindowEvent::ScaleFactorChanged {
-            scale_factor: new_scale_factor,
-            ..
-        } => {
-            backend.scale_factor = new_scale_factor;
+        WindowEvent::ScaleFactorChanged { .. } => {
+            backend.guest_scale_factor = ndk::scale_factor(&backend.android_app);
             let (w, h): (i32, i32) = backend
                 .graphic_renderer
                 .as_ref()
@@ -97,7 +95,7 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
                 .into();
             CentralizedEvent::Resized {
                 size: (w, h).into(),
-                scale_factor: backend.scale_factor,
+                guest_scale_factor: backend.guest_scale_factor,
             }
         }
         WindowEvent::RedrawRequested => CentralizedEvent::Redraw,
@@ -112,18 +110,10 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
             centralize_keyboard(scancode, event.state, time, backend)
         }
         WindowEvent::CursorMoved { position, .. } => {
-            let size = backend
-                .graphic_renderer
-                .as_ref()
-                .unwrap()
-                .window()
-                .inner_size();
-            let x = position.x / size.width as f64;
-            let y = position.y / size.height as f64;
             let event = InputEvent::PointerMotionAbsolute {
                 event: WinitMouseMovedEvent {
                     time,
-                    position: RelativePosition::new(x, y),
+                    position: relative_position(backend, position),
                     global_position: position,
                 },
             };
@@ -153,35 +143,25 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
             ..
         }) => {
             backend.touch_points.insert(id, location);
+            backend.scroll_centroid = Some(centroid(&backend.touch_points));
+
             if backend.touch_points.len() >= 2 {
-                // Second finger down: transition to two-finger scroll mode.
-                // Initialize the centroid so the first move has a reference point.
-                backend.touch_gesture_was_multi_touch = true;
-                backend.scroll_centroid = Some(centroid(&backend.touch_points));
-                CentralizedEvent::Unsupported
-            } else if backend.touch_gesture_was_multi_touch {
-                // A finger landed again during the tail of a two-finger gesture; keep ignoring
-                // single-finger handling until every finger has lifted.
-                CentralizedEvent::Unsupported
-            } else {
-                backend.touch_down_position = Some(location);
-                let size = backend
-                    .graphic_renderer
-                    .as_ref()
-                    .unwrap()
-                    .window()
-                    .inner_size();
-                let x = location.x / size.width as f64;
-                let y = location.y / size.height as f64;
-                CentralizedEvent::Input(InputEvent::TouchDown {
-                    event: WinitTouchStartedEvent {
-                        time,
-                        global_position: location,
-                        position: RelativePosition::new(x, y),
-                        id,
-                    },
-                })
+                // A second finger is unambiguously a scroll, whatever the first one was doing.
+                backend.touch_mode = TouchMode::Scroll;
+                return CentralizedEvent::Unsupported;
             }
+
+            backend.touch_mode = TouchMode::Undecided;
+            backend.touch_down_position = Some(location);
+            backend.touch_down_time = Some(time);
+            CentralizedEvent::Input(InputEvent::TouchDown {
+                event: WinitTouchStartedEvent {
+                    time,
+                    global_position: location,
+                    position: relative_position(backend, location),
+                    id,
+                },
+            })
         }
         WindowEvent::Touch(Touch {
             phase: TouchPhase::Moved,
@@ -190,50 +170,53 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
             ..
         }) => {
             backend.touch_points.insert(id, location);
-            if backend.touch_points.len() >= 2 {
-                // Two-finger scroll: emit a PointerAxis event based on centroid delta.
-                backend.touch_gesture_was_multi_touch = true;
-                let new_centroid = centroid(&backend.touch_points);
-                if let Some(last) = backend.scroll_centroid {
+
+            if backend.touch_mode == TouchMode::Undecided && travelled_past_slop(backend, location)
+            {
+                backend.touch_mode = TouchMode::Scroll;
+                // Start scrolling from here, so the slop the finger just used up doesn't
+                // arrive as one jump.
+                backend.scroll_centroid = Some(centroid(&backend.touch_points));
+            }
+            if backend.touch_mode == TouchMode::LongPress && travelled_past_slop(backend, location)
+            {
+                backend.touch_mode = TouchMode::Drag;
+            }
+
+            match backend.touch_mode {
+                // Still deciding between a tap, a scroll and a long press: don't move the
+                // cursor yet, or a scroll would drag it along.
+                TouchMode::Undecided | TouchMode::LongPress => CentralizedEvent::Unsupported,
+                TouchMode::Scroll => {
+                    // Scroll by the centroid delta, which is the finger itself when only one
+                    // is down. Positive axis values scroll the view down, so the raw delta
+                    // (negated once more in `WinitMouseWheelEvent::amount`) makes the content
+                    // follow the finger the way Android does.
+                    let new_centroid = centroid(&backend.touch_points);
+                    let last = backend.scroll_centroid.replace(new_centroid);
+                    let Some(last) = last else {
+                        return CentralizedEvent::Unsupported;
+                    };
                     let dx = new_centroid.x - last.x;
                     let dy = new_centroid.y - last.y;
-                    backend.scroll_centroid = Some(new_centroid);
-                    if dx != 0.0 || dy != 0.0 {
-                        return CentralizedEvent::Input(InputEvent::PointerAxis {
-                            event: WinitMouseWheelEvent {
-                                time,
-                                delta: MouseScrollDelta::PixelDelta(PhysicalPosition {
-                                    x: -dx,
-                                    y: -dy,
-                                }),
-                            },
-                        });
+                    if dx == 0.0 && dy == 0.0 {
+                        return CentralizedEvent::Unsupported;
                     }
-                } else {
-                    backend.scroll_centroid = Some(new_centroid);
+                    CentralizedEvent::Input(InputEvent::PointerAxis {
+                        event: WinitMouseWheelEvent {
+                            time,
+                            delta: MouseScrollDelta::PixelDelta(PhysicalPosition { x: dx, y: dy }),
+                        },
+                    })
                 }
-                CentralizedEvent::Unsupported
-            } else if backend.touch_gesture_was_multi_touch {
-                // Leftover finger drifting after a two-finger scroll: ignore it so it neither
-                // moves the cursor nor starts a drag that would select text.
-                CentralizedEvent::Unsupported
-            } else {
-                let size = backend
-                    .graphic_renderer
-                    .as_ref()
-                    .unwrap()
-                    .window()
-                    .inner_size();
-                let x = location.x / size.width as f64;
-                let y = location.y / size.height as f64;
-                CentralizedEvent::Input(InputEvent::TouchMotion {
+                TouchMode::Drag => CentralizedEvent::Input(InputEvent::TouchMotion {
                     event: WinitTouchMovedEvent {
                         time,
-                        position: RelativePosition::new(x, y),
+                        position: relative_position(backend, location),
                         global_position: location,
                         id,
                     },
-                })
+                }),
             }
         }
 
@@ -243,56 +226,41 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
             id,
             ..
         }) => {
-            let was_multi_touch = backend.touch_points.len() >= 2;
             backend.touch_points.remove(&id);
-            backend.scroll_centroid = if backend.touch_points.len() >= 2 {
-                Some(centroid(&backend.touch_points))
-            } else {
-                None
-            };
-            if was_multi_touch {
-                backend.touch_gesture_was_multi_touch = true;
+            if !backend.touch_points.is_empty() {
+                // Don't forward a stray TouchUp while other fingers are still down; re-anchor
+                // the centroid so the remaining fingers don't jump the scroll.
+                backend.scroll_centroid = Some(centroid(&backend.touch_points));
+                return CentralizedEvent::Unsupported;
             }
-            if backend.touch_points.is_empty() {
-                let emit_click = !backend.touch_gesture_was_multi_touch;
-                backend.touch_gesture_was_multi_touch = false;
-                backend.touch_down_position = None;
-                CentralizedEvent::Input(InputEvent::TouchUp {
-                    event: WinitTouchEndedEvent {
-                        time,
-                        id,
-                        emit_click,
-                        x: location.x,
-                        y: location.y,
-                    },
-                })
-            } else {
-                // Don't forward a stray TouchUp while other fingers are still down.
-                CentralizedEvent::Unsupported
-            }
+
+            let mode = backend.touch_mode;
+            backend.reset_touch_state();
+            CentralizedEvent::Input(InputEvent::TouchUp {
+                event: WinitTouchEndedEvent {
+                    time,
+                    id,
+                    mode,
+                    x: location.x,
+                    y: location.y,
+                },
+            })
         }
         WindowEvent::Touch(Touch {
             phase: TouchPhase::Cancelled,
             id,
             ..
         }) => {
-            let was_multi_touch = backend.touch_points.len() >= 2;
             backend.touch_points.remove(&id);
-            backend.scroll_centroid = None;
-            if was_multi_touch {
-                backend.touch_gesture_was_multi_touch = true;
+            if !backend.touch_points.is_empty() {
+                backend.scroll_centroid = Some(centroid(&backend.touch_points));
+                return CentralizedEvent::Unsupported;
             }
-            if backend.touch_points.is_empty() {
-                backend.touch_gesture_was_multi_touch = false;
-                backend.touch_down_position = None;
-            }
-            if was_multi_touch {
-                CentralizedEvent::Unsupported
-            } else {
-                CentralizedEvent::Input(InputEvent::TouchCancel {
-                    event: WinitTouchCancelledEvent { time, id },
-                })
-            }
+
+            backend.reset_touch_state();
+            CentralizedEvent::Input(InputEvent::TouchCancel {
+                event: WinitTouchCancelledEvent { time, id },
+            })
         }
 
         _ => {
@@ -300,6 +268,35 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
             CentralizedEvent::Unsupported
         }
     };
+}
+
+/// Normalize a window-relative pixel position into the 0..1 range the input backend expects.
+fn relative_position(
+    backend: &WaylandBackend,
+    location: PhysicalPosition<f64>,
+) -> RelativePosition {
+    let size = backend
+        .graphic_renderer
+        .as_ref()
+        .unwrap()
+        .window()
+        .inner_size();
+    RelativePosition::new(
+        location.x / size.width as f64,
+        location.y / size.height as f64,
+    )
+}
+
+/// Whether the finger has moved far enough from where it landed to stop being a tap.
+fn travelled_past_slop(backend: &WaylandBackend, location: PhysicalPosition<f64>) -> bool {
+    backend
+        .touch_down_position
+        .map(|start| {
+            let dx = location.x - start.x;
+            let dy = location.y - start.y;
+            dx * dx + dy * dy > backend.touch_slop_px * backend.touch_slop_px
+        })
+        .unwrap_or(false)
 }
 
 fn centroid(

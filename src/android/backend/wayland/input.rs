@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use super::TouchMode;
 use winit::{
     dpi::PhysicalPosition,
     event::{ElementState, MouseButton as WinitMouseButton, MouseScrollDelta},
@@ -308,8 +309,8 @@ impl AbsolutePositionEvent<WinitInput> for WinitTouchMovedEvent {
 pub struct WinitTouchEndedEvent {
     pub(crate) time: u64,
     pub(crate) id: u64,
-    /// When false, the touch ended as part of a multi-touch gesture (e.g. scroll).
-    pub(crate) emit_click: bool,
+    /// What the gesture had been resolved to when the last finger lifted.
+    pub(crate) mode: TouchMode,
     pub(crate) x: f64,
     pub(crate) y: f64,
 }

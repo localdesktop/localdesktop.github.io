@@ -3,19 +3,17 @@ use crate::{
     android::{
         app::build::PolarBearBackend,
         backend::{
-            wayland::{Compositor, WaylandBackend},
+            wayland::{Compositor, TouchMode, WaylandBackend},
             webview::{ErrorVariant, WebviewBackend},
         },
         utils::application_context::get_application_context,
-        utils::ndk::run_in_jvm,
+        utils::ndk::{density_dpi, long_press_timeout_ms, scale_factor, touch_slop_px},
     },
     core::config::{
         CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL, PIPEWIRE_GUEST_RUNTIME_DIR,
         PULSE_GUEST_SERVER,
     },
 };
-use jni::objects::JObject;
-use jni::sys::_jobject;
 use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
@@ -344,6 +342,7 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
             .run();
 
             if installed() {
+                download_user_manual();
                 return;
             }
             mpsc_sender
@@ -365,6 +364,25 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
             }
         }
     }));
+}
+
+/// Drop the offline User Manual for this app version onto the guest desktop.
+///
+/// The filename carries no version so an update overwrites the previous copy instead of landing
+/// beside it. Called once a fresh install or update has just succeeded — the only moment the
+/// manual on disk can be out of date — and best-effort: a failed download is not worth a retry.
+fn download_user_manual() {
+    let username = get_application_context().local_config.user.username;
+    let desktop_dir = chroot_home_dir(Path::new(ARCH_FS_ROOT), &username).join("Desktop");
+    if fs::create_dir_all(&desktop_dir).is_err() {
+        return;
+    }
+
+    let url = crate::core::config::user_manual_url();
+    let response = reqwest::blocking::get(&url).and_then(|it| it.error_for_status());
+    if let Ok(bytes) = response.and_then(|it| it.bytes()) {
+        let _ = fs::write(desktop_dir.join("Local Desktop - User Manual.pdf"), &bytes);
+    }
 }
 
 fn clear_pipewire_package_lock_for_install() {
@@ -716,6 +734,65 @@ exec "$@"
     None
 }
 
+fn setup_chromium_no_sandbox(_: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+
+    // Chromium's sandbox needs CLONE_NEWUSER, which Android SELinux blocks, so every
+    // Chromium/Electron app has to be started with --no-sandbox. Electron apps pick that up
+    // from ELECTRON_DISABLE_SANDBOX (exported by startxfce4-localdesktop), but Chromium itself
+    // only takes the flag, and its desktop entry hardcodes an absolute path that a
+    // /usr/local/bin wrapper cannot intercept. So shadow the affected application entries in
+    // the user's own XDG directory, re-running every session to catch newly installed apps.
+    write_executable(
+        &fs_root.join("usr/local/bin/localdesktop-no-sandbox-entries"),
+        r#"#!/bin/sh
+target_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+mkdir -p "$target_dir" || exit 0
+
+for src in /usr/share/applications/*.desktop /usr/local/share/applications/*.desktop; do
+    [ -f "$src" ] || continue
+
+    prog=$(sed -n 's/^Exec=//p' "$src" | head -n1 | awk '{print $1}')
+    [ -n "$prog" ] || continue
+    case "$prog" in
+        /*) bin="$prog" ;;
+        *) bin=$(command -v "$prog" 2>/dev/null) || continue ;;
+    esac
+    bin=$(readlink -f "$bin" 2>/dev/null)
+    [ -n "$bin" ] || continue
+
+    # Every Chromium/Electron build ships the setuid sandbox helper next to its binary,
+    # or one level up when the launcher lives in a bin/ subdirectory.
+    dir=$(dirname "$bin")
+    [ -e "$dir/chrome-sandbox" ] || [ -e "$dir/../chrome-sandbox" ] || continue
+
+    dst="$target_dir/$(basename "$src")"
+    # Leave alone anything the user wrote themselves.
+    if [ -e "$dst" ] && ! grep -q '^X-LocalDesktop-NoSandbox=' "$dst"; then
+        continue
+    fi
+
+    awk '
+        /^\[Desktop Entry\]/ && !seen { print; print "X-LocalDesktop-NoSandbox=true"; seen = 1; next }
+        /^Exec=/ && !/--no-sandbox/ { sub(/^Exec=[^ ]+/, "& --no-sandbox") }
+        { print }
+    ' "$src" > "$dst"
+done
+"#,
+    );
+
+    // Same flag for terminal launches, following the /usr/local/bin PATH-priority pattern.
+    write_executable(
+        &fs_root.join("usr/local/bin/chromium"),
+        r#"#!/bin/sh
+[ -x /usr/bin/chromium ] || { echo "chromium is not installed" >&2; exit 127; }
+exec /usr/bin/chromium --no-sandbox "$@"
+"#,
+    );
+
+    None
+}
+
 fn setup_onboard_signal_fix(_: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let wrapper_path = fs_root.join("usr/local/bin/onboard");
@@ -772,42 +849,6 @@ fn write_executable(path: &Path, contents: &str) {
         .expect("Failed to mark executable script");
 }
 
-fn read_android_density_dpi(android_app: AndroidApp) -> i32 {
-    let mut density_dpi: i32 = 160;
-    run_in_jvm(
-        |env, app| {
-            let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as *mut _jobject) };
-            let resources = env
-                .call_method(
-                    activity,
-                    "getResources",
-                    "()Landroid/content/res/Resources;",
-                    &[],
-                )
-                .expect("Failed to call getResources")
-                .l()
-                .expect("Failed to read getResources result");
-            let metrics = env
-                .call_method(
-                    resources,
-                    "getDisplayMetrics",
-                    "()Landroid/util/DisplayMetrics;",
-                    &[],
-                )
-                .expect("Failed to call getDisplayMetrics")
-                .l()
-                .expect("Failed to read getDisplayMetrics result");
-            density_dpi = env
-                .get_field(&metrics, "densityDpi", "I")
-                .expect("Failed to read densityDpi")
-                .i()
-                .expect("Failed to convert densityDpi");
-        },
-        android_app,
-    );
-    density_dpi
-}
-
 /// Map Android density to a whole-number UI scale factor (same baseline as the old LXQt setup).
 fn android_ui_scale(density_dpi: i32) -> i32 {
     ((density_dpi as f32) / 160.0 * 1.1).max(1.0).round() as i32
@@ -819,8 +860,7 @@ fn setup_xfce_wayland(options: &SetupOptions) -> StageOutput {
     let home_dir = chroot_home_dir(fs_root, &username);
     let labwc_dir = home_dir.join(".config/xfce4/labwc");
 
-    let density_dpi = read_android_density_dpi(options.android_app.clone());
-    let ui_scale = android_ui_scale(density_dpi);
+    let ui_scale = android_ui_scale(density_dpi(&options.android_app));
     // Xft uses 96 as the default logical DPI; multiply by scale for HiDPI fonts.
     let xft_dpi = ui_scale * 96;
 
@@ -879,12 +919,15 @@ export PIPEWIRE_RUNTIME_DIR={PIPEWIRE_GUEST_RUNTIME_DIR}
 export PULSE_SERVER={PULSE_GUEST_SERVER}
 : "${{XDG_RUNTIME_DIR:={PIPEWIRE_GUEST_RUNTIME_DIR}}}"
 export XDG_RUNTIME_DIR
+# Electron adds --no-sandbox when this is set; Android has no user namespaces for it to use.
+export ELECTRON_DISABLE_SANDBOX=1
 exec startxfce4 --wayland "$@"
 "#
         ),
     );
 
-    // Runs from ~/.config/autostart once xfsettingsd is up; reinforces pre-seeded /Xft/DPI.
+    // Runs from ~/.config/autostart once xfsettingsd is up; reinforces pre-seeded /Xft/DPI and
+    // refreshes the --no-sandbox application entries for anything installed since last session.
     write_executable(
         &fs_root.join("usr/local/bin/localdesktop-xfce-session-init"),
         &format!(
@@ -896,6 +939,8 @@ done
 
 xfconf-query -c xsettings -p /Xft/DPI -n -t int -s {xft_dpi} 2>/dev/null || \
 xfconf-query -c xsettings -p /Xft/DPI -t int -s {xft_dpi}
+
+/usr/local/bin/localdesktop-no-sandbox-entries
 "#
         ),
     );
@@ -938,24 +983,6 @@ StartupNotify=true
         );
     }
 
-    // Pre-download the matching offline User Manual (light, desktop size) onto the
-    // Desktop. Best-effort and off-thread so it never blocks setup; create-if-missing
-    // via the version in the filename. The on-disk name is human-friendly.
-    let version = crate::core::config::VERSION;
-    let manual_path = desktop_dir.join(format!("Local Desktop v{version} - User Manual.pdf"));
-    if !manual_path.exists() {
-        let url = crate::core::config::user_manual_url();
-        thread::spawn(move || {
-            if let Ok(response) = reqwest::blocking::get(&url) {
-                if let Ok(response) = response.error_for_status() {
-                    if let Ok(bytes) = response.bytes() {
-                        let _ = fs::write(&manual_path, &bytes);
-                    }
-                }
-            }
-        });
-    }
-
     let autostart_dir = home_dir.join(".config/autostart");
     let _ = fs::create_dir_all(&autostart_dir);
 
@@ -965,7 +992,7 @@ StartupNotify=true
 Version=1.0
 Type=Application
 Name=Local Desktop Xfce Session Init
-Comment=Apply HiDPI font scaling via xfsettings
+Comment=Apply HiDPI font scaling and refresh sandbox-free application entries
 Exec=/usr/local/bin/localdesktop-xfce-session-init
 Terminal=false
 OnlyShowIn=XFCE;
@@ -1158,7 +1185,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     }
 
     let options = SetupOptions {
-        android_app,
+        android_app: android_app.clone(),
         mpsc_sender: sender.clone(),
     };
 
@@ -1170,9 +1197,10 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(setup_pipewire_package_lock), // Step 5. Hold guest PipeWire packages for the Android-side PipeWire POC
         Box::new(setup_firefox_config),        // Step 6. Setup Firefox config
         Box::new(setup_fake_bwrap), // Step 7. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
-        Box::new(setup_onboard_signal_fix), // Step 8. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
-        Box::new(setup_xfce_wayland),       // Step 9. Setup Xfce Wayland launch and HiDPI scaling
-        Box::new(fix_xkb_symlink),          // Step 10. Fix xkb symlink
+        Box::new(setup_chromium_no_sandbox), // Step 8. Make Chromium/Electron apps launchable without a terminal
+        Box::new(setup_onboard_signal_fix), // Step 9. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
+        Box::new(setup_xfce_wayland),       // Step 10. Setup Xfce Wayland launch and HiDPI scaling
+        Box::new(fix_xkb_symlink),          // Step 11. Fix xkb symlink
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
@@ -1247,12 +1275,16 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             graphic_renderer: None,
             clock: Clock::new(),
             key_counter: 0,
-            scale_factor: 1.0,
+            guest_scale_factor: scale_factor(&android_app),
             touch_points: std::collections::HashMap::new(),
             scroll_centroid: None,
-            touch_gesture_was_multi_touch: false,
+            touch_mode: TouchMode::Undecided,
             touch_down_position: None,
+            touch_down_time: None,
+            touch_slop_px: touch_slop_px(&android_app),
+            long_press_timeout_ms: long_press_timeout_ms(&android_app),
             pointer_pressed: false,
+            android_app,
         })
     } else {
         PolarBearBackend::WebView(WebviewBackend::build(receiver, progress))

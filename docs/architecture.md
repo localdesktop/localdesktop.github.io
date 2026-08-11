@@ -80,7 +80,7 @@ The backend struct is the compositor's live state — the smithay `Compositor`, 
 
 <!--snippet file=src/android/backend/wayland/winit_backend.rs fn=bind-->
 
-`configure_output` reconciles the compositor with the physical Android window every time the surface changes: it sets the compositor size, creates or updates the smithay `Output` (mode, transform, fractional scale), writes the host geometry to a file the in-chroot `wlr-randr` script watches, and resizes any existing toplevel windows to fill the screen.
+`configure_output` reconciles the compositor with the physical Android window every time the surface changes: it sets the compositor size, creates or updates the smithay `Output` (mode and transform, with the parent output scale fixed at 1 because rendering uses physical pixels), writes the host geometry and guest UI scale to a file the in-chroot `wlr-randr` script watches, and resizes any existing toplevel windows to fill the screen.
 
 <!--snippet file=src/android/app/run.rs fn=configure_output-->
 
