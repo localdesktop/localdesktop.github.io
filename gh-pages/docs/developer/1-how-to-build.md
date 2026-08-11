@@ -35,7 +35,7 @@ Then you will find the APK file in `target/x/release/android/localdesktop.apk`.
 
 ### Can I test a release-signed APK from a PR?
 
-Yes. Same-repository PRs targeting `main` produce a signed release APK artifact when they have exactly one app-release label: `release:breaking`, `release:feature`, `release:bugfix`, `release:patch`, `release:improvement`, or `release:optimisation`. Download the workflow artifact from GitHub Actions and install it over the GitHub APK.
+Yes. Same-repository PRs targeting `main` produce a signed release APK artifact when they have exactly one app-release label: `release:breaking`, `release:feature`, `release:bugfix`, `release:patch`, `release:improvement`, or `release:optimisation`. Download the `.apk` workflow artifact from GitHub Actions and install it over the GitHub APK. Older artifacts may still download as `.zip` files.
 
 PRs labeled `release:docs` do not build an APK.
 
