@@ -189,7 +189,7 @@ jobs:
           mv target/x/release/android/gradle/app/build/outputs/apk/debug/app-debug.apk target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.apk
           mv target/x/release/android/gradle/app/build/outputs/apk/release/app-release.apk target/x/localdesktop-${{ steps.extract_version.outputs.version }}.apk
 
-      - name: Compute PR APK artifact name
+      - name: Prepare PR APK artifact
         id: pr_apk_artifact
         if: github.event_name == 'pull_request'
         env:
@@ -203,15 +203,18 @@ jobs:
             SAFE_REF="pr-${PR_NUMBER}"
           fi
           SHORT_SHA="${HEAD_SHA:0:7}"
-          echo "name=localdesktop-${VERSION}-${SAFE_REF}-${SHORT_SHA}-release-apk" >> "$GITHUB_OUTPUT"
+          ARTIFACT_FILE="localdesktop-${VERSION}-${SAFE_REF}-${SHORT_SHA}-release.apk"
+          ARTIFACT_PATH="target/x/${ARTIFACT_FILE}"
+          cp "target/x/localdesktop-${VERSION}.apk" "$ARTIFACT_PATH"
+          echo "path=${ARTIFACT_PATH}" >> "$GITHUB_OUTPUT"
 
       - name: Upload PR release APK
         if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.pr_apk_artifact.outputs.name }}
-          path: target/x/localdesktop-${{ steps.extract_version.outputs.version }}.apk
+          path: ${{ steps.pr_apk_artifact.outputs.path }}
           if-no-files-found: error
+          archive: false
 
       - name: Build AAB
         if: github.event_name != 'pull_request'
