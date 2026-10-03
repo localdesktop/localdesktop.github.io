@@ -25,6 +25,7 @@ static BUILD_GRADLE: &[u8] = include_bytes!("./build.gradle");
 static GRADLE_PROPERTIES: &[u8] = include_bytes!("./gradle.properties");
 static SETTINGS_GRADLE: &[u8] = include_bytes!("./settings.gradle");
 static IC_LAUNCHER: &[u8] = include_bytes!("./ic_launcher.xml");
+static PROGUARD_RULES: &[u8] = include_bytes!("./proguard-rules.pro");
 
 
 fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
@@ -257,6 +258,7 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
     }
 
     std::fs::write(app.join("build.gradle"), app_build_gradle)?;
+    std::fs::write(app.join("proguard-rules.pro"), PROGUARD_RULES)?;
     std::fs::write(
         main.join("AndroidManifest.xml"),
         quick_xml::se::to_string(&manifest)?,

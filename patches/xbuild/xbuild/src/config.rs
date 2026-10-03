@@ -133,8 +133,8 @@ impl Config {
         if let Ok(code) = VersionCode::from_semver(&package_version) {
             manifest.version_code.get_or_insert_with(|| code.to_code(1));
         }
-        let target_sdk_version = 33;
-        let target_sdk_codename = 13;
+        let target_sdk_version = 35;
+        let target_sdk_codename = 15;
         let min_sdk_version = 21;
         manifest
             .compile_sdk_version
@@ -190,6 +190,13 @@ impl Config {
                 "screenLayout",
                 "density",
                 "uiMode",
+                "navigation",
+                "touchscreen",
+                "colorMode",
+                "mcc",
+                "mnc",
+                "fontWeightAdjustment",
+                "grammaticalGender",
             ]
             .join("|")
         });

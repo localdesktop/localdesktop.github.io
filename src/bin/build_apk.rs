@@ -23,6 +23,12 @@ pub mod apk {
     use res::Chunk;
     use utils::{Target, VersionCode};
 
+    /// API level of the android.jar whose resource table is used to encode manifest/XML attributes.
+    /// Independent of `targetSdkVersion`: platforms 34+ ship resource tables with compact entries
+    /// that `res::ResTableEntry` cannot read, and flags newer than 33 are covered by
+    /// `builtin_flag_value`.
+    const RESOURCE_TABLE_SDK: u32 = 33;
+
     #[derive(Clone, Debug, Default, Deserialize)]
     struct GenericConfig {
         icon: Option<PathBuf>,
@@ -364,8 +370,8 @@ pub mod apk {
                 manifest.version_code = Some(code.to_code(1));
             }
         }
-        let target_sdk_version = 33;
-        let target_sdk_codename = 13;
+        let target_sdk_version = 35;
+        let target_sdk_codename = 15;
         let min_sdk_version = 21;
         manifest
             .compile_sdk_version
@@ -424,6 +430,13 @@ pub mod apk {
                     "screenLayout",
                     "density",
                     "uiMode",
+                    "navigation",
+                    "touchscreen",
+                    "colorMode",
+                    "mcc",
+                    "mnc",
+                    "fontWeightAdjustment",
+                    "grammaticalGender",
                 ]
                 .join("|"),
             );
@@ -505,7 +518,7 @@ pub mod apk {
 
         let android_jar = ensure_android_jar(
             &root,
-            manifest.sdk.target_sdk_version.unwrap_or(33),
+            RESOURCE_TABLE_SDK,
             android_jar_override,
         )?;
         if !manifest.application.services.is_empty() && !dex_path.exists() {
@@ -884,6 +897,26 @@ pub mod apk {
             Ok(Self { key, pubkey, cert })
         }
 
+        /// Loads the per-machine signing key, generating and storing one on first use. APKs can
+        /// only be updated in place when signed with the same key, so keep the file.
+        pub fn load_or_create() -> Result<Self> {
+            let path = signing_key_path()?;
+            if path.exists() {
+                return Self::from_path(&path)
+                    .with_context(|| format!("Reading signing key `{}`", path.display()));
+            }
+            eprintln!(
+                "No signing key at `{}`; generating one (one-time, can take a while)...",
+                path.display()
+            );
+            let pem = generate_signing_pem()?;
+            store_signing_pem(&path, &pem)?;
+            eprintln!(
+                "Signing key stored. Back it up: APK updates only install over builds signed with it."
+            );
+            Self::new(&pem)
+        }
+
         pub fn from_path(path: &Path) -> Result<Self> {
             Self::new(&std::fs::read_to_string(path)?)
         }
@@ -914,6 +947,156 @@ pub mod apk {
                 .field("cert", &self.cert)
                 .finish_non_exhaustive()
         }
+    }
+
+    const SIGNING_KEY_BITS: usize = 2048;
+    const SIGNING_COMMON_NAME: &str = "Local Desktop Fold local signing key";
+
+    /// Where the per-machine signing key lives: `$LD_SIGNING_PEM`, else
+    /// `$XDG_CONFIG_HOME/localdesktop/signing.pem`, else `$HOME/.config/localdesktop/signing.pem`.
+    fn signing_key_path() -> Result<PathBuf> {
+        if let Some(path) = env::var_os("LD_SIGNING_PEM").filter(|path| !path.is_empty()) {
+            return Ok(PathBuf::from(path));
+        }
+        let config_home = match env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
+            Some(dir) => PathBuf::from(dir),
+            None => PathBuf::from(
+                env::var_os("HOME")
+                    .filter(|dir| !dir.is_empty())
+                    .context("HOME is not set; set LD_SIGNING_PEM=<path> to choose where the signing key is stored")?,
+            )
+            .join(".config"),
+        };
+        Ok(config_home.join("localdesktop").join("signing.pem"))
+    }
+
+    fn der_tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        let len = content.len();
+        if len < 0x80 {
+            out.push(len as u8);
+        } else {
+            let bytes = len.to_be_bytes();
+            let skip = bytes.iter().take_while(|byte| **byte == 0).count();
+            out.push(0x80 | (bytes.len() - skip) as u8);
+            out.extend_from_slice(&bytes[skip..]);
+        }
+        out.extend_from_slice(content);
+        out
+    }
+
+    /// Self-signed X.509 v3 certificate (SHA256withRSA) for `key`, DER encoded.
+    fn self_signed_certificate(key: &RsaPrivateKey, serial: &[u8; 16]) -> Result<Vec<u8>> {
+        use rsa::pkcs8::EncodePublicKey;
+
+        // sha256WithRSAEncryption, parameters NULL
+        let signature_algorithm = der_tlv(
+            0x30,
+            &[
+                0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b, 0x05, 0x00,
+            ],
+        );
+        // Name ::= SEQUENCE { SET { SEQUENCE { id-at-commonName, UTF8String } } }
+        let common_name = der_tlv(
+            0x30,
+            &der_tlv(
+                0x31,
+                &der_tlv(
+                    0x30,
+                    &[
+                        vec![0x06, 0x03, 0x55, 0x04, 0x03],
+                        der_tlv(0x0c, SIGNING_COMMON_NAME.as_bytes()),
+                    ]
+                    .concat(),
+                ),
+            ),
+        );
+        // A fixed validity window avoids depending on the device clock; Android does not enforce it.
+        let validity = der_tlv(
+            0x30,
+            &[
+                der_tlv(0x17, b"200101000000Z"),
+                der_tlv(0x18, b"20700101000000Z"),
+            ]
+            .concat(),
+        );
+        let public_key = RsaPublicKey::from(key).to_public_key_der()?;
+        let tbs = der_tlv(
+            0x30,
+            &[
+                vec![0xa0, 0x03, 0x02, 0x01, 0x02], // version v3
+                der_tlv(0x02, serial),
+                signature_algorithm.clone(),
+                common_name.clone(),
+                validity,
+                common_name,
+                public_key.as_bytes().to_vec(),
+            ]
+            .concat(),
+        );
+        let digest = Sha256::digest(&tbs);
+        let signature = key.sign(PaddingScheme::new_pkcs1v15_sign::<sha2::Sha256>(), &digest)?;
+        let mut signature_bits = vec![0u8];
+        signature_bits.extend_from_slice(&signature);
+        Ok(der_tlv(
+            0x30,
+            &[tbs, signature_algorithm, der_tlv(0x03, &signature_bits)].concat(),
+        ))
+    }
+
+    fn generate_signing_pem() -> Result<String> {
+        use rsa::pkcs8::EncodePrivateKey;
+        use rsa::rand_core::{OsRng, RngCore};
+
+        let mut rng = OsRng;
+        let key = RsaPrivateKey::new(&mut rng, SIGNING_KEY_BITS)?;
+        let mut serial = [0u8; 16];
+        rng.fill_bytes(&mut serial);
+        serial[0] = (serial[0] & 0x3f) | 0x40; // positive, no leading zero byte
+        let certificate = self_signed_certificate(&key, &serial)?;
+        let private_key = key.to_pkcs8_der()?;
+
+        let config = pem::EncodeConfig {
+            line_ending: pem::LineEnding::LF,
+        };
+        let mut text = pem::encode_config(
+            &pem::Pem {
+                tag: "CERTIFICATE".to_string(),
+                contents: certificate,
+            },
+            config,
+        );
+        text.push('\n');
+        text.push_str(&pem::encode_config(
+            &pem::Pem {
+                tag: "PRIVATE KEY".to_string(),
+                contents: private_key.as_bytes().to_vec(),
+            },
+            config,
+        ));
+        text.push('\n');
+        Ok(text)
+    }
+
+    fn store_signing_pem(path: &Path, pem: &str) -> Result<()> {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Creating `{}`", parent.display()))?;
+        }
+        let tmp = path.with_extension("pem.tmp");
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .with_context(|| format!("Writing `{}`", tmp.display()))?;
+        file.write_all(pem.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&tmp, path).with_context(|| format!("Renaming to `{}`", path.display()))?;
+        Ok(())
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1163,6 +1346,10 @@ pub mod apk {
             pub use_cleartext_traffic: Option<bool>,
             #[serde(rename(serialize = "android:extractNativeLibs"))]
             pub extract_native_libs: Option<bool>,
+            #[serde(rename(serialize = "android:allowBackup"))]
+            pub allow_backup: Option<bool>,
+            #[serde(rename(serialize = "android:networkSecurityConfig"))]
+            pub network_security_config: Option<String>,
         }
 
         /// Android [activity element](https://developer.android.com/guide/topics/manifest/activity-element).
@@ -1185,6 +1372,12 @@ pub mod apk {
             pub exported: Option<bool>,
             #[serde(rename(serialize = "android:hardwareAccelerated"))]
             pub hardware_accelerated: Option<bool>,
+            #[serde(rename(serialize = "android:resizeableActivity"))]
+            pub resizeable_activity: Option<bool>,
+            #[serde(rename(serialize = "android:supportsPictureInPicture"))]
+            pub supports_picture_in_picture: Option<bool>,
+            #[serde(rename(serialize = "android:enableOnBackInvokedCallback"))]
+            pub enable_on_back_invoked_callback: Option<bool>,
             #[serde(rename(serialize = "meta-data"))]
             #[serde(default)]
             pub meta_data: Vec<MetaData>,
@@ -1210,12 +1403,18 @@ pub mod apk {
             pub enabled: Option<bool>,
             #[serde(rename(serialize = "android:exported"))]
             pub exported: Option<bool>,
+            #[serde(rename(serialize = "android:foregroundServiceType"))]
+            pub foreground_service_type: Option<String>,
             #[serde(rename(serialize = "meta-data"))]
             #[serde(default)]
             pub meta_data: Vec<MetaData>,
             #[serde(rename(serialize = "intent-filter"))]
             #[serde(default)]
             pub intent_filters: Vec<IntentFilter>,
+            /// `<property>` children (same attributes as `<meta-data>`), e.g. `PROPERTY_SPECIAL_USE_FGS_SUBTYPE`.
+            #[serde(rename(serialize = "property"))]
+            #[serde(default)]
+            pub property: Vec<MetaData>,
         }
 
         /// Android [intent filter element](https://developer.android.com/guide/topics/manifest/intent-filter-element).
@@ -1393,7 +1592,7 @@ pub mod apk {
             XmlEndNamespace = 0x0101,
             XmlStartElement = 0x0102,
             XmlEndElement = 0x0103,
-            //XmlCdata = 0x0104,
+            XmlCdata = 0x0104,
             //XmlLastChunk = 0x017f,
             XmlResourceMap = 0x0180,
             TablePackage = 0x0200,
@@ -1413,7 +1612,7 @@ pub mod apk {
                     ty if ty == ChunkType::XmlEndNamespace as u16 => ChunkType::XmlEndNamespace,
                     ty if ty == ChunkType::XmlStartElement as u16 => ChunkType::XmlStartElement,
                     ty if ty == ChunkType::XmlEndElement as u16 => ChunkType::XmlEndElement,
-                    //ty if ty == ChunkType::XmlCdata as u16 => ChunkType::XmlCdata,
+                    ty if ty == ChunkType::XmlCdata as u16 => ChunkType::XmlCdata,
                     //ty if ty == ChunkType::XmlLastChunk as u16 => ChunkType::XmlLastChunk,
                     ty if ty == ChunkType::XmlResourceMap as u16 => ChunkType::XmlResourceMap,
                     ty if ty == ChunkType::TablePackage as u16 => ChunkType::TablePackage,
@@ -1693,6 +1892,27 @@ pub mod apk {
             pub fn write(&self, w: &mut impl Write) -> Result<()> {
                 w.write_i32::<LittleEndian>(self.namespace)?;
                 w.write_i32::<LittleEndian>(self.name)?;
+                Ok(())
+            }
+        }
+
+        /// Text node (`RES_XML_CDATA_TYPE`), e.g. the domain in `<domain>127.0.0.1</domain>`.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub struct ResXmlCdata {
+            pub data: i32,
+            pub typed_data: ResValue,
+        }
+
+        impl ResXmlCdata {
+            pub fn read(r: &mut impl Read) -> Result<Self> {
+                let data = r.read_i32::<LittleEndian>()?;
+                let typed_data = ResValue::read(r)?;
+                Ok(Self { data, typed_data })
+            }
+
+            pub fn write(&self, w: &mut impl Write) -> Result<()> {
+                w.write_i32::<LittleEndian>(self.data)?;
+                self.typed_data.write(w)?;
                 Ok(())
             }
         }
@@ -2262,6 +2482,7 @@ pub mod apk {
             XmlEndNamespace(ResXmlNodeHeader, ResXmlNamespace),
             XmlStartElement(ResXmlNodeHeader, ResXmlStartElement, Vec<ResXmlAttribute>),
             XmlEndElement(ResXmlNodeHeader, ResXmlEndElement),
+            XmlCdata(ResXmlNodeHeader, ResXmlCdata),
             XmlResourceMap(Vec<u32>),
             TablePackage(ResTablePackageHeader, Vec<Chunk>),
             TableType(ResTableTypeHeader, Vec<u32>, Vec<Option<ResTableEntry>>),
@@ -2404,6 +2625,12 @@ pub mod apk {
                         let node_header = ResXmlNodeHeader::read(r)?;
                         let end_element = ResXmlEndElement::read(r)?;
                         Ok(Chunk::XmlEndElement(node_header, end_element))
+                    }
+                    Some(ChunkType::XmlCdata) => {
+                        tracing::trace!("xml cdata");
+                        let node_header = ResXmlNodeHeader::read(r)?;
+                        let cdata = ResXmlCdata::read(r)?;
+                        Ok(Chunk::XmlCdata(node_header, cdata))
                     }
                     Some(ChunkType::XmlResourceMap) => {
                         tracing::trace!("xml resource map");
@@ -2556,10 +2783,19 @@ pub mod apk {
                         let strings_start = w.stream_position()?;
                         for string in strings {
                             indices.push(w.stream_position()? - strings_start);
-                            assert!(string.len() < 0x7f);
                             let chars = string.chars().count();
-                            w.write_u8(chars as u8)?;
-                            w.write_u8(string.len() as u8)?;
+                            // Lengths of 0x80 and above take two bytes with the high bit set on the first.
+                            anyhow::ensure!(
+                                string.len() < 0x8000,
+                                "string too long for a UTF-8 string pool ({} bytes)",
+                                string.len()
+                            );
+                            for len in [chars, string.len()] {
+                                if len >= 0x80 {
+                                    w.write_u8(((len >> 8) as u8) | 0x80)?;
+                                }
+                                w.write_u8(len as u8)?;
+                            }
                             w.write_all(string.as_bytes())?;
                             w.write_u8(0)?;
                         }
@@ -2636,6 +2872,13 @@ pub mod apk {
                         node_header.write(w)?;
                         chunk.end_header(w)?;
                         end_element.write(w)?;
+                        chunk.end_chunk(w)?;
+                    }
+                    Chunk::XmlCdata(node_header, cdata) => {
+                        let mut chunk = ChunkWriter::start_chunk(ChunkType::XmlCdata, w)?;
+                        node_header.write(w)?;
+                        chunk.end_header(w)?;
+                        cdata.write(w)?;
                         chunk.end_chunk(w)?;
                     }
                     Chunk::XmlResourceMap(resource_map) => {
@@ -2772,56 +3015,6 @@ pub mod apk {
         use std::io::{BufReader, Cursor, Read, Seek, SeekFrom, Write};
         use std::path::Path;
 
-        const DEBUG_PEM: &str = r#"-----BEGIN CERTIFICATE-----
-    MIIDeTCCAmGgAwIBAgIUCymsKTowQdR5TEv+vKSVjAWmYBowDQYJKoZIhvcNAQEL
-    BQAwTDELMAkGA1UEBhMCVVMxEzARBgNVBAgMClNvbWUtU3RhdGUxEDAOBgNVBAoM
-    B0FuZHJvaWQxFjAUBgNVBAMMDUFuZHJvaWQgRGVidWcwHhcNMjIwMTI4MTUyNjQ5
-    WhcNMzIwMTI2MTUyNjQ5WjBMMQswCQYDVQQGEwJVUzETMBEGA1UECAwKU29tZS1T
-    dGF0ZTEQMA4GA1UECgwHQW5kcm9pZDEWMBQGA1UEAwwNQW5kcm9pZCBEZWJ1ZzCC
-    ASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBANdFY1F564A3MzuCaTUGluti
-    pqLWr1o515BC8o42fIClqBWPcz3Hb4C56A6FLVq50gmFz+mMNGBqrgkT9RKICk+O
-    OV8hl0O/DzXM4COdfSdWZ1ZaNkFL1lboIAmfmTckWEymFj67gwqqpPy6dujteIn6
-    S28AbdHs2FAr1R+ciMoQ7ijxLSMq/JyYNSu/ldcvdzaevxiYMpcDZ6SMDTNn3eHs
-    D9w9iSkupVloUWx7ophdR0U2k2CFH3uEyDHC6L65K8aP+SQaN20IlmWftkwoRyum
-    cfzW/b9i77XnaT8PlrX1yjZ2ubeD7c/JyEVj2gd5B+OnkTmC+Mi0I+6Eke5vFVMC
-    AwEAAaNTMFEwHQYDVR0OBBYEFFVRccNTaUP2O9T8yrguVH4+CCSWMB8GA1UdIwQY
-    MBaAFFVRccNTaUP2O9T8yrguVH4+CCSWMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZI
-    hvcNAQELBQADggEBANbpPG3teQt/Z1ALsaIrsXOqpPKqVPCRp3w+hNzl/rleEpgm
-    zDIlyrLVDRzQyUFHhl9j1oJKPHzpE/1hy46rOZ509dqGqdfcDCTXjLi1O8JJ54wA
-    PdJ0h/8YPzh1md+GibZZYFimnFNoG9i6jQuEb4l5HIZLjJj02u+e4gpTD85LdOvw
-    S4jS/30KnuZVcr7TilrgOMMeP6GRzbBJ+/hXcfY2biSAu5pdEht2NV9SSKlIO3DD
-    ulXXz0+BJJ+PdVqTpPgHvbXbHktOD58srszwmLHHZJl5IfcBwJO0TNvad5lALBYI
-    kdxygt2CwyNOJUVd/nfQJ1O3YiwRkoVJ6on9Mnk=
-    -----END CERTIFICATE-----
-    -----BEGIN PRIVATE KEY-----
-    MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDXRWNReeuANzM7
-    gmk1BpbrYqai1q9aOdeQQvKONnyApagVj3M9x2+AuegOhS1audIJhc/pjDRgaq4J
-    E/USiApPjjlfIZdDvw81zOAjnX0nVmdWWjZBS9ZW6CAJn5k3JFhMphY+u4MKqqT8
-    unbo7XiJ+ktvAG3R7NhQK9UfnIjKEO4o8S0jKvycmDUrv5XXL3c2nr8YmDKXA2ek
-    jA0zZ93h7A/cPYkpLqVZaFFse6KYXUdFNpNghR97hMgxwui+uSvGj/kkGjdtCJZl
-    n7ZMKEcrpnH81v2/Yu+152k/D5a19co2drm3g+3PychFY9oHeQfjp5E5gvjItCPu
-    hJHubxVTAgMBAAECggEBAMAD45A0WOy30Bn/vAoRQ6LYDtzm8+hd+bpzDNnvHeS+
-    XoxEtT1g3EOND8GL5yWq4/+cfRTL+5gY7/2m8I3EDLZjnScO1lcWX+HUSgVan9zr
-    xCcRNp3NoHVKffE3i7nU0HImH2d7aGqmRZ4sUI5562/fc1OipVJ/mX8BagvVW2oo
-    RpThTUYC37T/X/kD0U/06pJzWmF3RAAhANk6+Z9VVX1kNsPEMBzoWTmhqb6dxiAc
-    Ayce8AslF8E0CmyMQ9HK7GwHCprENS7cIUMPG+vgrO5yFbGkIo4DrNTs2naA4f4S
-    iQvpNpGfRAfTdi4gV3YZoxfOOOhAh8A9RsAFrT8t6dECgYEA9hVWXHru1jlY1uiV
-    misILoSux+iE25HGqOdHuqF5vR5Ji1Z4iFE1UNAOtKaSbTDm0IccEBpTOkzL8A5f
-    BgRJRy+TjdE/ynzPgLLD/QnvGfdYarmr6H1xLKOlUY9vgUP2WAC4Zou9Jf/Ylbpg
-    BpfkXw0ebfhu1LGRXDj1sgqXAbsCgYEA3/Iuuq0YZy8msyc0Ap53mQgPjdqE2neo
-    xx7JHuXBGvVeCJ+zEzSg/rqWPNN4qpuHCc2ICb1nI5lkxJqimY30Em/Prpp9jMIK
-    wpeT/bPfOzITXyAOUIxRGqioTIv+ckyt+2t4x5qU+fWHBqWYTZb7EF3oJuipz9aZ
-    IoDwaKxd1UkCgYEArYNKC5daxI5XB+Gjarsg37wKiUZ4N2HIU9wQBZZKAoFSlf74
-    qhWopDyvwc0ZvggXF73MmcYWHSt9ONzJP7LSAHGZdwuuERaEMVjbPJY+k26GV2pn
-    vlyE6lbRAHtEwj6rek23uAab7ilCDAEIKF39VtAnPp9Hdo1l00MOauVwqHUCgYB9
-    FSsuj1ILCBYIiMQPFm3cptjxNXVxBNbbaQGS5WdHZHdCP9joyEOII7WYgdFrEXWK
-    byclsYmzI5FaErjxJY2G4rbQYm/vt84ExF8fnGD6Ek0pm6EDMmx2hG+EWckkFFo1
-    DOEoM9o0BwSFHOcFp2fRy3HIkbmPYeCkmfotrOC4KQKBgQC0OEniLk9PPhcaHO6/
-    Oo2xwWUq+TEN72jW5AV77xpykkAw3T4TeY5w84BZfCjOa4bYsvjvbjtn/DhtoDBj
-    TySd4PKKWF9XalNpbXmVQYtPU8huw1iwg+dV5llQG2pksFWDD2rglAEb2TEpwEvL
-    hmBjxp0mRtma4r/6hMJJzPdUmQ==
-    -----END PRIVATE KEY-----"#;
-
         const APK_SIGNING_BLOCK_MAGIC: &[u8] = b"APK Sig Block 42";
         const APK_SIGNING_BLOCK_V2_ID: u32 = 0x7109871a;
         const APK_SIGNING_BLOCK_V3_ID: u32 = 0xf05368c0;
@@ -2906,9 +3099,10 @@ pub mod apk {
         }
 
         pub fn sign(path: &Path, signer: Option<Signer>) -> Result<()> {
-            let signer = signer
-                .map(Ok)
-                .unwrap_or_else(|| Signer::new(&normalize_pem(DEBUG_PEM)))?;
+            let signer = match signer {
+                Some(signer) => signer,
+                None => Signer::load_or_create()?,
+            };
             let apk = std::fs::read(path)?;
             let mut r = Cursor::new(&apk);
             let block = parse_apk_signing_block(&mut r)?;
@@ -2926,13 +3120,6 @@ pub mod apk {
             f.seek(SeekFrom::Start(cde_start + 16))?;
             f.write_u32::<LittleEndian>(cd_start as u32)?;
             Ok(())
-        }
-
-        fn normalize_pem(pem: &str) -> String {
-            pem.lines()
-                .map(|line| line.trim())
-                .collect::<Vec<_>>()
-                .join("\n")
         }
 
         fn compute_digest<R: Read + Seek>(
@@ -3292,6 +3479,19 @@ pub mod apk {
                         let id = table.entry_by_ref(Ref::parse(value)?)?.id();
                         (u32::from(id), ResValueType::Reference)
                     }
+                    // `<meta-data>`/`<property>` `android:value` accepts several types; like aapt2,
+                    // store booleans and integers typed so `Bundle.getBoolean/getInt` work.
+                    Some(ResAttributeType::String) if name == "value" && value == "true" => {
+                        (0xffff_ffff, ResValueType::IntBoolean)
+                    }
+                    Some(ResAttributeType::String) if name == "value" && value == "false" => {
+                        (0x0000_0000, ResValueType::IntBoolean)
+                    }
+                    Some(ResAttributeType::String)
+                        if name == "value" && value.parse::<i32>().is_ok() =>
+                    {
+                        (value.parse::<i32>()? as u32, ResValueType::IntDec)
+                    }
                     Some(ResAttributeType::String) => {
                         (strings.id(value) as u32, ResValueType::String)
                     }
@@ -3310,12 +3510,23 @@ pub mod apk {
                     Some(ResAttributeType::Flags) => {
                         let entry = table.entry_by_ref(Ref::attr(name))?;
                         let mut data = 0;
-                        let mut data_type = ResValueType::Null;
+                        let mut data_type = ResValueType::IntHex;
                         for flag in value.split('|') {
-                            let id = table.entry_by_ref(Ref::id(flag))?.id();
-                            let value = entry.lookup_value(id).unwrap();
-                            data |= value.data;
-                            data_type = ResValueType::from_u8(value.data_type).unwrap();
+                            let flag = flag.trim();
+                            let platform_value = table
+                                .entry_by_ref(Ref::id(flag))
+                                .ok()
+                                .and_then(|id| entry.lookup_value(id.id()));
+                            if let Some(platform_value) = platform_value {
+                                data |= platform_value.data;
+                                data_type = ResValueType::from_u8(platform_value.data_type)
+                                    .unwrap_or(ResValueType::IntHex);
+                            } else if let Some(builtin) = builtin_flag_value(name, flag) {
+                                // android.jar older than the flag (e.g. grammaticalGender, API 34).
+                                data |= builtin;
+                            } else {
+                                anyhow::bail!("unknown flag `{flag}` for attribute `{name}`");
+                            }
                         }
                         (data, data_type)
                     }
@@ -3327,6 +3538,53 @@ pub mod apk {
                     data_type: data_type as u8,
                     data,
                 })
+            }
+
+            /// Flag values from the Android SDK, used only when the android.jar in use predates them.
+            fn builtin_flag_value(attr: &str, flag: &str) -> Option<u32> {
+                let flags: &[(&str, u32)] = match attr {
+                    "configChanges" => &[
+                        ("mcc", 0x0000_0001),
+                        ("mnc", 0x0000_0002),
+                        ("locale", 0x0000_0004),
+                        ("touchscreen", 0x0000_0008),
+                        ("keyboard", 0x0000_0010),
+                        ("keyboardHidden", 0x0000_0020),
+                        ("navigation", 0x0000_0040),
+                        ("orientation", 0x0000_0080),
+                        ("screenLayout", 0x0000_0100),
+                        ("uiMode", 0x0000_0200),
+                        ("screenSize", 0x0000_0400),
+                        ("smallestScreenSize", 0x0000_0800),
+                        ("density", 0x0000_1000),
+                        ("layoutDirection", 0x0000_2000),
+                        ("colorMode", 0x0000_4000),
+                        ("grammaticalGender", 0x0000_8000),
+                        ("fontWeightAdjustment", 0x1000_0000),
+                        ("fontScale", 0x4000_0000),
+                    ],
+                    "foregroundServiceType" => &[
+                        ("dataSync", 0x0000_0001),
+                        ("mediaPlayback", 0x0000_0002),
+                        ("phoneCall", 0x0000_0004),
+                        ("location", 0x0000_0008),
+                        ("connectedDevice", 0x0000_0010),
+                        ("mediaProjection", 0x0000_0020),
+                        ("camera", 0x0000_0040),
+                        ("microphone", 0x0000_0080),
+                        ("health", 0x0000_0100),
+                        ("remoteMessaging", 0x0000_0200),
+                        ("systemExempted", 0x0000_0400),
+                        ("shortService", 0x0000_0800),
+                        ("mediaProcessing", 0x0000_2000),
+                        ("specialUse", 0x4000_0000),
+                    ],
+                    _ => return None,
+                };
+                flags
+                    .iter()
+                    .find(|(candidate, _)| *candidate == flag)
+                    .map(|(_, value)| *value)
             }
 
             fn fallback_attr_value(
@@ -3690,8 +3948,8 @@ pub mod apk {
             use crate::apk::compiler::attributes::{StringPoolBuilder, Strings};
             use crate::apk::compiler::table::Table;
             use crate::apk::res::{
-                Chunk, ResValue, ResValueType, ResXmlAttribute, ResXmlEndElement, ResXmlNamespace,
-                ResXmlNodeHeader, ResXmlStartElement,
+                Chunk, ResValue, ResValueType, ResXmlAttribute, ResXmlCdata, ResXmlEndElement,
+                ResXmlNamespace, ResXmlNodeHeader, ResXmlStartElement,
             };
             use anyhow::Result;
             use roxmltree::{Document, Node, NodeType};
@@ -3734,6 +3992,12 @@ pub mod apk {
                 node: Node<'a, 'a>,
                 builder: &mut StringPoolBuilder<'a>,
             ) -> Result<()> {
+                if node.node_type() == NodeType::Text {
+                    if let Some(text) = node.text().map(str::trim).filter(|text| !text.is_empty()) {
+                        builder.add_string(text);
+                    }
+                    return Ok(());
+                }
                 if node.node_type() != NodeType::Element {
                     for node in node.children() {
                         build_string_pool(node, builder)?;
@@ -3765,6 +4029,23 @@ pub mod apk {
                 chunks: &mut Vec<Chunk>,
                 table: &Table,
             ) -> Result<()> {
+                if node.node_type() == NodeType::Text {
+                    if let Some(text) = node.text().map(str::trim).filter(|text| !text.is_empty()) {
+                        chunks.push(Chunk::XmlCdata(
+                            ResXmlNodeHeader::default(),
+                            ResXmlCdata {
+                                data: strings.id(text),
+                                typed_data: ResValue {
+                                    size: 8,
+                                    res0: 0,
+                                    data_type: ResValueType::Null as u8,
+                                    data: 0,
+                                },
+                            },
+                        ));
+                    }
+                    return Ok(());
+                }
                 if node.node_type() != NodeType::Element {
                     for node in node.children() {
                         compile_node(node, strings, chunks, table)?;
@@ -3795,6 +4076,15 @@ pub mod apk {
                             res0: 0,
                             data_type: ResValueType::IntDec as u8,
                             data: attr.value().parse()?,
+                        }
+                    } else if attr.value() == "true" || attr.value() == "false" {
+                        // Un-namespaced attributes (e.g. network security config) are read with
+                        // getAttributeBooleanValue, which ignores string-typed values.
+                        ResValue {
+                            size: 8,
+                            res0: 0,
+                            data_type: ResValueType::IntBoolean as u8,
+                            data: if attr.value() == "true" { 0xffff_ffff } else { 0 },
                         }
                     } else {
                         ResValue {
@@ -4167,8 +4457,11 @@ pub mod apk {
                     }
                 }
                 candidates.sort();
-                if let Some(candidate) = candidates.pop() {
-                    ensure_android_jar_has_resources(&candidate)?;
+                if let Some(candidate) = candidates
+                    .into_iter()
+                    .rev()
+                    .find(|candidate| ensure_android_jar_has_resources(candidate).is_ok())
+                {
                     return Ok(candidate);
                 }
             }
@@ -4189,12 +4482,16 @@ pub mod apk {
         Ok(jar_path)
     }
 
+    /// The jar must carry a resource table this builder can read (see `RESOURCE_TABLE_SDK`).
     fn ensure_android_jar_has_resources(path: &Path) -> Result<()> {
         let file = File::open(path)?;
         let mut archive = ZipArchive::new(file)?;
         archive
             .by_name("resources.arsc")
             .with_context(|| format!("`{}` missing resources.arsc", path.display()))?;
+        Table::default()
+            .import_apk(path)
+            .with_context(|| format!("Failed to parse `{}`", path.display()))?;
         Ok(())
     }
 

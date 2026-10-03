@@ -13,6 +13,10 @@ use winit::{event::ElementState, event_loop::EventLoopProxy};
 #[derive(Clone, Copy, Debug)]
 pub enum AppUserEvent {
     AccessibilityInputReady,
+    /// The Wayland display or listening socket became readable (sent by the poll thread).
+    WaylandReadable,
+    /// The hinge angle sensor reported a new angle, in degrees.
+    HingeAngle(f32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -22,10 +26,14 @@ pub struct AccessibilityKeyEvent {
     pub event_time_ms: u64,
 }
 
+/// Upper bound for key events waiting for the event loop; the oldest are dropped first.
+const MAX_PENDING_EVENTS: usize = 256;
+
 #[derive(Default)]
 struct AccessibilityBridgeState {
     proxy: Option<EventLoopProxy<AppUserEvent>>,
     runtime_active: bool,
+    window_focused: bool,
     service_connected: bool,
     pending_events: VecDeque<AccessibilityKeyEvent>,
 }
@@ -50,12 +58,38 @@ pub fn register_event_loop_proxy(proxy: EventLoopProxy<AppUserEvent>) {
     bridge.proxy = Some(proxy);
 }
 
+/// Wake the event loop with `event` from any thread. Returns false if no proxy is registered
+/// yet or the loop is gone.
+pub fn send_user_event(event: AppUserEvent) -> bool {
+    let proxy = bridge()
+        .lock()
+        .expect("Failed to lock accessibility bridge")
+        .proxy
+        .clone();
+    match proxy {
+        Some(proxy) => proxy.send_event(event).is_ok(),
+        None => false,
+    }
+}
+
+/// Keys are only captured while the runtime is active (activity resumed) and the window has input
+/// focus, so keystrokes meant for other apps in split-screen or DeX are never swallowed.
 pub fn set_runtime_active(active: bool) {
     let mut bridge = bridge()
         .lock()
         .expect("Failed to lock accessibility bridge");
     bridge.runtime_active = active;
     if !active {
+        bridge.pending_events.clear();
+    }
+}
+
+pub fn set_window_focused(focused: bool) {
+    let mut bridge = bridge()
+        .lock()
+        .expect("Failed to lock accessibility bridge");
+    bridge.window_focused = focused;
+    if !focused {
         bridge.pending_events.clear();
     }
 }
@@ -100,10 +134,13 @@ fn enqueue_key_event(action: jint, key_code: jint, scan_code: jint, event_time_m
     let mut bridge = bridge()
         .lock()
         .expect("Failed to lock accessibility bridge");
-    if !bridge.runtime_active {
+    if !(bridge.runtime_active && bridge.window_focused) {
         return false;
     }
 
+    if bridge.pending_events.len() >= MAX_PENDING_EVENTS {
+        bridge.pending_events.pop_front();
+    }
     bridge.pending_events.push_back(AccessibilityKeyEvent {
         scancode: scan_code as u32,
         state,

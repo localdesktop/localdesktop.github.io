@@ -89,6 +89,10 @@ pub struct Application {
     pub use_cleartext_traffic: Option<bool>,
     #[serde(rename(serialize = "android:extractNativeLibs"))]
     pub extract_native_libs: Option<bool>,
+    #[serde(rename(serialize = "android:allowBackup"))]
+    pub allow_backup: Option<bool>,
+    #[serde(rename(serialize = "android:networkSecurityConfig"))]
+    pub network_security_config: Option<String>,
 }
 
 /// Android [activity element](https://developer.android.com/guide/topics/manifest/activity-element).
@@ -111,6 +115,12 @@ pub struct Activity {
     pub exported: Option<bool>,
     #[serde(rename(serialize = "android:hardwareAccelerated"))]
     pub hardware_accelerated: Option<bool>,
+    #[serde(rename(serialize = "android:resizeableActivity"))]
+    pub resizeable_activity: Option<bool>,
+    #[serde(rename(serialize = "android:supportsPictureInPicture"))]
+    pub supports_picture_in_picture: Option<bool>,
+    #[serde(rename(serialize = "android:enableOnBackInvokedCallback"))]
+    pub enable_on_back_invoked_callback: Option<bool>,
     #[serde(rename(serialize = "meta-data"))]
     #[serde(default)]
     pub meta_data: Vec<MetaData>,
@@ -136,12 +146,18 @@ pub struct Service {
     pub enabled: Option<bool>,
     #[serde(rename(serialize = "android:exported"))]
     pub exported: Option<bool>,
+    #[serde(rename(serialize = "android:foregroundServiceType"))]
+    pub foreground_service_type: Option<String>,
     #[serde(rename(serialize = "meta-data"))]
     #[serde(default)]
     pub meta_data: Vec<MetaData>,
     #[serde(rename(serialize = "intent-filter"))]
     #[serde(default)]
     pub intent_filters: Vec<IntentFilter>,
+    /// `<property>` children (same attributes as `<meta-data>`), e.g. `PROPERTY_SPECIAL_USE_FGS_SUBTYPE`.
+    #[serde(rename(serialize = "property"))]
+    #[serde(default)]
+    pub property: Vec<MetaData>,
 }
 
 /// Android [intent filter element](https://developer.android.com/guide/topics/manifest/intent-filter-element).

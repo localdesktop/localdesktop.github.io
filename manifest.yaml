@@ -2,6 +2,7 @@ icon: assets/icon.png
 android:
   assets:
     - assets/setup-progress.html
+    - assets/vue.min.js
     - assets/unsupported.html
     - assets/ld-linux-aarch64.so.1
     - assets/wireplumber-share.tar
@@ -9,14 +10,28 @@ android:
     - assets/libs
   gradle: true
   manifest:
-    package: app.polarbear
+    package: app.polarbear.fold
     sdk:
       min_sdk_version: 21
-      target_sdk_version: 33
+      target_sdk_version: 35 # 36+ needs a newer xbuild/NDK setup and edge-to-edge/predictive-back changes
     application:
-      label: "Local Desktop"
+      label: "Local Desktop Fold"
       extract_native_libs: true # Required for proot invocations
-      use_cleartext_traffic: true # Required for connecting to ws://127.0.0.1, see assets/setup-progress.html
+      allow_backup: false # Keeps the Linux rootfs (keys, browser profiles) out of backup/device transfer
+      use_cleartext_traffic: false
+      network_security_config: "@xml/network_security_config" # Cleartext only to 127.0.0.1/localhost, see assets/setup-progress.html
+      activities:
+        - name: android.app.NativeActivity
+          launch_mode: singleTask
+          resizeable_activity: true
+          supports_picture_in_picture: false
+          enable_on_back_invoked_callback: false
+          config_changes: "orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode|navigation|touchscreen|colorMode|mcc|mnc|fontWeightAdjustment|grammaticalGender"
+          meta_data:
+            - name: com.samsung.android.dex.launchwidth
+              value: "0"
+            - name: com.samsung.android.dex.launchheight
+              value: "0"
       services:
         - name: app.polarbear.KeyboardAccessibilityService
           permission: android.permission.BIND_ACCESSIBILITY_SERVICE
@@ -29,19 +44,24 @@ android:
           meta_data:
             - name: android.accessibilityservice
               resource: "@xml/keyboard_accessibility_service"
+        - name: app.polarbear.SessionService
+          enabled: true
+          exported: false
+          foreground_service_type: specialUse
+          property:
+            - name: android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE
+              value: "Keeps a local Linux desktop session (proot) running while the app is in the background"
       meta_data:
-        - name: com.samsung.android.dex.launchwidth
-          value: 0
-        - name: com.samsung.android.dex.launchheight
-          value: 0
-        - name: com.samsung.android.sdk.multiwindow.dex.launchwidth
-          value: 0
-        - name: com.samsung.android.sdk.multiwindow.dex.launchheight
-          value: 0
+        - name: com.samsung.android.keepalive.density
+          value: "true"
+        - name: com.samsung.android.multidisplay.keep_process_alive
+          value: "true"
     uses_permission:
       - name: android.permission.INTERNET
       - name: android.permission.ACCESS_NETWORK_STATE
       - name: android.permission.POST_NOTIFICATIONS
+      - name: android.permission.FOREGROUND_SERVICE
+      - name: android.permission.FOREGROUND_SERVICE_SPECIAL_USE
       - name: android.permission.MANAGE_EXTERNAL_STORAGE
       - name: android.permission.READ_EXTERNAL_STORAGE
       - name: android.permission.WRITE_EXTERNAL_STORAGE

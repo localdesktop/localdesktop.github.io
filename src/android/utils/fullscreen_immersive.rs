@@ -1,91 +1,17 @@
-use jni::objects::JObject;
-use jni::sys::_jobject;
 use jni::JNIEnv;
 use winit::platform::android::activity::AndroidApp;
 
-// We need this function to enable fullscreen immersive mode because the below is not enough:
-// android_app.set_window_flags(WindowManagerFlags::FULLSCREEN, WindowManagerFlags::empty());
-// More info: https://github.com/rust-mobile/android-activity/issues/95
-pub fn enable_fullscreen_immersive_mode(env: &mut JNIEnv, android_app: &AndroidApp) {
-    let activity_obj = unsafe { JObject::from_raw(android_app.activity_as_ptr() as *mut _jobject) };
+use crate::android::utils::host_bridge;
 
-    // Call getWindow method
-    let window = env
-        .call_method(activity_obj, "getWindow", "()Landroid/view/Window;", &[])
-        .expect("Failed to call getWindow")
-        .l()
-        .expect("Expected a Window object");
-
-    // Call getDecorView method
-    let decor_view = env
-        .call_method(window, "getDecorView", "()Landroid/view/View;", &[])
-        .expect("Failed to call getDecorView")
-        .l()
-        .expect("Expected a View object");
-
-    // Get the View class
-    let view_class = env
-        .find_class("android/view/View")
-        .expect("Failed to find View class");
-
-    // Get the SYSTEM_UI_FLAG constants
-    let flag_fullscreen = env
-        .get_static_field(&view_class, "SYSTEM_UI_FLAG_FULLSCREEN", "I")
-        .expect("Failed to get SYSTEM_UI_FLAG_FULLSCREEN")
-        .i()
-        .unwrap();
-    let flag_hide_navigation = env
-        .get_static_field(&view_class, "SYSTEM_UI_FLAG_HIDE_NAVIGATION", "I")
-        .expect("Failed to get SYSTEM_UI_FLAG_HIDE_NAVIGATION")
-        .i()
-        .unwrap();
-    let flag_immersive_sticky = env
-        .get_static_field(&view_class, "SYSTEM_UI_FLAG_IMMERSIVE_STICKY", "I")
-        .expect("Failed to get SYSTEM_UI_FLAG_IMMERSIVE_STICKY")
-        .i()
-        .unwrap();
-
-    // Combine the flags
-    let flags = flag_fullscreen | flag_hide_navigation | flag_immersive_sticky;
-
-    // Call setSystemUiVisibility method
-    env.call_method(
-        decor_view,
-        "setSystemUiVisibility",
-        "(I)V",
-        &[jni::objects::JValue::from(flags)],
-    )
-    .expect("Failed to call setSystemUiVisibility");
+// `set_window_flags(FULLSCREEN)` alone is not enough to hide the system bars:
+// https://github.com/rust-mobile/android-activity/issues/95
+// `HostBridge` uses `WindowInsetsController` (API 30+) or the legacy system UI flags and also
+// sets the display cutout mode. Signatures keep the `run_in_jvm` callback shape; the bridge
+// attaches the calling thread itself, so the provided `JNIEnv` is not used.
+pub fn enable_fullscreen_immersive_mode(_env: &mut JNIEnv, android_app: &AndroidApp) {
+    host_bridge::apply_immersive(android_app);
 }
 
-pub fn keep_screen_on(env: &mut JNIEnv, android_app: &AndroidApp) {
-    let activity_obj = unsafe { JObject::from_raw(android_app.activity_as_ptr() as *mut _jobject) };
-
-    // Call getWindow method
-    let window = env
-        .call_method(activity_obj, "getWindow", "()Landroid/view/Window;", &[])
-        .expect("Failed to call getWindow")
-        .l()
-        .expect("Expected a Window object");
-
-    // Get the WindowManager.LayoutParams class
-    let layout_params_class = env
-        .find_class("android/view/WindowManager$LayoutParams")
-        .expect("Failed to find WindowManager.LayoutParams class");
-
-    // Get the FLAG_KEEP_SCREEN_ON constant
-    let flag_keep_screen_on = env
-        .get_static_field(&layout_params_class, "FLAG_KEEP_SCREEN_ON", "I")
-        .expect("Failed to get FLAG_KEEP_SCREEN_ON")
-        .i()
-        .unwrap();
-
-    // Call addFlags method to set FLAG_KEEP_SCREEN_ON
-    env.call_method(
-        window,
-        "addFlags",
-        "(I)V",
-        &[jni::objects::JValue::from(flag_keep_screen_on)],
-    )
-    .expect("Failed to call addFlags");
+pub fn keep_screen_on(_env: &mut JNIEnv, android_app: &AndroidApp) {
+    host_bridge::set_keep_screen_on(android_app, true);
 }
