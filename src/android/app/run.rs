@@ -6,97 +6,27 @@ use crate::android::{
     backend::{
         pipewire_standalone_aaudio,
         wayland::{
-            bind, centralize, centralize_injected_keyboard, handle, write_guest_output_state,
-            CentralizedEvent, State,
+            apply_immersive_and_flags, bind, centralize, centralize_device_event,
+            centralize_injected_keyboard, handle, reconfigure, request_redraw, reset_all_touch,
+            service_clients, set_hinge_angle, start_hinge, stop_hinge, sync_pointer_capture, tick,
         },
-        webview::ErrorVariant,
+        webview::{installer_url, ErrorVariant},
     },
     proot::launch::launch,
-    utils::{
-        ndk::{self, run_in_jvm},
-        webview::show_webview_popup,
-    },
+    utils::{host_bridge, ndk::run_in_jvm, webview::show_webview_popup},
 };
-use crate::core::config;
-use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
-use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
-use smithay::utils::Transform;
-use smithay::wayland::shell::xdg::ToplevelSurface;
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{DeviceEvent, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::WindowId;
 
-fn configure_output(backend: &mut crate::android::backend::wayland::WaylandBackend) {
-    let Some(winit) = backend.graphic_renderer.as_ref() else {
-        return;
-    };
-
-    let window_size = winit.window_size();
-    let size = (window_size.w, window_size.h);
-    // Not `winit.scale_factor()`: that reads `AConfiguration`, which still reports the 160 dpi
-    // default on the first launch and only becomes accurate after a configuration change.
-    let guest_scale_factor = ndk::scale_factor(&backend.android_app);
-    backend.guest_scale_factor = guest_scale_factor;
-    backend.compositor.state.size = size.into();
-
-    let output = backend
-        .compositor
-        .output
-        .get_or_insert_with(|| {
-            Output::new(
-                "Local Desktop Wayland Compositor".into(),
-                PhysicalProperties {
-                    size: size.into(),
-                    subpixel: Subpixel::HorizontalRgb,
-                    make: "Local Desktop".into(),
-                    model: config::VERSION.into(),
-                },
-            )
-        })
-        .clone();
-
-    if backend.compositor.output_global.is_none() {
-        let dh = backend.compositor.display.handle();
-        backend.compositor.output_global = Some(output.create_global::<State>(&dh));
-    }
-
-    output.change_current_state(
-        Some(Mode {
-            size: size.into(),
-            refresh: 60000,
-        }),
-        Some(Transform::Normal),
-        Some(Scale::Integer(1)),
-        Some((0, 0).into()),
-    );
-
-    let guest_scale = guest_scale_factor.round().max(1.0) as i32;
-    write_guest_output_state(window_size.w, window_size.h, guest_scale);
-
-    for surface in backend.compositor.state.xdg_shell_state.toplevel_surfaces() {
-        configure_toplevel(surface, window_size.w, window_size.h);
-    }
-}
-
-fn configure_toplevel(surface: &ToplevelSurface, width: i32, height: i32) {
-    surface.with_pending_state(|state| {
-        state.size.replace((width, height).into());
-        state.states.set(xdg_toplevel::State::Activated);
-    });
-    surface.send_configure();
-}
-
 impl ApplicationHandler<AppUserEvent> for PolarBearApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        match self.backend {
-            PolarBearBackend::WebView(ref mut backend) => {
+        match &mut self.backend {
+            PolarBearBackend::WebView(backend) => {
                 accessibility::set_runtime_active(false);
                 let url = match backend.error {
-                    ErrorVariant::None => {
-                        let port = backend.socket_port;
-                        format!("file:///android_asset/setup-progress.html?port={}", port)
-                    }
+                    ErrorVariant::None => installer_url(backend.socket_port),
                     ErrorVariant::Unsupported => {
                         format!("file:///android_asset/unsupported.html")
                     }
@@ -111,7 +41,7 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
                     );
                 });
             }
-            PolarBearBackend::Wayland(ref mut backend) => {
+            PolarBearBackend::Wayland(backend) => {
                 if backend.graphic_renderer.is_none() {
                     match bind(event_loop) {
                         Ok(winit) => backend.graphic_renderer = Some(winit),
@@ -125,14 +55,34 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
                 } else {
                     log::info!("Ignoring redundant resume while renderer is already active");
                 }
+                backend.render_failures = 0;
+                backend.frame_rate_applied = None;
+                backend.damage_tracker = None;
 
-                configure_output(backend);
+                backend.window_focused = backend
+                    .graphic_renderer
+                    .as_ref()
+                    .map(|winit| winit.window().has_focus())
+                    .unwrap_or(true);
+                accessibility::set_window_focused(backend.window_focused);
+
+                // Output geometry, refresh rate and the guest's output state first: the guest
+                // sizes its desktop from them.
+                reconfigure(backend);
+                apply_immersive_and_flags(backend);
+                start_hinge(backend);
                 accessibility::set_runtime_active(true);
 
-                if let Some(winit) = backend.graphic_renderer.as_ref() {
-                    winit.window().request_redraw();
+                if backend.config.session.foreground_service {
+                    host_bridge::start_session_service(&backend.android_app);
                 }
-                handle(CentralizedEvent::Redraw, backend, event_loop);
+
+                // Pick up anything a client sent while there was no window.
+                service_clients(backend);
+                sync_pointer_capture(backend);
+                backend.compositor.state.damaged = true;
+                request_redraw(backend);
+
                 launch();
                 // Start the standalone-client PipeWire/AAudio backend.
                 pipewire_standalone_aaudio::spawn_after_ready(self.frontend.android_app.clone());
@@ -140,20 +90,30 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: AppUserEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppUserEvent) {
         let PolarBearBackend::Wayland(backend) = &mut self.backend else {
             accessibility::drain_pending_events();
             return;
         };
 
-        for event in accessibility::drain_pending_events() {
-            let event = centralize_injected_keyboard(
-                event.scancode,
-                event.state,
-                event.event_time_ms,
-                backend,
-            );
-            handle(event, backend, event_loop);
+        match event {
+            AppUserEvent::AccessibilityInputReady => {
+                for event in accessibility::drain_pending_events() {
+                    let event = centralize_injected_keyboard(
+                        event.scancode,
+                        event.state,
+                        event.event_time_ms,
+                        backend,
+                    );
+                    handle(event, backend, event_loop);
+                }
+            }
+            AppUserEvent::WaylandReadable => {
+                // Clients wrote something (or connected): dispatch it now rather than at the
+                // next frame, and draw if it changed what is on screen.
+                service_clients(backend);
+            }
+            AppUserEvent::HingeAngle(angle) => set_hinge_angle(backend, angle),
         }
     }
 
@@ -163,10 +123,7 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
                 if matches!(event, WindowEvent::CloseRequested) {
                     event_loop.exit();
                 } else {
-                    log::info!(
-                        "Ignoring window event while renderer is suspended: {:?}",
-                        event
-                    );
+                    log::trace!("Ignoring a window event while the renderer is suspended");
                 }
                 return;
             }
@@ -179,17 +136,45 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
         }
     }
 
+    fn device_event(&mut self, event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+        if let PolarBearBackend::Wayland(backend) = &mut self.backend {
+            if backend.graphic_renderer.is_none() {
+                return;
+            }
+            let event = centralize_device_event(event, backend);
+            handle(event, backend, event_loop);
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let PolarBearBackend::Wayland(backend) = &mut self.backend {
+            tick(backend, event_loop);
+        }
+    }
+
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
         accessibility::set_runtime_active(false);
+        accessibility::set_window_focused(false);
         event_loop.set_control_flow(ControlFlow::Wait);
 
         if let PolarBearBackend::Wayland(backend) = &mut self.backend {
+            reset_all_touch(backend);
             backend.graphic_renderer = None;
+            backend.damage_tracker = None;
             backend.key_counter = 0;
-            backend.reset_touch_state();
             backend.pointer_pressed = false;
-            // Kill the standalone-client PipeWire/AAudio backend if it was started.
-            pipewire_standalone_aaudio::shutdown();
+            backend.window_focused = false;
+            stop_hinge(backend);
+            if backend.capture.requested {
+                backend.capture.requested = false;
+                host_bridge::set_pointer_capture(&backend.android_app, false);
+            }
+            // With the foreground service the session, and its audio, keep running while the
+            // window is gone (Android 17 mutes background audio otherwise); without it nothing
+            // protects the processes, so stop the audio helpers too.
+            if !backend.config.session.foreground_service {
+                pipewire_standalone_aaudio::shutdown();
+            }
         }
     }
 }

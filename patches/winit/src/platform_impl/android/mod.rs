@@ -6,9 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use android_activity::input::{
-    self, InputEvent, KeyAction, Keycode, MotionAction, Source, ToolType,
-};
+use android_activity::input::{self, InputEvent, KeyAction, Keycode, MotionAction, ToolType};
 use android_activity::{
     AndroidApp, AndroidAppWaker, ConfigurationRef, InputStatus, MainEvent, Rect,
 };
@@ -18,7 +16,9 @@ use crate::cursor::Cursor;
 use crate::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
 use crate::error;
 use crate::error::EventLoopError;
-use crate::event::{self, Event, Force, InnerSizeWriter, MouseButton, StartCause, WindowEvent};
+use crate::event::{
+    self, DeviceEvent, Event, Force, InnerSizeWriter, MouseButton, StartCause, WindowEvent,
+};
 use crate::event_loop::{self, ActiveEventLoop as RootAEL, ControlFlow, DeviceEvents};
 use crate::platform::pump_events::PumpStatus;
 use crate::platform_impl::Fullscreen;
@@ -35,6 +35,93 @@ pub(crate) use crate::cursor::{
 pub(crate) use crate::icon::NoIcon as PlatformIcon;
 
 static HAS_FOCUS: AtomicBool = AtomicBool::new(true);
+
+/// `InputDevice.SOURCE_MOUSE` (0x2002) is the only source with this bit set among the pointer
+/// sources; Samsung DeX trackpads report it even for `ToolType::Finger`.
+const SOURCE_BIT_MOUSE: u32 = 0x0000_2000;
+/// `InputDevice.SOURCE_TOUCHPAD` (0x100008).
+const SOURCE_BIT_TOUCHPAD: u32 = 0x0010_0000;
+/// `InputDevice.SOURCE_MOUSE_RELATIVE` (0x20004): events delivered while pointer capture is
+/// active, where X/Y carry movement deltas instead of positions.
+const SOURCE_BIT_MOUSE_RELATIVE: u32 = 0x0002_0000;
+
+const BUTTON_LEFT: u8 = 1 << 0;
+const BUTTON_RIGHT: u8 = 1 << 1;
+const BUTTON_MIDDLE: u8 = 1 << 2;
+const BUTTON_BACK: u8 = 1 << 3;
+const BUTTON_FORWARD: u8 = 1 << 4;
+
+mod ffi {
+    use std::ffi::c_void;
+
+    #[link(name = "android")]
+    extern "C" {
+        pub fn AMotionEvent_getHistorySize(motion_event: *const c_void) -> usize;
+        pub fn AMotionEvent_getHistoricalAxisValue(
+            motion_event: *const c_void,
+            axis: i32,
+            pointer_index: usize,
+            history_pos: usize,
+        ) -> f32;
+    }
+}
+
+/// Movement carried by a pointer-capture event, summed over every batched sample.
+///
+/// Android batches the moves of one frame into a single event whose earlier samples are only
+/// reachable through the history; reading just the latest sample would drop most of the motion of
+/// a high-rate mouse.
+fn relative_delta(motion_event: &input::MotionEvent<'_>, pointer_index: usize) -> (f64, f64) {
+    const AXIS_X: i32 = 0;
+    const AXIS_Y: i32 = 1;
+
+    let pointer = motion_event.pointer_at_index(pointer_index);
+    let mut dx = pointer.x() as f64;
+    let mut dy = pointer.y() as f64;
+
+    // android-activity 0.6.0 (pinned in Cargo.lock) keeps its history API commented out, so the
+    // AInputEvent pointer is read directly: `input::MotionEvent` is `#[repr(transparent)]` over
+    // `ndk::event::MotionEvent`, a lone `NonNull<AInputEvent>`. The assertion guards that layout.
+    const _: () = assert!(
+        std::mem::size_of::<input::MotionEvent<'static>>()
+            == std::mem::size_of::<*const std::ffi::c_void>()
+    );
+    let raw = unsafe {
+        *(motion_event as *const input::MotionEvent<'_> as *const *const std::ffi::c_void)
+    };
+    unsafe {
+        let history = ffi::AMotionEvent_getHistorySize(raw);
+        for position in 0..history {
+            dx += ffi::AMotionEvent_getHistoricalAxisValue(raw, AXIS_X, pointer_index, position)
+                as f64;
+            dy += ffi::AMotionEvent_getHistoricalAxisValue(raw, AXIS_Y, pointer_index, position)
+                as f64;
+        }
+    }
+    (dx, dy)
+}
+
+/// Android `MotionEvent.getButtonState()` mapped onto the buttons winit reports. The stylus
+/// buttons map like upstream: primary to left, secondary to right.
+fn buttons_from_state(state: input::ButtonState) -> u8 {
+    let mut buttons = 0;
+    if state.primary() || state.stylus_primary() {
+        buttons |= BUTTON_LEFT;
+    }
+    if state.secondary() || state.stylus_secondary() {
+        buttons |= BUTTON_RIGHT;
+    }
+    if state.teriary() {
+        buttons |= BUTTON_MIDDLE;
+    }
+    if state.back() {
+        buttons |= BUTTON_BACK;
+    }
+    if state.forward() {
+        buttons |= BUTTON_FORWARD;
+    }
+    buttons
+}
 
 /// Returns the minimum `Option<Duration>`, taking into account that `None`
 /// equates to an infinite timeout, not a zero timeout (so can't just use
@@ -145,6 +232,12 @@ pub struct EventLoop<T: 'static> {
     cause: StartCause,
     ignore_volume_keys: bool,
     combining_accent: Option<char>,
+    /// Scale factor at the previous configuration change.
+    last_scale_factor: f64,
+    /// Buttons currently reported as pressed (`BUTTON_*` bits).
+    pointer_buttons: u8,
+    /// Whether a stylus/eraser tip is touching the screen.
+    pen_tip_down: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -194,6 +287,9 @@ impl<T: 'static> EventLoop<T> {
             cause: StartCause::Init,
             ignore_volume_keys: attributes.ignore_volume_keys,
             combining_accent: None,
+            last_scale_factor: MonitorHandle::new(android_app.clone()).scale_factor(),
+            pointer_buttons: 0,
+            pen_tip_down: false,
         })
     }
 
@@ -219,11 +315,12 @@ impl<T: 'static> EventLoop<T> {
                 MainEvent::TerminateWindow { .. } => {
                     callback(Event::Suspended, self.window_target());
                 },
-                MainEvent::WindowResized { .. } => resized = true,
-                MainEvent::RedrawNeeded { .. } => pending_redraw = true,
-                MainEvent::ContentRectChanged { .. } => {
-                    warn!("TODO: find a way to notify application of content rect change");
+                // Fold/unfold, DeX window resizes and rotation arrive as a window resize; a
+                // content rect change can accompany them, so re-read the window size for both.
+                MainEvent::WindowResized { .. } | MainEvent::ContentRectChanged { .. } => {
+                    resized = true
                 },
+                MainEvent::RedrawNeeded { .. } => pending_redraw = true,
                 MainEvent::GainedFocus => {
                     HAS_FOCUS.store(true, Ordering::Relaxed);
                     callback(
@@ -246,12 +343,11 @@ impl<T: 'static> EventLoop<T> {
                 },
                 MainEvent::ConfigChanged { .. } => {
                     let monitor = MonitorHandle::new(self.android_app.clone());
-                    let old_scale_factor = monitor.scale_factor();
                     let scale_factor = monitor.scale_factor();
-                    if (scale_factor - old_scale_factor).abs() < f64::EPSILON {
-                        let new_inner_size = Arc::new(Mutex::new(
-                            MonitorHandle::new(self.android_app.clone()).size(),
-                        ));
+                    let old_scale_factor =
+                        std::mem::replace(&mut self.last_scale_factor, scale_factor);
+                    if (scale_factor - old_scale_factor).abs() > f64::EPSILON {
+                        let new_inner_size = Arc::new(Mutex::new(monitor.size()));
                         let event = Event::WindowEvent {
                             window_id: window::WindowId(WindowId),
                             event: WindowEvent::ScaleFactorChanged {
@@ -263,6 +359,9 @@ impl<T: 'static> EventLoop<T> {
                         };
                         callback(event, self.window_target());
                     }
+                    // A configuration change (density, screen size, orientation, uiMode) may
+                    // also have resized the window.
+                    resized = true;
                 },
                 MainEvent::LowMemory => {
                     callback(Event::MemoryWarning, self.window_target());
@@ -377,121 +476,119 @@ impl<T: 'static> EventLoop<T> {
         match event {
             InputEvent::MotionEvent(motion_event) => {
                 // Get the tool type of the primary pointer
-                let pointer = motion_event.pointer_at_index(motion_event.pointer_index());
+                let pointer_index = motion_event.pointer_index();
+                let pointer = motion_event.pointer_at_index(pointer_index);
                 let action = motion_event.action();
 
                 let tool_type = pointer.tool_type();
                 // On Samsung Dex, `tool_type()` still reports `Finger` when using built-in trackpad
                 // So we also check for `source()`, as it correctly reports `Mouse` (although other devices such as Desktop AVDs report `Unknown``)
                 let source = motion_event.source();
+                let raw_source: u32 = source.into();
+                let window_id = window::WindowId(WindowId);
+                let device_id = event::DeviceId(DeviceId(motion_event.device_id()));
 
-                if tool_type != ToolType::Finger
-                    || source == Source::Mouse
-                    || source == Source::Touchpad
-                {
-                    let window_id = window::WindowId(WindowId);
-                    let device_id = event::DeviceId(DeviceId(motion_event.device_id()));
+                // Wheel scrolling is never a touch gesture, whatever the source flags say (DeX
+                // reports combined or unknown sources for its virtual mouse).
+                if action == MotionAction::Scroll {
+                    let h = pointer.axis_value(input::Axis::Hscroll);
+                    let v = pointer.axis_value(input::Axis::Vscroll);
 
-                    // .action_button() will crash on API Level < 33, use .button_state() instead
-                    let button = motion_event.button_state();
-
-                    // Mouse move (hover or drag)
-                    match action {
-                        MotionAction::HoverMove | MotionAction::Move => {
-                            let location =
-                                PhysicalPosition { x: pointer.x() as _, y: pointer.y() as _ };
-                            callback(
-                                Event::WindowEvent {
-                                    window_id,
-                                    event: WindowEvent::CursorMoved {
-                                        device_id,
-                                        position: location,
-                                    },
+                    if h != 0.0 || v != 0.0 {
+                        // Winit's line delta is the direction the content moves: Android reports
+                        // positive HSCROLL for "scroll right" and positive VSCROLL for "scroll
+                        // up", i.e. content moving left and down respectively.
+                        callback(
+                            Event::WindowEvent {
+                                window_id,
+                                event: WindowEvent::MouseWheel {
+                                    device_id,
+                                    delta: event::MouseScrollDelta::LineDelta(-h, v),
+                                    phase: event::TouchPhase::Moved,
                                 },
-                                self.window_target(),
-                            );
-                        },
-                        MotionAction::ButtonPress
-                        | MotionAction::ButtonRelease
-                        | MotionAction::PointerDown
-                        | MotionAction::PointerUp
-                        // | MotionAction::HoverEnter // These Hover events are reported by Android Studio Desktop AVDs, it seems like they simulate stylus as input method, but we will redirect clicks based on `MotionAction::Down` and `MotionAction::Up`
-                        // | MotionAction::HoverExit
-                        | MotionAction::Down
-                        | MotionAction::Up
-                        | MotionAction::Cancel=> {
-                            // Mouse button pressed
+                            },
+                            self.window_target(),
+                        );
+                    }
+                    return input_status;
+                }
 
-                            // Skip `MotionAction::Down` and `MotionAction::Up` when source is mouse as they already reported on `MotionAction::PointerDown` and `MotionAction::PointerUp`
-                            // The issue is here: drag gesture start with down and up
-                            if (source == Source::Mouse ||  source == Source::Touchpad) && (action == MotionAction::Down || action == MotionAction::Up) {
-                                return input_status;
-                            }
+                let is_mouse_like = raw_source
+                    & (SOURCE_BIT_MOUSE | SOURCE_BIT_TOUCHPAD | SOURCE_BIT_MOUSE_RELATIVE)
+                    != 0;
 
-                            let button = match button {
-                                _ if button.primary() => MouseButton::Left,
-                                _ if button.secondary() => MouseButton::Right,
-                                _ if button.teriary() => MouseButton::Middle,
-                                _ if button.back() => MouseButton::Back,
-                                _ if button.forward() => MouseButton::Forward,
-                                _ if button.stylus_primary() => MouseButton::Left,
-                                _ if button.stylus_secondary() => {
-                                    MouseButton::Right
-                                },
-                                _  => {
-                                    warn!("Unknown button: {:?}", button);
-                                    MouseButton::Left
-                                },
-                            };
-
-                            let state = match action {
-                                MotionAction::ButtonPress
-                                | MotionAction::Down
-                                | MotionAction::PointerDown => event::ElementState::Pressed,
-                                _ => event::ElementState::Released,
-                            };
-
-                            callback(
-                                Event::WindowEvent {
-                                    window_id,
-                                    event: WindowEvent::MouseInput {
-                                        device_id,
-                                        state,
-                                        button,
-                                    },
-                                },
-                                self.window_target(),
-                            );
-                        },
-                        MotionAction::Scroll => {
-                            // Mouse wheel scroll
-                            // TODO: Why this event is not firing on Samsung Dex?
-                            let h = pointer.axis_value(input::Axis::Hscroll);
-                            let v = pointer.axis_value(input::Axis::Vscroll);
-
-                            if h != 0.0 || v != 0.0 {
+                if tool_type != ToolType::Finger || is_mouse_like {
+                    // Pointer capture: X/Y are movement deltas, there is no position.
+                    if raw_source & SOURCE_BIT_MOUSE_RELATIVE != 0 {
+                        if matches!(action, MotionAction::Move | MotionAction::HoverMove) {
+                            let delta = relative_delta(motion_event, pointer_index);
+                            if delta != (0.0, 0.0) {
                                 callback(
-                                    Event::WindowEvent {
-                                        window_id,
-                                        event: WindowEvent::MouseWheel {
-                                            device_id,
-                                            delta: event::MouseScrollDelta::LineDelta(
-                                                h as f32, v as f32,
-                                            ),
-                                            phase: event::TouchPhase::Moved,
-                                        },
+                                    Event::DeviceEvent {
+                                        device_id,
+                                        event: DeviceEvent::MouseMotion { delta },
                                     },
                                     self.window_target(),
                                 );
                             }
-                        },
-                        _ => {},
+                        }
+                        self.sync_pointer_buttons(
+                            window_id,
+                            device_id,
+                            action,
+                            buttons_from_state(motion_event.button_state()),
+                            callback,
+                        );
+                        return input_status;
                     }
+
+                    // Position first, so presses and releases land where the pointer is even when
+                    // the event stream never sent a hover/move before it (a stylus tap).
+                    if matches!(
+                        action,
+                        MotionAction::HoverMove
+                            | MotionAction::Move
+                            | MotionAction::Down
+                            | MotionAction::Up
+                            | MotionAction::PointerDown
+                            | MotionAction::PointerUp
+                            | MotionAction::ButtonPress
+                            | MotionAction::ButtonRelease
+                    ) {
+                        let location =
+                            PhysicalPosition { x: pointer.x() as _, y: pointer.y() as _ };
+                        callback(
+                            Event::WindowEvent {
+                                window_id,
+                                event: WindowEvent::CursorMoved {
+                                    device_id,
+                                    position: location,
+                                },
+                            },
+                            self.window_target(),
+                        );
+                    }
+
+                    let mut buttons = buttons_from_state(motion_event.button_state());
+                    if !is_mouse_like {
+                        // A stylus tip touching the screen counts as the primary button even
+                        // when the device does not report it in the button state.
+                        match action {
+                            MotionAction::Down | MotionAction::PointerDown => {
+                                self.pen_tip_down = true
+                            },
+                            MotionAction::Up | MotionAction::PointerUp | MotionAction::Cancel => {
+                                self.pen_tip_down = false
+                            },
+                            _ => {},
+                        }
+                        if self.pen_tip_down {
+                            buttons |= BUTTON_LEFT;
+                        }
+                    }
+                    self.sync_pointer_buttons(window_id, device_id, action, buttons, callback);
                 } else {
                     // Treat them as touch events
-                    let window_id = window::WindowId(WindowId);
-                    let device_id = event::DeviceId(DeviceId(motion_event.device_id()));
-
                     let phase = match action {
                         MotionAction::Down | MotionAction::PointerDown => {
                             Some(event::TouchPhase::Started)
@@ -587,6 +684,53 @@ impl<T: 'static> EventLoop<T> {
         }
 
         input_status
+    }
+
+    /// Emits a `MouseInput` for every button whose state differs from the last reported one.
+    ///
+    /// `AMotionEvent_getActionButton` needs API 33, and after a release `button_state()` no longer
+    /// contains the button, so the pressed set is tracked here instead of inferring the button from
+    /// the (already updated) state.
+    fn sync_pointer_buttons<F>(
+        &mut self,
+        window_id: window::WindowId,
+        device_id: event::DeviceId,
+        action: MotionAction,
+        buttons: u8,
+        callback: &mut F,
+    ) where
+        F: FnMut(Event<T>, &RootAEL),
+    {
+        let buttons = match action {
+            MotionAction::Up | MotionAction::Cancel => 0,
+            _ => buttons,
+        };
+        let pressed = buttons & !self.pointer_buttons;
+        let released = self.pointer_buttons & !buttons;
+        self.pointer_buttons = buttons;
+
+        for (bit, button) in [
+            (BUTTON_LEFT, MouseButton::Left),
+            (BUTTON_RIGHT, MouseButton::Right),
+            (BUTTON_MIDDLE, MouseButton::Middle),
+            (BUTTON_BACK, MouseButton::Back),
+            (BUTTON_FORWARD, MouseButton::Forward),
+        ] {
+            for (mask, state) in [
+                (pressed, event::ElementState::Pressed),
+                (released, event::ElementState::Released),
+            ] {
+                if mask & bit != 0 {
+                    callback(
+                        Event::WindowEvent {
+                            window_id,
+                            event: WindowEvent::MouseInput { device_id, state, button },
+                        },
+                        self.window_target(),
+                    );
+                }
+            }
+        }
     }
 
     pub fn run<F>(mut self, event_handler: F) -> Result<(), EventLoopError>

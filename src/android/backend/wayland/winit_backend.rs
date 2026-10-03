@@ -1,22 +1,9 @@
-//! Implementation of backend traits for types provided by `winit`
+//! EGL/GLES rendering to the Android window created through `winit`.
 //!
-//! This module provides the appropriate implementations of the backend
-//! interfaces for running a compositor as a Wayland or X11 client using [`winit`].
-//!
-//! ## Usage
-//!
-//! The backend is initialized using one of the [`init`], [`init_from_attributes`] or
-//! [`init_from_attributes_with_gl_attr`] functions, depending on the amount of control
-//! you want on the initialization of the backend. These functions will provide you
-//! with two objects:
-//!
-//! - a [`WinitGraphicsBackend`], which can give you an implementation of a [`Renderer`]
-//!   (or even [`GlesRenderer`]) through its `renderer` method in addition to further
-//!   functionality to access and manage the created winit-window.
-//! - a [`WinitEventLoop`], which dispatches some [`WinitEvent`] from the host graphics server.
-//!
-//! The other types in this module are the instances of the associated types of these
-//! two traits for the winit backend.
+//! Adapted from smithay's `winit` backend: the EGL display, context and window surface are created
+//! by hand on the `ANativeWindow` that `winit` exposes, and the result is wrapped in
+//! [`WinitGraphicsBackend`], which gives access to the [`GlesRenderer`] and to buffer age /
+//! damage-aware swapping.
 
 use khronos_egl::DynamicInstance;
 use smithay::{
@@ -36,6 +23,7 @@ use smithay::{
     utils::{Physical, Rectangle, Size},
 };
 use std::ffi::c_void;
+use std::ptr::NonNull;
 use std::sync::Arc;
 use winit::event_loop::ActiveEventLoop;
 use winit::raw_window_handle::{AndroidNdkWindowHandle, HasWindowHandle, RawWindowHandle};
@@ -49,62 +37,39 @@ struct ContextCandidate {
 }
 
 fn create_egl_context(display: &EGLDisplay) -> Result<EGLContext, String> {
+    // 8-bit RGBA, no depth or stencil: the compositor only blends textured quads, and a 10-bit or
+    // depth/stencil window surface costs memory bandwidth for nothing. `vsync` selects configs
+    // that support a swap interval of 1.
+    let attributes = |version| GlAttributes {
+        version,
+        profile: None,
+        debug: cfg!(debug_assertions),
+        vsync: true,
+    };
+    let rgba8 = |hardware_accelerated| PixelFormatRequirements {
+        hardware_accelerated,
+        color_bits: Some(24),
+        float_color_buffer: false,
+        alpha_bits: Some(8),
+        depth_bits: None,
+        stencil_bits: None,
+        multisampling: None,
+    };
     let candidates = [
         ContextCandidate {
-            label: "OpenGL ES 3.0 with 10-bit hardware-accelerated surface",
-            attributes: GlAttributes {
-                version: (3, 0),
-                profile: None,
-                debug: cfg!(debug_assertions),
-                vsync: false,
-            },
-            pixel_format: PixelFormatRequirements::_10_bit(),
-        },
-        ContextCandidate {
             label: "OpenGL ES 3.0 with 8-bit hardware-accelerated surface",
-            attributes: GlAttributes {
-                version: (3, 0),
-                profile: None,
-                debug: cfg!(debug_assertions),
-                vsync: false,
-            },
-            pixel_format: PixelFormatRequirements::_8_bit(),
+            attributes: attributes((3, 0)),
+            pixel_format: rgba8(Some(true)),
         },
         ContextCandidate {
             label: "OpenGL ES 3.0 with 8-bit emulator-friendly surface",
-            attributes: GlAttributes {
-                version: (3, 0),
-                profile: None,
-                debug: cfg!(debug_assertions),
-                vsync: false,
-            },
-            pixel_format: PixelFormatRequirements {
-                hardware_accelerated: None,
-                color_bits: Some(24),
-                float_color_buffer: false,
-                alpha_bits: Some(8),
-                depth_bits: Some(24),
-                stencil_bits: Some(8),
-                multisampling: None,
-            },
+            attributes: attributes((3, 0)),
+            pixel_format: rgba8(None),
         },
         ContextCandidate {
             label: "OpenGL ES 2.0 with 8-bit emulator-friendly surface",
-            attributes: GlAttributes {
-                version: (2, 0),
-                profile: None,
-                debug: cfg!(debug_assertions),
-                vsync: false,
-            },
-            pixel_format: PixelFormatRequirements {
-                hardware_accelerated: None,
-                color_bits: Some(24),
-                float_color_buffer: false,
-                alpha_bits: Some(8),
-                depth_bits: Some(24),
-                stencil_bits: Some(8),
-                multisampling: None,
-            },
+            attributes: attributes((2, 0)),
+            pixel_format: rgba8(None),
         },
     ];
     let mut errors = Vec::with_capacity(candidates.len());
@@ -157,6 +122,14 @@ unsafe impl EGLNativeSurface for AndroidNativeSurface {
         }
         Ok(surface)
     }
+
+    /// Android window surfaces have no resize call: the EGL implementation reads the size of the
+    /// `ANativeWindow` (which the window manager changes on fold/unfold, rotation and DeX window
+    /// resizes) when it dequeues the next buffer, and `eglQuerySurface` reports it after the next
+    /// swap. Nothing to do here, and nothing to recreate.
+    fn resize(&self, _width: i32, _height: i32, _dx: i32, _dy: i32) -> bool {
+        true
+    }
 }
 
 fn create_egl_display(
@@ -187,15 +160,14 @@ fn create_egl_display(
             config.as_ptr() as *mut c_void,
         )
     }
-    .expect("Failed to create EGL display");
+    .expect("Failed to create EGLDisplay");
 
     Ok(egl_display)
 }
 
-/// Create a new [`WinitGraphicsBackend`], which implements the [`Renderer`]
-/// trait, from a given [`WindowAttributes`] struct, as well as given
-/// [`GlAttributes`] for further customization of the rendering pipeline and a
-/// corresponding [`WinitEventLoop`].
+/// Create a new [`WinitGraphicsBackend`] for the Android window: an EGL display, a GLES context
+/// and a window surface, plus the [`GlesRenderer`] on top. The event loop keeps the control flow
+/// it has; frames are drawn on demand.
 pub fn bind(event_loop: &ActiveEventLoop) -> Result<WinitGraphicsBackend<GlesRenderer>, String> {
     #[allow(deprecated)]
     let window = Arc::new(
@@ -208,7 +180,7 @@ pub fn bind(event_loop: &ActiveEventLoop) -> Result<WinitGraphicsBackend<GlesRen
         .window_handle()
         .map(|handle| handle.as_raw())
         .map_err(|error| format!("Failed to get window handle: {error}"))?;
-    let (display, context, surface) = match handle {
+    let (native_window, display, context, surface) = match handle {
         RawWindowHandle::AndroidNdk(handle) => {
             let display = create_egl_display(handle)
                 .map_err(|error| format!("Failed to create EGLDisplay: {error:?}"))?;
@@ -229,7 +201,7 @@ pub fn bind(event_loop: &ActiveEventLoop) -> Result<WinitGraphicsBackend<GlesRen
             };
 
             let _ = context.unbind();
-            (display, context, surface)
+            (handle.a_native_window, display, context, surface)
         }
         platform => return Err(format!("Unsupported platform: {:?}", platform)),
     };
@@ -238,33 +210,15 @@ pub fn bind(event_loop: &ActiveEventLoop) -> Result<WinitGraphicsBackend<GlesRen
         .map_err(|error| format!("Failed to create GLES Renderer: {error}"))?;
     let damage_tracking = display.supports_damage();
 
-    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-
     Ok(WinitGraphicsBackend {
         window: window.clone(),
+        native_window,
         _display: display,
         egl_surface: surface,
         damage_tracking,
         bind_size: None,
         renderer,
     })
-}
-
-/// Errors thrown by the `winit` backends
-#[derive(Debug)]
-pub enum Error {
-    /// Failed to initialize an event loop.
-    EventLoopCreation(winit::error::EventLoopError),
-    /// Failed to initialize a window.
-    WindowCreation(winit::error::OsError),
-    /// Surface creation error.
-    Surface(Box<dyn std::error::Error>),
-    /// Context creation is not supported on the current window system
-    NotSupported,
-    /// EGL error.
-    Egl(EGLError),
-    /// Renderer initialization failed.
-    RendererCreationError(GlesError),
 }
 
 /// Window with an active EGL Context created by `winit`.
@@ -275,6 +229,7 @@ pub struct WinitGraphicsBackend<R> {
     _display: EGLDisplay,
     egl_surface: EGLSurface,
     window: Arc<WinitWindow>,
+    native_window: NonNull<c_void>,
     damage_tracking: bool,
     bind_size: Option<Size<i32, Physical>>,
 }
@@ -300,6 +255,12 @@ where
         &self.window
     }
 
+    /// The raw `ANativeWindow` this backend renders to; valid until the window is destroyed
+    /// (`Suspended`).
+    pub fn native_window(&self) -> *mut c_void {
+        self.native_window.as_ptr()
+    }
+
     /// Access the underlying renderer
     pub fn renderer(&mut self) -> &mut R {
         &mut self.renderer
@@ -311,6 +272,8 @@ where
         // buffer will be latched. Some nvidia drivers may not like it, but a lot of wayland
         // software does the order that way due to mesa latching back buffer on each
         // `make_current`.
+        // On Android the surface follows the `ANativeWindow` size by itself: the buffer queue
+        // hands out buffers of the window's current size from the next dequeue on.
         let window_size = self.window_size();
         if Some(window_size) != self.bind_size {
             self.egl_surface.resize(window_size.w, window_size.h, 0, 0);
@@ -347,7 +310,8 @@ where
     }
 
     /// Submits the back buffer to the window by swapping, requires the window to be previously
-    /// bound (see [`WinitGraphicsBackend::bind`]).
+    /// bound (see [`WinitGraphicsBackend::bind`]). The swap interval is 1, so this blocks once
+    /// SurfaceFlinger's buffer queue is full, which is what paces the render loop to the display.
     pub fn submit(
         &mut self,
         damage: Option<&[Rectangle<i32, Physical>]>,

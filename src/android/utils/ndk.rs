@@ -113,3 +113,44 @@ pub fn long_press_timeout_ms(android_app: &AndroidApp) -> u64 {
     .map(|timeout| timeout.max(0) as u64)
     .unwrap_or(500)
 }
+
+/// `Surface.ROTATION_*` (0, 1 = 90°, 2 = 180°, 3 = 270°) of the display the activity is shown on.
+///
+/// `Activity.getDisplay()` needs API 30; below that the default display is used.
+pub fn display_rotation(android_app: &AndroidApp) -> Option<i32> {
+    run_in_jvm(
+        |env, app| {
+            let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as *mut _jobject) };
+            let display = match env
+                .call_method(&activity, "getDisplay", "()Landroid/view/Display;", &[])
+                .and_then(|it| it.l())
+            {
+                Ok(display) if !display.is_null() => display,
+                _ => {
+                    let _ = env.exception_clear();
+                    let window_manager = env
+                        .call_method(
+                            &activity,
+                            "getWindowManager",
+                            "()Landroid/view/WindowManager;",
+                            &[],
+                        )
+                        .and_then(|it| it.l())
+                        .ok()?;
+                    env.call_method(
+                        window_manager,
+                        "getDefaultDisplay",
+                        "()Landroid/view/Display;",
+                        &[],
+                    )
+                    .and_then(|it| it.l())
+                    .ok()?
+                }
+            };
+            env.call_method(display, "getRotation", "()I", &[])
+                .and_then(|it| it.i())
+                .ok()
+        },
+        android_app.clone(),
+    )
+}
