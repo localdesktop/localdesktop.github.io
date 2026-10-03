@@ -2,6 +2,8 @@
 
 Local Desktop helps you run a desktop Linux environment on your Android device.
 
+> **This is the "Local Desktop Fold" fork** (`app.polarbear.fold`), tuned for the Galaxy Z Fold 8 and other foldables/DeX: live fold/unfold resizing, laptop (Flex) mode, damage-driven rendering, local-only crash reports instead of Sentry, opt-in GPU (Mesa KGSL) and x86/Wine (Box64) support. See [docs/fold8.md](docs/fold8.md) for settings, crash-report locations and the on-device test checklist.
+
 **Note**: It is expected that you already have a usable desktop experience, i.e., a large enough display (tablet or DEX), a physical keyboard, and optionally a mouse/trackpad. **Local Desktop aims to bridge the gap between the two platforms, not trying to "simulate" the desktop experience by introducing inconvenient interactions**.
 
 ## How it works
@@ -64,7 +66,7 @@ brew install llvm lld gradle@8
 Then install our local version of xbuild:
 
 ```bash
-cargo install --path patches/xbuild/xbuild --force
+cargo install --locked --path patches/xbuild/xbuild --force
 x build --release --platform android --arch arm64 --format apk
 ```
 

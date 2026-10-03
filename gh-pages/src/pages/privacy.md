@@ -22,14 +22,13 @@ We are committed to being transparent about what we collect and why.
 
 The Local Desktop app **does not ask for or intentionally collect personal information** such as your name, email address, location, contacts, camera data, or the contents of your files.
 
-However, we use **Sentry** for crash reporting and diagnostics. When the app encounters an error, Sentry may collect technical information such as:
+The app sends **no telemetry**. Crash reports, Android exit reasons and session logs are written only to the device:
 
-- Device information (such as OS version and model)
-- Application state and logs
-- IP address (used to group errors geographically)
-- Debugging context (such as username, if your system environment provides one)
+- inside the Linux desktop at `/var/log/localdesktop/`
+- the app's external files folder (`Android/data/<package>/files/crash-reports`, readable with `adb pull`)
+- the app's private storage
 
-We use this information **only to investigate crashes, diagnose bugs, and improve app stability and performance**.
+Nothing is uploaded. If you want to share a report with the developers, you have to send the files yourself.
 
 ---
 
@@ -63,7 +62,6 @@ We do **not sell your personal data**.
 
 Some information is processed by third-party service providers that operate these services on our behalf or as independent controllers under their own terms:
 
-- [Sentry Privacy Policy](https://sentry.io/privacy/)
 - [Google Privacy Policy](https://policies.google.com/privacy)
 - [Microsoft Privacy Statement](https://privacy.microsoft.com/)
 

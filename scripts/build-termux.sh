@@ -55,7 +55,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "[3/5] Installing xbuild..."
 # MALLOC_TAG_LEVEL=0 avoids an LLVM/lld crash caused by Android pointer tagging
-MALLOC_TAG_LEVEL=0 cargo install --path "$REPO_ROOT/patches/xbuild/xbuild" --force \
+MALLOC_TAG_LEVEL=0 cargo install --locked --path "$REPO_ROOT/patches/xbuild/xbuild" --force \
     2>&1 | grep -E "Compiling xbuild|Replacing|Installed|error" || true
 
 # ---------------------------------------------------------------------------

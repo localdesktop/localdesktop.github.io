@@ -20,7 +20,7 @@ To build Local Desktop from source code, you can follow these steps:
    >
    > ```
    > cd patches/xbuild
-   > cargo install --path xbuild
+   > cargo install --locked --path xbuild
    > ```
 
 1. Build the project:
