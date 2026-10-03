@@ -567,7 +567,6 @@ context.properties = {{
 context.modules = [
     {{ name = libpipewire-module-rt flags = [ ifexists nofail ] }}
     {{ name = libpipewire-module-protocol-native }}
-    {{ name = libpipewire-module-profiler flags = [ ifexists nofail ] }}
     {{ name = libpipewire-module-metadata }}
     {{ name = libpipewire-module-spa-device-factory }}
     {{ name = libpipewire-module-spa-node-factory }}
@@ -734,6 +733,11 @@ fn spawn_aaudio_sink(binary: &Path, env: &PipewireAaudioEnv) -> Result<Child, St
     pw_info!("spawn", "exec {}", binary.display());
     let mut command = Command::new(binary);
     apply_pipewire_env(&mut command, env);
+    // Media (default): AAudio power-saving mode, stream stopped while PipeWire is idle (the sink
+    // keeps its 10 s default). Wine users get low-latency mode for games.
+    if get_application_context().local_config.x86.wine {
+        command.env("LOCALDESKTOP_AAUDIO_LOW_LATENCY", "1");
+    }
     command
         .arg("--node-name")
         .arg("localdesktop-aaudio-sink")

@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # Keeps the SHA-pinned actions (and their version comments) current.
+  - package-ecosystem: github-actions
+    directories:
+      - "/"
+      - "/.github/actions/setup-android-build"
+    schedule:
+      interval: weekly

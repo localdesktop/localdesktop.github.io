@@ -4,7 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Welcome to Local Desktop</title>
-    <script src="https://cdn.jsdelivr.net/npm/vue@2/dist/vue.js"></script>
+    <!--
+      Content is limited to this page, the bundled Vue build, the installer WebSocket on loopback
+      and the docs frame. Vue's in-DOM template compiler needs 'unsafe-eval'.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src file: 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data:; connect-src ws://127.0.0.1:*; frame-src https://localdesktop.github.io"
+    />
+    <!-- Vue 2.7.16 (MIT), vendored from npm vue@2.7.16/dist/vue.min.js, sha256 3c1d4b0c549e8de9d4a9bafb12ab70b6a1ac747d07293b98c5b25b6632999afd -->
+    <script src="vue.min.js"></script>
     <style>
       ::selection {
         background-color: rgba(144, 238, 144, 0.5);
@@ -18,7 +27,7 @@
     >
       <div style="flex: 1; position: relative">
         <iframe
-          sandbox="allow-same-origin allow-popups allow-top-navigation-by-user-activation"
+          sandbox="allow-same-origin"
           src="https://localdesktop.github.io/docs/user/getting-started"
           style="border: none; width: 100%; height: 100%"
         ></iframe>
@@ -162,7 +171,16 @@
         mounted() {
           const params = new URLSearchParams(window.location.search);
           const port = params.get("port");
-          const ws = new WebSocket(`ws://127.0.0.1:${port}`, "rust-websocket");
+          const token = params.get("token");
+          if (!/^[0-9]{1,5}$/.test(port || "") || !token) {
+            console.error("Missing installer port or token");
+            return;
+          }
+          // The server only accepts clients that present the per-run token.
+          const ws = new WebSocket(
+            `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`,
+            "rust-websocket"
+          );
 
           ws.onopen = () => {
             console.log("WebSocket connection established");

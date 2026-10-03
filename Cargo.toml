@@ -21,8 +21,8 @@ required-features = ["pipewire-sink"]
 pipewire-sink = ["dep:pipewire"]
 
 [profile.release]
-strip = true      # Automatically strip symbols from the binary.
-opt-level = "z"   # Optimize for size.
+strip = "debuginfo" # Drop debuginfo but keep symbol names so local crash reports have readable backtraces.
+opt-level = 3     # Optimize for speed; APK size does not matter for a sideloaded fork.
 lto = true
 codegen-units = 1
 
@@ -38,19 +38,7 @@ winit = { version = "0.30.11", features = [
 wayland-protocols = "0.32.6"
 khronos-egl = { version = "6.0.0", features = ["dynamic"] }
 libloading = "0.8.6"
-websocket = { version = "0.27.1", default-features = false, features = [
-    "sync",
-] }
-sentry = { version = "0.41.0", default-features = false, features = [
-    "reqwest",
-    "rustls",
-    "backtrace",
-    "contexts",
-    "panic",
-    "debug-images",
-    "logs",
-    "log",
-] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 pathdiff = "0.2"
 pipewire = { version = "0.10", features = ["v1_0_0"], optional = true }
 smithay = { version = "0.5.0", default-features = false, features = [
@@ -90,7 +78,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9.16"
 sha2 = { version = "0.10.6", features = ["oid"] }
-tar = "0.4.43"
+tar = "0.4.45" # >= 0.4.45 fixes RUSTSEC-2026-0067/0068
 tempfile = "3.20.0"
 toml = "0.8.12"
 xz2 = { version = "0.1.7", features = ["static"] }

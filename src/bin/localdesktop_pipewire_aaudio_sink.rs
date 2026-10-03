@@ -21,6 +21,18 @@ const DEFAULT_NODE_NAME: &str = "localdesktop-aaudio-sink";
 const DEFAULT_RATE: u32 = 48000;
 const DEFAULT_CHANNELS: u32 = 2;
 const DEFAULT_BUFFER_MS: u32 = 120;
+/// Seconds without a `Streaming` PipeWire stream before the AAudio stream is stopped (0 = never).
+const DEFAULT_IDLE_STOP_SECS: u32 = 10;
+/// AAudio data callback size in the default power-saving mode: 20 ms at 48 kHz, which is below
+/// one PipeWire quantum (1024 frames), so a single graph cycle always refills one callback.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+const POWER_SAVING_CALLBACK_FRAMES: i32 = 960;
+/// Set to `1` to open the AAudio stream in `PERFORMANCE_MODE_LOW_LATENCY` (Wine/games) instead of
+/// `PERFORMANCE_MODE_POWER_SAVING`. Passed through the environment so that the supervisor works
+/// with older sink builds too.
+const ENV_LOW_LATENCY: &str = "LOCALDESKTOP_AAUDIO_LOW_LATENCY";
+/// Overrides [`DEFAULT_IDLE_STOP_SECS`].
+const ENV_IDLE_STOP_SECS: &str = "LOCALDESKTOP_AAUDIO_IDLE_STOP_SECS";
 
 macro_rules! note {
     ($($arg:tt)*) => {
@@ -142,11 +154,14 @@ impl Sink {
 // Arguments
 // ----------------------------------------------------------------------------
 
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 struct Args {
     node_name: String,
     rate: u32,
     channels: u32,
     buffer_ms: u32,
+    low_latency: bool,
+    idle_stop_secs: u32,
 }
 
 enum Parsed {
@@ -156,7 +171,9 @@ enum Parsed {
 
 fn usage() {
     eprintln!(
-        "Usage: localdesktop-pipewire-aaudio-sink [--node-name NAME] [--rate HZ] [--channels N] [--buffer-ms MS]"
+        "Usage: localdesktop-pipewire-aaudio-sink [--node-name NAME] [--rate HZ] [--channels N] [--buffer-ms MS]\n\
+         Environment: {ENV_LOW_LATENCY}=1 selects AAudio low-latency mode (default: power saving); \
+         {ENV_IDLE_STOP_SECS}=N stops the AAudio stream after N idle seconds (default {DEFAULT_IDLE_STOP_SECS}, 0 = never)"
     );
 }
 
@@ -166,6 +183,11 @@ fn parse_args(argv: &[String]) -> Result<Parsed, String> {
         rate: DEFAULT_RATE,
         channels: DEFAULT_CHANNELS,
         buffer_ms: DEFAULT_BUFFER_MS,
+        low_latency: std::env::var(ENV_LOW_LATENCY).is_ok_and(|v| v == "1"),
+        idle_stop_secs: std::env::var(ENV_IDLE_STOP_SECS)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_IDLE_STOP_SECS),
     };
 
     let mut i = 0;
@@ -207,7 +229,8 @@ mod android {
     use std::ffi::{c_char, c_void, CStr};
     use std::io::Cursor;
     use std::sync::atomic::AtomicUsize;
-    use std::sync::OnceLock;
+    use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
+    use std::time::Duration;
 
     use libloading::Library;
     use pipewire as pw;
@@ -218,6 +241,94 @@ mod android {
     /// Channel count of the opened AAudio stream, published before the stream
     /// starts so the data callback can emit silence until `SINK` exists.
     static AAUDIO_CHANNELS: AtomicUsize = AtomicUsize::new(0);
+    /// The opened AAudio stream, shared with the idle watchdog and the PipeWire state callback.
+    static AAUDIO_STREAM: AtomicPtr<aaudio::Stream> = AtomicPtr::new(std::ptr::null_mut());
+
+    /// Whether the AAudio stream should run. It runs while a PipeWire stream is `Streaming`; once
+    /// that has been false for the idle timeout the watchdog stops it, so an idle desktop does not
+    /// keep an audio callback thread (and the audio DSP path) busy.
+    struct GateState {
+        streaming: bool,
+        running: bool,
+        shutdown: bool,
+    }
+
+    struct Gate {
+        state: Mutex<GateState>,
+        changed: Condvar,
+    }
+
+    static GATE: Gate = Gate {
+        state: Mutex::new(GateState {
+            streaming: false,
+            running: false,
+            shutdown: false,
+        }),
+        changed: Condvar::new(),
+    };
+
+    impl Gate {
+        fn lock(&self) -> MutexGuard<'_, GateState> {
+            self.state.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
+        fn wait<'a>(&self, guard: MutexGuard<'a, GateState>) -> MutexGuard<'a, GateState> {
+            self.changed.wait(guard).unwrap_or_else(|e| e.into_inner())
+        }
+    }
+
+    /// Called from the PipeWire loop on every stream state change.
+    fn set_streaming(streaming: bool) {
+        let mut state = GATE.lock();
+        state.streaming = streaming;
+        if streaming && !state.running {
+            state.running = start_aaudio_stream();
+            if state.running {
+                note!("AAudio stream restarted");
+            }
+        }
+        GATE.changed.notify_all();
+    }
+
+    fn start_aaudio_stream() -> bool {
+        let stream = AAUDIO_STREAM.load(Ordering::Acquire);
+        match (AAUDIO.get(), stream.is_null()) {
+            (Some(api), false) => unsafe { (api.request_start)(stream) == aaudio::OK },
+            _ => false,
+        }
+    }
+
+    fn stop_aaudio_stream() {
+        let stream = AAUDIO_STREAM.load(Ordering::Acquire);
+        if let (Some(api), false) = (AAUDIO.get(), stream.is_null()) {
+            unsafe { (api.request_stop)(stream) };
+        }
+    }
+
+    /// Stops the AAudio stream after `idle` without a `Streaming` PipeWire stream. Sleeps without
+    /// any timer while audio is playing or the stream is already stopped.
+    fn idle_watchdog(idle: Duration) {
+        let mut state = GATE.lock();
+        loop {
+            if state.shutdown {
+                return;
+            }
+            if state.streaming || !state.running {
+                state = GATE.wait(state);
+                continue;
+            }
+            let (guard, timeout) = GATE
+                .changed
+                .wait_timeout(state, idle)
+                .unwrap_or_else(|e| e.into_inner());
+            state = guard;
+            if timeout.timed_out() && !state.streaming && state.running && !state.shutdown {
+                stop_aaudio_stream();
+                state.running = false;
+                note!("AAudio stream stopped after {}s without audio", idle.as_secs());
+            }
+        }
+    }
 
     impl Sink {
         /// Ask the graph for another quantum once the ring runs low. Called
@@ -258,6 +369,7 @@ mod android {
         pub const OK: Res = 0;
         pub const DIRECTION_OUTPUT: i32 = 0;
         pub const FORMAT_PCM_FLOAT: i32 = 2;
+        pub const PERFORMANCE_MODE_POWER_SAVING: i32 = 11;
         pub const PERFORMANCE_MODE_LOW_LATENCY: i32 = 12;
         pub const SHARING_MODE_SHARED: i32 = 1;
         pub const CALLBACK_RESULT_CONTINUE: i32 = 0;
@@ -276,6 +388,7 @@ mod android {
             pub set_performance_mode: unsafe extern "C" fn(*mut Builder, i32),
             pub set_sharing_mode: unsafe extern "C" fn(*mut Builder, i32),
             pub set_sample_rate: unsafe extern "C" fn(*mut Builder, i32),
+            pub set_frames_per_data_callback: unsafe extern "C" fn(*mut Builder, i32),
             pub set_channel_count: unsafe extern "C" fn(*mut Builder, i32),
             pub set_data_callback: unsafe extern "C" fn(*mut Builder, DataCallback, *mut c_void),
             pub set_error_callback: unsafe extern "C" fn(*mut Builder, ErrorCallback, *mut c_void),
@@ -314,6 +427,10 @@ mod android {
                         )?,
                         set_sharing_mode: sym(&lib, b"AAudioStreamBuilder_setSharingMode\0")?,
                         set_sample_rate: sym(&lib, b"AAudioStreamBuilder_setSampleRate\0")?,
+                        set_frames_per_data_callback: sym(
+                            &lib,
+                            b"AAudioStreamBuilder_setFramesPerDataCallback\0",
+                        )?,
                         set_channel_count: sym(&lib, b"AAudioStreamBuilder_setChannelCount\0")?,
                         set_data_callback: sym(&lib, b"AAudioStreamBuilder_setDataCallback\0")?,
                         set_error_callback: sym(&lib, b"AAudioStreamBuilder_setErrorCallback\0")?,
@@ -369,7 +486,11 @@ mod android {
 
     /// Open and start an AAudio output stream, returning it together with the
     /// rate and channel count it actually negotiated.
-    fn open_aaudio(rate: u32, channels: u32) -> Result<(*mut aaudio::Stream, u32, u32), String> {
+    fn open_aaudio(
+        rate: u32,
+        channels: u32,
+        low_latency: bool,
+    ) -> Result<(*mut aaudio::Stream, u32, u32), String> {
         let api = match AAUDIO.get() {
             Some(api) => api,
             None => {
@@ -386,7 +507,12 @@ mod android {
 
             (api.set_direction)(builder, aaudio::DIRECTION_OUTPUT);
             (api.set_format)(builder, aaudio::FORMAT_PCM_FLOAT);
-            (api.set_performance_mode)(builder, aaudio::PERFORMANCE_MODE_LOW_LATENCY);
+            if low_latency {
+                (api.set_performance_mode)(builder, aaudio::PERFORMANCE_MODE_LOW_LATENCY);
+            } else {
+                (api.set_performance_mode)(builder, aaudio::PERFORMANCE_MODE_POWER_SAVING);
+                (api.set_frames_per_data_callback)(builder, POWER_SAVING_CALLBACK_FRAMES);
+            }
             (api.set_sharing_mode)(builder, aaudio::SHARING_MODE_SHARED);
             (api.set_sample_rate)(builder, rate as i32);
             (api.set_channel_count)(builder, channels as i32);
@@ -405,7 +531,8 @@ mod android {
             AAUDIO_CHANNELS.store(channels as usize, Ordering::Release);
 
             note!(
-                "opened AAudio stream: rate={rate} channels={channels} buffer_frames={}",
+                "opened AAudio stream: mode={} rate={rate} channels={channels} buffer_frames={}",
+                if low_latency { "low-latency" } else { "power-saving" },
                 (api.buffer_size_in_frames)(stream)
             );
 
@@ -522,6 +649,7 @@ mod android {
         old: pw::stream::StreamState,
         new: pw::stream::StreamState,
     ) {
+        set_streaming(new == pw::stream::StreamState::Streaming);
         if new == pw::stream::StreamState::Streaming {
             sink.clear();
             sink.process_pending.store(false, Ordering::Release);
@@ -689,7 +817,14 @@ mod android {
         pw::init();
 
         let result = (|| {
-            let (aaudio_stream, rate, channels) = open_aaudio(args.rate, args.channels)?;
+            let (aaudio_stream, rate, channels) =
+                open_aaudio(args.rate, args.channels, args.low_latency)?;
+            AAUDIO_STREAM.store(aaudio_stream, Ordering::Release);
+            GATE.lock().running = true;
+            let watchdog = (args.idle_stop_secs > 0).then(|| {
+                let idle = Duration::from_secs(args.idle_stop_secs as u64);
+                std::thread::spawn(move || idle_watchdog(idle))
+            });
             let sink = match SINK.get() {
                 Some(sink) => sink,
                 None => {
@@ -703,6 +838,12 @@ mod android {
             sink.drive_enabled.store(false, Ordering::Release);
             sink.process_pending.store(false, Ordering::Release);
             sink.stream.store(std::ptr::null_mut(), Ordering::Release);
+            GATE.lock().shutdown = true;
+            GATE.changed.notify_all();
+            if let Some(watchdog) = watchdog {
+                let _ = watchdog.join();
+            }
+            AAUDIO_STREAM.store(std::ptr::null_mut(), Ordering::Release);
             close_aaudio(aaudio_stream);
 
             note!(

@@ -4,7 +4,8 @@ FROM alvrme/alpine-android:android-30-jdk17
 ENV GRADLE_OPTS="-XX:+UseG1GC -XX:MaxGCPauseMillis=1000"
 
 # Install Gradle 8
-RUN wget https://services.gradle.org/distributions/gradle-8.14.2-bin.zip -P /tmp
+RUN wget https://services.gradle.org/distributions/gradle-8.14.2-bin.zip -P /tmp \
+    && echo "7197a12f450794931532469d4ff21a59ea2c1cd59a3ec3f89c035c3c420a6999  /tmp/gradle-8.14.2-bin.zip" | sha256sum -c -
 RUN unzip /tmp/gradle-8.14.2-bin.zip -d /opt
 RUN ln -s /opt/gradle-8.14.2/bin/gradle /usr/local/bin/gradle
 
@@ -27,12 +28,12 @@ RUN mkdir /app
 
 # Install patched xbuild
 COPY ./patches/ /app/patches
-RUN source $HOME/.cargo/env && cargo install --path /app/patches/xbuild/xbuild
+RUN source $HOME/.cargo/env && cargo install --locked --path /app/patches/xbuild/xbuild
 
 # Copy the Rust project files into the container
 COPY . /app
 WORKDIR /app
 
-# Compile APK
-RUN source $HOME/.cargo/env && x build --release --platform android --arch arm64 --format apk
+# Compile APK (fails if Cargo.lock is out of date)
+RUN source $HOME/.cargo/env && cargo metadata --locked --format-version=1 > /dev/null && x build --release --platform android --arch arm64 --format apk
 

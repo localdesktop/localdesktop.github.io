@@ -1,7 +1,8 @@
 install-xbuild:
-	cargo install --path ./patches/xbuild/xbuild --force
+	cargo install --locked --path ./patches/xbuild/xbuild --force
 
 build: install-xbuild
+	cargo metadata --locked --format-version=1 > /dev/null
 	x build --release --platform android --arch arm64 --format apk
 
 build-docker:

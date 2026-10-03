@@ -1,23 +1,19 @@
-name: Build APK & AAB
+name: Build APK
 
 on:
   workflow_dispatch:
   pull_request:
-    types:
-      - opened
-      - reopened
-      - synchronize
-      - labeled
-      - unlabeled
-      - ready_for_review
     branches:
       - main
   push:
+    branches:
+      - main
     tags:
       - "v*.*.*"
 
+# Nothing below gets more than read access unless a job asks for it explicitly.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
@@ -25,235 +21,87 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-  ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-  ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
 jobs:
-  validate-release-label:
-    name: Validate Release Label
+  # Pull requests and manual runs: no secrets, read-only token, nothing signed with the release key.
+  # PR-controlled code (build.rs, Gradle scripts, xbuild patches) runs here, so it must stay unprivileged.
+  build:
+    name: Build (unprivileged)
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: read
-    outputs:
-      should_build: ${{ steps.classify.outputs.should_build }}
+      contents: read
 
     steps:
-      - name: Classify PR
-        id: classify
-        uses: actions/github-script@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          script: |
-            if (context.eventName !== "pull_request") {
-              core.setOutput("should_build", "true");
-              return;
-            }
+          persist-credentials: false
 
-            const pr = context.payload.pull_request;
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: pr.number,
-              per_page: 100,
-            });
+      - name: Set up Android build
+        id: setup
+        uses: ./.github/actions/setup-android-build
 
-            const ghPagesOnly =
-              files.length > 0 &&
-              files.every((file) =>
-                file.filename.startsWith("gh-pages/") &&
-                (!file.previous_filename || file.previous_filename.startsWith("gh-pages/"))
-              );
-
-            if (ghPagesOnly) {
-              core.info("Skipping release label validation and APK build for gh-pages-only PR.");
-              core.setOutput("should_build", "false");
-              return;
-            }
-
-            const appReleaseLabels = new Set([
-              "release:breaking",
-              "release:feature",
-              "release:bugfix",
-              "release:patch",
-              "release:improvement",
-              "release:optimisation",
-            ]);
-            const releaseLabels = new Set([...appReleaseLabels, "release:docs"]);
-            const labels = pr.labels.map((label) => label.name);
-            const selected = labels.filter((label) => releaseLabels.has(label));
-            const sameRepo = pr.head.repo.full_name === `${context.repo.owner}/${context.repo.repo}`;
-            if (selected.length !== 1) {
-              core.setFailed(
-                `PRs to main must have exactly one release label. Found: ${
-                  selected.join(", ") || "none"
-                }`
-              );
-              return;
-            }
-
-            const shouldBuild =
-              sameRepo &&
-              appReleaseLabels.has(selected[0]);
-
-            core.info(`same-repo PR: ${sameRepo}`);
-            core.info(`release label: ${selected[0]}`);
-            core.info(`build signed APK: ${shouldBuild}`);
-            core.setOutput("should_build", shouldBuild ? "true" : "false");
-
-  build:
-    needs: validate-release-label
-    if: github.event_name != 'pull_request' || needs.validate-release-label.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Gradle 8.14.3
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.14.3"
-
-      - name: Extract version
-        id: extract_version
-        run: echo "version=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].version')" >> "$GITHUB_OUTPUT"
-
-      - name: Extract release notes
-        if: github.ref_type == 'tag'
-        id: release_notes
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require("fs");
-            const path = require("path");
-
-            const tag = process.env.GITHUB_REF_NAME || context.ref.replace(/^refs\/tags\//, "");
-            let notes = "";
-
-            try {
-              const ref = await github.rest.git.getRef({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: `tags/${tag}`,
-              });
-
-              if (ref.data.object.type === "tag") {
-                const tagObject = await github.rest.git.getTag({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  tag_sha: ref.data.object.sha,
-                });
-                notes = (tagObject.data.message || "").trim();
-              }
-            } catch (error) {
-              core.warning(`Could not load release notes from tag ${tag}: ${error.message}`);
-            }
-
-            const notesPath = path.join(process.env.RUNNER_TEMP, "release-notes.md");
-            fs.writeFileSync(notesPath, notes ? `${notes}\n` : "", "utf8");
-            core.setOutput("found", notes ? "true" : "false");
-            core.setOutput("path", notesPath);
-
-      - name: Fallback release notes to commit message
-        if: github.ref_type == 'tag' && steps.release_notes.outputs.found != 'true'
-        run: |
-          git log -1 --pretty=%B > "${{ steps.release_notes.outputs.path }}"
-
-      - name: Setup signing keystore
-        run: |
-          mkdir -p target/x/release/android/gradle/app
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > target/x/release/android/gradle/app/release-key.jks
-          # Verify keystore
-          keytool -list -v -keystore target/x/release/android/gradle/app/release-key.jks -storepass $ANDROID_KEYSTORE_PASSWORD
-
-      - name: Update manifest.yaml to target API 35
-        run: |
-          sed -i 's/target_sdk_version: 33/target_sdk_version: 35/' manifest.yaml
-
-      - name: Install LLVM
-        run: sudo apt-get update && sudo apt-get install -y llvm
-
-      - name: Download Android NDK r28 # Xbuild does this automatically, but at the moment it does not yet support NDK r28, and we need it for 16 KB ELF alignment.
-        run: |
-          curl -o android-ndk-r28-linux.zip https://dl.google.com/android/repository/android-ndk-r28-linux.zip
-          unzip android-ndk-r28-linux.zip
-          rm android-ndk-r28-linux.zip
-
-      - name: Prepare Android.ndk # Replicate these steps from Xbuild's release workflow, so a fully compatible Android.ndk folder with NDK r28 is available offline in the working directory where Xbuild proceeds.
-        run: |
-          TOOLCHAIN=android-ndk-r28/toolchains/llvm/prebuilt/linux-x86_64
-          CLANG_VERSION=$(ls $TOOLCHAIN/lib/clang | head -n 1)
-          CLANG=$TOOLCHAIN/lib/clang/$CLANG_VERSION
-
-          mkdir Android.ndk
-          cp -r $TOOLCHAIN/sysroot/usr Android.ndk/
-          cp -r $CLANG/lib/linux/aarch64/* Android.ndk/usr/lib/aarch64-linux-android/
-          cp -r $CLANG/lib/linux/arm/* Android.ndk/usr/lib/arm-linux-androideabi/
-          cp -r $CLANG/lib/linux/x86_64/* Android.ndk/usr/lib/x86_64-linux-android/
-          cp -r $CLANG/lib/linux/i386/* Android.ndk/usr/lib/i686-linux-android/
-
-          echo "INPUT(-lunwind)" > Android.ndk/usr/lib/aarch64-linux-android/libgcc.a
-          echo "INPUT(-lunwind)" > Android.ndk/usr/lib/arm-linux-androideabi/libgcc.a
-          echo "INPUT(-lunwind)" > Android.ndk/usr/lib/x86_64-linux-android/libgcc.a
-          echo "INPUT(-lunwind)" > Android.ndk/usr/lib/i686-linux-android/libgcc.a
-
-          mkdir -p ~/.cache/x/
-          mv Android.ndk ~/.cache/x/
-
-      - name: Build xbuild
-        working-directory: patches/xbuild
-        run: cargo install --path xbuild
-
+      # Without release-key.jks Gradle does not sign the release variant; the debug variant is
+      # signed with Gradle's throwaway debug key, which is enough to install a PR build for testing.
       - name: Build APK
         run: x build --release --platform=android --arch=arm64 --format=apk
 
-      - name: Rename APK
-        run: |
-          mv target/x/release/android/gradle/app/build/outputs/apk/debug/app-debug.apk target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.apk
-          mv target/x/release/android/gradle/app/build/outputs/apk/release/app-release.apk target/x/localdesktop-${{ steps.extract_version.outputs.version }}.apk
-
-      - name: Prepare PR APK artifact
-        id: pr_apk_artifact
-        if: github.event_name == 'pull_request'
+      - name: Collect APKs
         env:
-          HEAD_REF: ${{ github.head_ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          VERSION: ${{ steps.extract_version.outputs.version }}
+          VERSION: ${{ steps.setup.outputs.version }}
+          SHA: ${{ github.sha }}
         run: |
-          SAFE_REF=$(printf '%s' "$HEAD_REF" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g' | cut -c1-60)
-          if [ -z "$SAFE_REF" ]; then
-            SAFE_REF="pr-${PR_NUMBER}"
-          fi
-          SHORT_SHA="${HEAD_SHA:0:7}"
-          ARTIFACT_FILE="localdesktop-${VERSION}-${SAFE_REF}-${SHORT_SHA}-release.apk"
-          ARTIFACT_PATH="target/x/${ARTIFACT_FILE}"
-          cp "target/x/localdesktop-${VERSION}.apk" "$ARTIFACT_PATH"
-          echo "path=${ARTIFACT_PATH}" >> "$GITHUB_OUTPUT"
+          mkdir -p dist
+          find target/x/release/android/gradle/app/build/outputs/apk -name '*.apk' | while read -r apk; do
+            variant=$(basename "$(dirname "$apk")")
+            cp "$apk" "dist/localdesktop-${VERSION}-${SHA:0:7}-${variant}.apk"
+          done
+          ls -l dist
 
-      - name: Upload PR release APK
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v7
+      - name: Upload APKs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          path: ${{ steps.pr_apk_artifact.outputs.path }}
+          name: localdesktop-${{ github.sha }}
+          path: dist/*.apk
           if-no-files-found: error
-          archive: false
+          retention-days: 7
 
-      - name: Build AAB
-        if: github.event_name != 'pull_request'
-        run: x build --release --platform=android --arch=arm64 --format=aab
+  # Push to main and version tags only: the only job that can see the signing secrets.
+  release:
+    name: Build signed APK
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release on tag pushes
 
-      - name: Rename AAB
-        if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Android build
+        id: setup
+        uses: ./.github/actions/setup-android-build
+
+      - name: Check tag matches Cargo.toml version
+        if: github.ref_type == 'tag'
+        env:
+          VERSION: ${{ steps.setup.outputs.version }}
+          TAG: ${{ github.ref_name }}
         run: |
-          mv target/x/release/android/gradle/app/build/outputs/bundle/debug/app-debug.aab target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.aab
-          mv target/x/release/android/gradle/app/build/outputs/bundle/release/app-release.aab target/x/localdesktop-${{ steps.extract_version.outputs.version }}.aab
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "Tag $TAG does not match Cargo.toml version $VERSION" >&2
+            exit 1
+          fi
+
+      # All-Rust: Typst renders the PDF, the image crate handles webp — no
+      # pandoc/LaTeX/Python, no apt packages needed. Six variants: every
+      # size (desktop/fold/phone) × theme (light/dark). Built before the keystore exists on disk.
       - name: Build User Manual PDFs
         if: github.ref_type == 'tag'
+        env:
+          V: ${{ steps.setup.outputs.version }}
         run: |
-          # All-Rust: Typst renders the PDF, the image crate handles webp — no
-          # pandoc/LaTeX/Python, no apt packages needed. Six variants: every
-          # size (desktop/fold/phone) × theme (light/dark).
-          V="${{ steps.extract_version.outputs.version }}"
           for size in desktop fold phone; do
             for theme in light dark; do
               cargo run --release --bin build_docs -- user "$size" "$theme"
@@ -269,22 +117,78 @@ jobs:
           mv "Local Desktop - User Manual (Phone).pdf"       "Local-Desktop-v$V-User-Manual-Phone.pdf"
           mv "Local Desktop - User Manual (Phone, Dark).pdf" "Local-Desktop-v$V-User-Manual-Phone-Dark.pdf"
 
+      - name: Setup signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ]; then
+            echo "Signing secrets are not configured (ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD)" >&2
+            exit 1
+          fi
+          mkdir -p target/x/release/android/gradle/app
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > target/x/release/android/gradle/app/release-key.jks
+          # Verify keystore
+          keytool -list -keystore target/x/release/android/gradle/app/release-key.jks -storepass:env ANDROID_KEYSTORE_PASSWORD > /dev/null
+
+      - name: Build APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: x build --release --platform=android --arch=arm64 --format=apk
+
+      - name: Remove signing keystore
+        if: always()
+        run: rm -f target/x/release/android/gradle/app/release-key.jks
+
+      - name: Verify APK signature
+        env:
+          VERSION: ${{ steps.setup.outputs.version }}
+        run: |
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
+          mkdir -p dist
+          cp target/x/release/android/gradle/app/build/outputs/apk/release/app-release.apk "dist/localdesktop-${VERSION}.apk"
+          "$APKSIGNER" verify --print-certs "dist/localdesktop-${VERSION}.apk"
+          sha256sum "dist/localdesktop-${VERSION}.apk" | tee "dist/localdesktop-${VERSION}.apk.sha256"
+
+      - name: Upload signed APK
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: localdesktop-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      # Release notes come from the annotated tag message, falling back to the tagged commit message.
       - name: Create GitHub Release
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          token: ${{ secrets.PAT }}
-          name: Local Desktop v${{ steps.extract_version.outputs.version }}
-          tag_name: v${{ steps.extract_version.outputs.version }}
-          body_path: ${{ steps.release_notes.outputs.path }}
-          files: |
-            target/x/localdesktop-${{ steps.extract_version.outputs.version }}.apk
-            target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.apk
-            target/x/localdesktop-${{ steps.extract_version.outputs.version }}.aab
-            target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.aab
-            manuals/Local-Desktop-v${{ steps.extract_version.outputs.version }}-User-Manual.pdf
-            manuals/Local-Desktop-v${{ steps.extract_version.outputs.version }}-User-Manual-Dark.pdf
-            manuals/Local-Desktop-v${{ steps.extract_version.outputs.version }}-User-Manual-Fold.pdf
-            manuals/Local-Desktop-v${{ steps.extract_version.outputs.version }}-User-Manual-Fold-Dark.pdf
-            manuals/Local-Desktop-v${{ steps.extract_version.outputs.version }}-User-Manual-Phone.pdf
-            manuals/Local-Desktop-v${{ steps.extract_version.outputs.version }}-User-Manual-Phone-Dark.pdf
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.setup.outputs.version }}
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          : > "$notes"
+          object_type=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.type)
+          if [ "$object_type" = "tag" ]; then
+            tag_sha=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha)
+            gh api "repos/$REPO/git/tags/$tag_sha" --jq .message > "$notes"
+          fi
+          if [ ! -s "$notes" ]; then
+            git log -1 --pretty=%B > "$notes"
+          fi
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --title "Local Desktop Fold v$VERSION" \
+            --notes-file "$notes" \
+            "dist/localdesktop-${VERSION}.apk" \
+            "dist/localdesktop-${VERSION}.apk.sha256" \
+            manuals/Local-Desktop-v${VERSION}-User-Manual.pdf \
+            manuals/Local-Desktop-v${VERSION}-User-Manual-Dark.pdf \
+            manuals/Local-Desktop-v${VERSION}-User-Manual-Fold.pdf \
+            manuals/Local-Desktop-v${VERSION}-User-Manual-Fold-Dark.pdf \
+            manuals/Local-Desktop-v${VERSION}-User-Manual-Phone.pdf \
+            manuals/Local-Desktop-v${VERSION}-User-Manual-Phone-Dark.pdf

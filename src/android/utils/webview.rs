@@ -1,5 +1,3 @@
-use std::thread;
-
 use jni::objects::{JObject, JValue};
 use jni::sys::_jobject;
 use jni::JNIEnv;
@@ -27,7 +25,7 @@ pub fn show_webview_popup(env: &mut JNIEnv, android_app: &AndroidApp, url: &str)
         Ok(obj) => obj,
         Err(e) => {
             log::info!("Failed to create WebView object: {:?}", e);
-            if let Ok(java_exception) = env.exception_occurred() {
+            if env.exception_check().unwrap_or(false) {
                 env.exception_describe().unwrap();
                 env.exception_clear().unwrap();
             } else {
@@ -48,8 +46,24 @@ pub fn show_webview_popup(env: &mut JNIEnv, android_app: &AndroidApp, url: &str)
         .unwrap()
         .l()
         .unwrap();
-    env.call_method(settings, "setJavaScriptEnabled", "(Z)V", &[JValue::Bool(1)])
+    env.call_method(&settings, "setJavaScriptEnabled", "(Z)V", &[JValue::Bool(1)])
         .unwrap();
+
+    // The page is a trusted local asset and needs no other file, content or location access.
+    // `file:///android_asset/` stays readable regardless of `setAllowFileAccess`.
+    for setter in [
+        "setAllowFileAccess",
+        "setAllowFileAccessFromFileURLs",
+        "setAllowUniversalAccessFromFileURLs",
+        "setAllowContentAccess",
+        "setSupportMultipleWindows",
+        "setGeolocationEnabled",
+    ] {
+        if let Err(error) = env.call_method(&settings, setter, "(Z)V", &[JValue::Bool(0)]) {
+            log::warn!("WebView {setter}(false) failed: {error:?}");
+            let _ = env.exception_clear();
+        }
+    }
 
     // Set WebView Client to prevent external browser launch
     let webview_client_class = env.find_class("android/webkit/WebViewClient").unwrap();

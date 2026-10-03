@@ -10,13 +10,26 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 use winit::platform::android::activity::AndroidApp;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ApplicationContext {
     pub cache_dir: PathBuf,
     pub data_dir: PathBuf,
     pub native_library_dir: PathBuf,
     pub local_config: LocalConfig,
     pub permission_all_files_access: bool,
+}
+
+/// `local_config` holds the user name and the shell commands the host runs, so it is deliberately
+/// left out: this type must never leak those into logs or crash reports.
+impl std::fmt::Debug for ApplicationContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApplicationContext")
+            .field("cache_dir", &self.cache_dir)
+            .field("data_dir", &self.data_dir)
+            .field("native_library_dir", &self.native_library_dir)
+            .field("permission_all_files_access", &self.permission_all_files_access)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ApplicationContext {
@@ -47,9 +60,23 @@ impl ApplicationContext {
                 local_config,
                 permission_all_files_access,
             });
+            let context = context.as_ref().unwrap();
+            let display = &context.local_config.display;
+            let input = &context.local_config.input;
             log::info!(
-                "ApplicationContext initialized: {:?}",
-                context.as_ref().unwrap()
+                "ApplicationContext initialized: {:?}; display: render_scale={} ui_scale={} laptop_mode={:?} refresh_rate={} keep_screen_on={}; input: touch_mode={:?} pointer_capture={}; gpu: enabled={}; x86: box64={} wine={}; session: foreground_service={}",
+                context,
+                display.render_scale,
+                display.ui_scale,
+                display.laptop_mode,
+                display.refresh_rate,
+                display.keep_screen_on,
+                input.touch_mode,
+                input.pointer_capture,
+                context.local_config.gpu.enabled,
+                context.local_config.x86.box64,
+                context.local_config.x86.wine,
+                context.local_config.session.foreground_service,
             );
         }
     }

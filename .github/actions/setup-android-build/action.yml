@@ -1,0 +1,68 @@
+name: Set up Android build
+description: Gradle, NDK r28 (checksum verified), the offline Android.ndk layout and the patched xbuild.
+
+outputs:
+  version:
+    description: Crate version from Cargo.toml
+    value: ${{ steps.version.outputs.value }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Gradle 8.14.3
+      uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
+      with:
+        gradle-version: "8.14.3"
+
+    - name: Check that Cargo.lock is up to date
+      shell: bash
+      run: cargo metadata --locked --format-version=1 > /dev/null
+
+    - name: Install LLVM
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y llvm
+
+    # Xbuild does this automatically, but at the moment it does not yet support NDK r28, and we need it for 16 KB ELF alignment.
+    - name: Download Android NDK r28
+      shell: bash
+      env:
+        # sha1 of android-ndk-r28-linux.zip from https://dl.google.com/android/repository/repository2-3.xml
+        NDK_SHA1: 894f469c5192a116d21f412de27966140a530ebc
+      run: |
+        curl --proto '=https' --tlsv1.2 -fsSLo android-ndk-r28-linux.zip https://dl.google.com/android/repository/android-ndk-r28-linux.zip
+        echo "${NDK_SHA1}  android-ndk-r28-linux.zip" | sha1sum -c -
+        unzip -q android-ndk-r28-linux.zip
+        rm android-ndk-r28-linux.zip
+
+    # Replicate these steps from Xbuild's release workflow, so a fully compatible Android.ndk folder with NDK r28 is available offline in the working directory where Xbuild proceeds.
+    - name: Prepare Android.ndk
+      shell: bash
+      run: |
+        TOOLCHAIN=android-ndk-r28/toolchains/llvm/prebuilt/linux-x86_64
+        CLANG_VERSION=$(ls $TOOLCHAIN/lib/clang | head -n 1)
+        CLANG=$TOOLCHAIN/lib/clang/$CLANG_VERSION
+
+        mkdir Android.ndk
+        cp -r $TOOLCHAIN/sysroot/usr Android.ndk/
+        cp -r $CLANG/lib/linux/aarch64/* Android.ndk/usr/lib/aarch64-linux-android/
+        cp -r $CLANG/lib/linux/arm/* Android.ndk/usr/lib/arm-linux-androideabi/
+        cp -r $CLANG/lib/linux/x86_64/* Android.ndk/usr/lib/x86_64-linux-android/
+        cp -r $CLANG/lib/linux/i386/* Android.ndk/usr/lib/i686-linux-android/
+
+        echo "INPUT(-lunwind)" > Android.ndk/usr/lib/aarch64-linux-android/libgcc.a
+        echo "INPUT(-lunwind)" > Android.ndk/usr/lib/arm-linux-androideabi/libgcc.a
+        echo "INPUT(-lunwind)" > Android.ndk/usr/lib/x86_64-linux-android/libgcc.a
+        echo "INPUT(-lunwind)" > Android.ndk/usr/lib/i686-linux-android/libgcc.a
+
+        mkdir -p ~/.cache/x/
+        mv Android.ndk ~/.cache/x/
+
+    - name: Build xbuild
+      shell: bash
+      working-directory: patches/xbuild
+      run: cargo install --locked --path xbuild
+
+    - name: Read crate version
+      id: version
+      shell: bash
+      run: echo "value=$(cargo metadata --locked --format-version=1 --no-deps | jq -r '.packages[0].version')" >> "$GITHUB_OUTPUT"

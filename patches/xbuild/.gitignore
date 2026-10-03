@@ -1,5 +1,5 @@
 /target
-Cargo.lock
+# Cargo.lock is committed in this fork so `cargo install --locked` is reproducible.
 
 debug.pem
 embedded.mobileprovision
