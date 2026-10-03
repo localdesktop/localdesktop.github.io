@@ -134,7 +134,6 @@ pub fn download_verified(
         }
     }
 
-    let _ = fs::remove_file(&part);
     Err(format!(
         "Could not download {} after {MAX_ATTEMPTS} attempts: {last_error}. Check your network connection and restart the app.",
         asset.name

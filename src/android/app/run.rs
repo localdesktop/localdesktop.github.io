@@ -7,8 +7,9 @@ use crate::android::{
         pipewire_standalone_aaudio,
         wayland::{
             apply_immersive_and_flags, bind, centralize, centralize_device_event,
-            centralize_injected_keyboard, handle, reconfigure, request_redraw, reset_all_touch,
-            service_clients, set_hinge_angle, start_hinge, stop_hinge, sync_pointer_capture, tick,
+            centralize_injected_keyboard, handle, reconfigure, release_all_keys, request_redraw,
+            reset_all_touch, service_clients, set_hinge_angle, start_hinge, stop_hinge,
+            sync_pointer_capture, tick,
         },
         webview::{installer_url, ErrorVariant},
     },
@@ -159,6 +160,7 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
 
         if let PolarBearBackend::Wayland(backend) = &mut self.backend {
             reset_all_touch(backend);
+            release_all_keys(backend);
             backend.graphic_renderer = None;
             backend.damage_tracker = None;
             backend.key_counter = 0;

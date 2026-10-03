@@ -12,10 +12,10 @@ use smithay::{
             context::{GlAttributes, PixelFormatRequirements},
             display::EGLDisplay,
             native::EGLNativeSurface,
-            EGLContext, EGLSurface, Error as EGLError,
+            EGLContext, EGLSurface,
         },
         renderer::{
-            gles::{GlesError, GlesRenderer},
+            gles::GlesRenderer,
             Bind,
         },
         SwapBuffersError,

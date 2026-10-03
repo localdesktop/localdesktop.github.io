@@ -45,8 +45,8 @@ RUN cd /libxkbcommon && \
     -Denable-x11=false \
     -Denable-xkbregistry=false \
     -Denable-bash-completion=false \
-    -Dxkb-config-root=/data/data/app.polarbear/files/arch/usr/share/X11/xkb \
-    -Dx-locale-root=/data/data/app.polarbear/files/arch/usr/share/X11/locale \
+    -Dxkb-config-root=/data/data/app.polarbear.fold/files/arch/usr/share/X11/xkb \
+    -Dx-locale-root=/data/data/app.polarbear.fold/files/arch/usr/share/X11/locale \
     -Dprefix=/output && \
     meson compile -C build/ && \
     meson install -C build/

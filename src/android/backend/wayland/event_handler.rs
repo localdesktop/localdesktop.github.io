@@ -13,10 +13,11 @@ use crate::android::{
     },
     utils::host_bridge,
 };
-use smithay::backend::input::ButtonState;
+use smithay::backend::input::{ButtonState, KeyState};
 use smithay::input::keyboard::FilterResult;
 use smithay::input::pointer::{self, RelativeMotionEvent};
 use smithay::reexports::wayland_server::protocol::wl_pointer::ButtonState as WlButtonState;
+use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Physical, Point, SERIAL_COUNTER};
 use smithay::wayland::shell::xdg::ToplevelSurface;
 use smithay::backend::input::{
@@ -73,7 +74,10 @@ fn emit_pointer_motion(backend: &mut WaylandBackend, location: Point<f64, Logica
     let pointer = compositor.pointer.clone();
     let state = &mut compositor.state;
 
-    if compositor.pointer_location == location && pointer.current_focus().is_some() {
+    let focus_alive = pointer
+        .current_focus()
+        .map_or(false, |focus| focus.is_alive());
+    if compositor.pointer_location == location && focus_alive {
         return;
     }
     if let Some(focus) = pointer_focus(state) {
@@ -300,6 +304,33 @@ pub fn reset_all_touch(backend: &mut WaylandBackend) {
     apply_pad_actions(backend, actions, time);
 }
 
+/// Release every key the guest still sees as held. Key-ups that happen while the window has no
+/// input focus (Alt+Tab, split-screen, DeX) never reach us, which would leave the modifier stuck
+/// in the guest until it is pressed again.
+pub fn release_all_keys(backend: &mut WaylandBackend) {
+    let compositor = &mut backend.compositor;
+    let held = compositor.keyboard.pressed_keys();
+    let time = compositor.start_time.elapsed().as_millis() as u32;
+    for keycode in held {
+        let serial = SERIAL_COUNTER.next_serial();
+        compositor.keyboard.input::<(), _>(
+            &mut compositor.state,
+            keycode,
+            KeyState::Released,
+            serial,
+            time,
+            |_, _, _| FilterResult::Forward,
+        );
+    }
+    backend.key_counter = 0;
+    backend.capture.ctrl_down = false;
+    backend.capture.alt_down = false;
+    backend.capture.chord_candidate = false;
+    if let Err(error) = backend.compositor.display.flush_clients() {
+        log::error!("Failed to flush Wayland clients: {error}");
+    }
+}
+
 /// Request or release Android pointer capture to match what is wanted right now: the guest holds a
 /// pointer lock, or `input.pointer_capture` is on and a mouse is in use. Never while the window is
 /// unfocused or after the user released it with Ctrl+Alt.
@@ -378,6 +409,7 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                 backend.capture.released_by_user = false;
             } else {
                 reset_all_touch(backend);
+                release_all_keys(backend);
             }
             sync_pointer_capture(backend);
         }
@@ -427,7 +459,12 @@ fn handle_input(event: InputEvent<super::input::WinitInput>, backend: &mut Wayla
 
             let compositor = &mut backend.compositor;
             let state = &mut compositor.state;
-            if compositor.keyboard.current_focus().is_none() {
+            // A focus on a destroyed surface (the guest compositor restarted) counts as none.
+            if compositor
+                .keyboard
+                .current_focus()
+                .map_or(true, |focus| !focus.is_alive())
+            {
                 // Typing before the first click: the guest still has to see the keys.
                 if let Some(surface) = get_surface(state) {
                     compositor.keyboard.set_focus(

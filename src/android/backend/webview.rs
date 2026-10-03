@@ -65,13 +65,14 @@ fn forbidden() -> ErrorResponse {
     response
 }
 
-/// Accept only the installer page: right token in the query, `Origin` absent or `null`
-/// (what a `file://` page sends), and the expected subprotocol.
+/// Accept only the installer page: right token in the query, `Origin` absent, `null` or
+/// `file://` (Chromium versions differ in what a `file://` page sends), and the expected
+/// subprotocol. The token is what authenticates; the origin check only rejects web pages.
 fn authenticate(request: &Request, mut response: Response) -> Result<Response, ErrorResponse> {
     let origin_ok = request
         .headers()
         .get(header::ORIGIN)
-        .map_or(true, |origin| origin.as_bytes() == b"null");
+        .map_or(true, |origin| matches!(origin.as_bytes(), b"null" | b"file://"));
 
     let token_ok = request
         .uri()

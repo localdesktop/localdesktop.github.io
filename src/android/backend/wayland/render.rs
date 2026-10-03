@@ -272,8 +272,11 @@ fn surface_scene_elements(
     scale: smithay::utils::Scale<f64>,
     kind: Kind,
 ) -> Vec<SceneElement> {
+    // The tree is laid out at scale 1: the `RescaleRenderElement` below scales every element
+    // (subsurface offsets included) around `origin`, so scaling the offsets here too would
+    // apply the factor twice.
     let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-        render_elements_from_surface_tree(renderer, surface, origin, scale, 1.0, kind);
+        render_elements_from_surface_tree(renderer, surface, origin, 1.0, 1.0, kind);
     if scale.x == 1.0 && scale.y == 1.0 {
         elements.into_iter().map(SceneElement::from).collect()
     } else {
@@ -292,10 +295,12 @@ pub fn redraw(backend: &mut WaylandBackend) -> Result<(), String> {
     acknowledge_wake(backend);
 
     // The window can change size without telling us first (the event arrives with the next
-    // loop iteration): trust the surface, not the last event.
+    // loop iteration, and is then ignored because the size already matches): trust the surface,
+    // not the last event, and re-read rotation, density and refresh rate along with it.
     if let Some(winit) = backend.graphic_renderer.as_ref() {
-        if winit.window_size() != backend.layout.window {
-            super::output::apply_layout(backend);
+        let window = winit.window_size();
+        if window.w > 0 && window.h > 0 && window != backend.layout.window {
+            super::output::reconfigure(backend);
         }
     }
 

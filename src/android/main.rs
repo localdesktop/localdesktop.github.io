@@ -8,6 +8,7 @@ use crate::{
             host_bridge,
         },
     },
+    core::config::ARCH_FS_ROOT,
 };
 use winit::{
     event_loop::{ControlFlow, EventLoop},
@@ -17,6 +18,14 @@ use winit::{
 #[no_mangle]
 fn android_main(android_app: AndroidApp) {
     std::env::set_var("RUST_BACKTRACE", "full");
+    // The bundled libxkbcommon.so has the upstream rootfs path (/data/data/app.polarbear/...)
+    // compiled in as its keymap root, which does not exist under this fork's application id.
+    // Without these the compositor cannot compile a keymap and fails to start.
+    std::env::set_var(
+        "XKB_CONFIG_ROOT",
+        format!("{ARCH_FS_ROOT}/usr/share/X11/xkb"),
+    );
+    std::env::set_var("XLOCALEDIR", format!("{ARCH_FS_ROOT}/usr/share/X11/locale"));
     // Local-only logging and crash reports; nothing is sent off the device.
     crash_report::init(&android_app);
 

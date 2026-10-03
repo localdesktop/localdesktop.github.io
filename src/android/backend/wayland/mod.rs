@@ -19,7 +19,7 @@ pub use compositor::{Compositor, State};
 pub use event_centralizer::{
     centralize, centralize_device_event, centralize_injected_keyboard, CentralizedEvent,
 };
-pub use event_handler::{handle, reset_all_touch, sync_pointer_capture, tick};
+pub use event_handler::{handle, release_all_keys, reset_all_touch, sync_pointer_capture, tick};
 pub use output::{apply_immersive_and_flags, reconfigure, set_hinge_angle, start_hinge, stop_hinge};
 pub use render::{request_redraw, service_clients};
 pub use winit_backend::{bind, WinitGraphicsBackend};
