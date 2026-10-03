@@ -3,6 +3,7 @@ use crate::core::config;
 use std::ffi::CString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
+use std::os::raw::{c_char, c_int};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -12,6 +13,44 @@ use winit::platform::android::activity::AndroidApp;
 pub type Log = Arc<dyn Fn(String) + Send + Sync>;
 
 const SUPPORT_CHECK_BINARY: &str = "ld-linux-aarch64.so.1";
+/// Marker file in the app data directory: the support probe passed for the build named inside.
+const SUPPORT_STAMP: &str = ".proot-support-ok";
+
+extern "C" {
+    fn __system_property_get(name: *const c_char, value: *mut c_char) -> c_int;
+}
+
+/// Value of an Android system property, empty when unset.
+fn system_property(name: &str) -> String {
+    const PROP_VALUE_MAX: usize = 92;
+    let Ok(name) = CString::new(name) else {
+        return String::new();
+    };
+    let mut value = [0 as c_char; PROP_VALUE_MAX];
+    // SAFETY: `name` is NUL-terminated and `value` has the PROP_VALUE_MAX bytes bionic requires.
+    let len = unsafe { __system_property_get(name.as_ptr(), value.as_mut_ptr()) };
+    if len <= 0 {
+        return String::new();
+    }
+    let bytes: Vec<u8> = value[..(len as usize).min(PROP_VALUE_MAX - 1)]
+        .iter()
+        .map(|&b| b as u8)
+        .collect();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Identifies what the support probe result depends on: this app version, its native libraries
+/// (proot) and the Android build (SELinux policy, kernel).
+fn support_stamp_key() -> String {
+    let context = get_application_context();
+    format!(
+        "{}|{}|{}|{}",
+        config::VERSION,
+        context.native_library_dir.display(),
+        system_property("ro.build.fingerprint"),
+        system_property("ro.build.version.sdk"),
+    )
+}
 
 /// Runs a shell command inside the Arch Linux PRoot environment.
 ///
@@ -26,6 +65,8 @@ pub struct ArchProcess {
 }
 
 impl ArchProcess {
+    /// Makes sure the probe binary exists in the data directory. The asset is only written when
+    /// the file on disk differs (it is about 200 KB and the same on every launch).
     fn ensure_support_probe_rootfs(android_app: &AndroidApp) -> Option<()> {
         let context = get_application_context();
         let probe_exec = context.data_dir.join(SUPPORT_CHECK_BINARY);
@@ -35,8 +76,14 @@ impl ArchProcess {
 
         let mut bytes = Vec::with_capacity(asset.length());
         asset.read_to_end(&mut bytes).ok()?;
-        fs::write(&probe_exec, bytes).ok()?;
-        fs::set_permissions(&probe_exec, fs::Permissions::from_mode(0o755)).ok()?;
+
+        let unchanged = fs::read(&probe_exec).map_or(false, |existing| existing == bytes)
+            && fs::metadata(&probe_exec)
+                .map_or(false, |meta| meta.permissions().mode() & 0o111 == 0o111);
+        if !unchanged {
+            fs::write(&probe_exec, bytes).ok()?;
+            fs::set_permissions(&probe_exec, fs::Permissions::from_mode(0o755)).ok()?;
+        }
 
         Some(())
     }
@@ -80,8 +127,17 @@ impl ArchProcess {
             })
     }
 
+    /// Whether proot works on this device. A passing probe is remembered per app build and
+    /// Android build, so normal launches skip the extra proot process.
     pub fn is_supported(android_app: &AndroidApp) -> bool {
         let context = get_application_context();
+        let stamp_path = context.data_dir.join(SUPPORT_STAMP);
+        let stamp_key = support_stamp_key();
+        if fs::read_to_string(&stamp_path).map_or(false, |stamp| stamp == stamp_key) {
+            log::info!("PRoot support probe skipped: it already passed for this build");
+            return true;
+        }
+
         let supported = if Self::ensure_support_probe_rootfs(android_app).is_some() {
             Self::try_proot_probe(
                 &context.data_dir,
@@ -93,13 +149,24 @@ impl ArchProcess {
             false
         };
 
-        if !supported {
+        if supported {
+            if let Err(error) = fs::write(&stamp_path, &stamp_key) {
+                log::warn!("Could not record the PRoot support probe result: {error}");
+            }
+        } else {
+            let _ = fs::remove_file(&stamp_path);
             log::error!("⚡️ Device Unsupported");
         }
         supported
     }
 
     pub fn run(self) -> Output {
+        self.run_tracked(|_| {})
+    }
+
+    /// Like `run`, and calls `on_spawn` with the pid of the proot process as soon as it exists
+    /// (before the command finishes), so callers can tell whether the session is still alive.
+    pub fn run_tracked(self, on_spawn: impl FnOnce(u32)) -> Output {
         let context = get_application_context();
         let user = self.user.as_deref().unwrap_or("root");
 
@@ -119,6 +186,8 @@ impl ArchProcess {
             .arg("--sysvipc")
             .arg("--kill-on-exit")
             .arg("--root-id")
+            // /dev/kgsl-3d0 and /dev/dma_heap/* (the opt-in GPU path) are reachable through this
+            // bind, so no extra bind is needed for them.
             .arg("--bind=/dev")
             .arg("--bind=/proc")
             .arg("--bind=/sys")
@@ -187,18 +256,29 @@ impl ArchProcess {
                 .stderr(Stdio::inherit())
                 .spawn()
                 .expect("Failed to run command");
+            on_spawn(child.id());
 
+            // Split on bytes: guest output is not guaranteed to be valid UTF-8 and must not
+            // be able to take the reader (and with it the whole session thread) down.
             let reader = BufReader::new(child.stdout.take().unwrap());
-            for line in reader.lines() {
-                let line = line.unwrap();
-                log(line);
+            for line in reader.split(b'\n').map_while(Result::ok) {
+                log(String::from_utf8_lossy(&line).into_owned());
             }
 
             child
                 .wait_with_output()
                 .expect("Failed to wait for command")
         } else {
-            process.output().expect("Failed to run command")
+            let child = process
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("Failed to run command");
+            on_spawn(child.id());
+            child
+                .wait_with_output()
+                .expect("Failed to run command")
         }
     }
 }

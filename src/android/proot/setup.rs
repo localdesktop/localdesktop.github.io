@@ -1,24 +1,28 @@
+use super::download::download_verified;
+use super::optional::{setup_gpu, setup_x86};
 use super::process::ArchProcess;
 use crate::{
     android::{
         app::build::PolarBearBackend,
         backend::{
-            wayland::{Compositor, TouchMode, WaylandBackend},
+            wayland::WaylandBackend,
             webview::{ErrorVariant, WebviewBackend},
         },
         utils::application_context::get_application_context,
-        utils::ndk::{density_dpi, long_press_timeout_ms, scale_factor, touch_slop_px},
+        utils::ndk::density_dpi,
     },
-    core::config::{
-        CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL, PIPEWIRE_GUEST_RUNTIME_DIR,
-        PULSE_GUEST_SERVER,
+    core::{
+        config::{
+            merge_settings_template, CommandConfig, ARCH_FS_ARCHIVE_ASSET, ARCH_FS_ROOT,
+            CONFIG_FILE, DOCS_HOME_URL,
+        },
+        guest,
     },
 };
 use pathdiff::diff_paths;
-use smithay::utils::Clock;
 use std::{
     fs::{self, File},
-    io::{ErrorKind, Read, Write},
+    io::ErrorKind,
     os::unix::fs::{symlink, PermissionsExt},
     path::{Path, PathBuf},
     process,
@@ -72,9 +76,12 @@ const PIPEWIRE_GUEST_LOCK_PACKAGES: &[&str] = &[
 ];
 
 fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
+    const MAX_EXTRACT_ATTEMPTS: usize = 3;
+
     let context = get_application_context();
     let temp_file = context.data_dir.join("archlinux-fs.tar.xz");
     let fs_root = Path::new(ARCH_FS_ROOT);
+    let data_dir = context.data_dir.clone();
     let extracted_dir = context.data_dir.join("archlinux-aarch64");
     let mpsc_sender = options.mpsc_sender.clone();
 
@@ -83,88 +90,56 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     let need_setup = fs_root.read_dir().map_or(true, |mut d| d.next().is_none());
     if need_setup {
         return Some(thread::spawn(move || {
-            // Download if the archive doesn't exist
-            loop {
-                if !temp_file.exists() {
-                    mpsc_sender
-                        .send(SetupMessage::Progress(
-                            "Downloading Arch Linux FS...".to_string(),
-                        ))
-                        .expect("Failed to send log message");
+            let progress = |message: String| {
+                mpsc_sender.send(SetupMessage::Progress(message)).unwrap_or(());
+            };
 
-                    let response = reqwest::blocking::get(ARCH_FS_ARCHIVE)
-                        .expect("Failed to download Arch Linux FS");
-
-                    let total_size = response.content_length().unwrap_or(0);
-                    let mut file = File::create(&temp_file)
-                        .expect("Failed to create temp file for Arch Linux FS");
-
-                    let mut downloaded = 0u64;
-                    let mut buffer = [0u8; 8192];
-                    let mut reader = response;
-                    let mut last_percent = 0;
-
-                    loop {
-                        let n = reader
-                            .read(&mut buffer)
-                            .expect("Failed to read from response");
-                        if n == 0 {
-                            break;
-                        }
-                        file.write_all(&buffer[..n])
-                            .expect("Failed to write to file");
-                        downloaded += n as u64;
-                        if total_size > 0 {
-                            let percent = (downloaded * 100 / total_size).min(100) as u8;
-                            if percent != last_percent {
-                                let downloaded_mb = downloaded as f64 / 1024.0 / 1024.0;
-                                let total_mb = total_size as f64 / 1024.0 / 1024.0;
-                                mpsc_sender
-                                    .send(SetupMessage::Progress(format!(
-                                        "Downloading Arch Linux FS... {}% ({:.2} MB / {:.2} MB)",
-                                        percent, downloaded_mb, total_mb
-                                    )))
-                                    .unwrap_or(());
-                                last_percent = percent;
-                            }
-                        }
-                    }
+            let mut extracted = false;
+            for attempt in 1..=MAX_EXTRACT_ATTEMPTS {
+                // Download, or re-verify a file left by an earlier run. The archive is only
+                // accepted when size and SHA-256 match the pinned release; the error of a
+                // failed download is surfaced to the setup UI by the stage failure handler.
+                if let Err(error) = download_verified(&ARCH_FS_ARCHIVE_ASSET, &temp_file, &progress)
+                {
+                    panic!("{error}");
                 }
 
-                mpsc_sender
-                    .send(SetupMessage::Progress(
-                        "Extracting Arch Linux FS...".to_string(),
-                    ))
-                    .expect("Failed to send log message");
+                progress("Extracting Arch Linux FS...".to_string());
 
                 // Ensure the extracted directory is clean
                 let _ = fs::remove_dir_all(&extracted_dir);
 
                 // Extract tar file directly to the final destination
-                let tar_file =
-                    File::open(&temp_file).expect("Failed to open downloaded Arch Linux FS file");
-                let tar = XzDecoder::new(tar_file);
-                let mut archive = Archive::new(tar);
+                let result = File::open(&temp_file)
+                    .map_err(|e| format!("cannot open the downloaded archive: {e}"))
+                    .and_then(|tar_file| {
+                        Archive::new(XzDecoder::new(tar_file))
+                            .unpack(&data_dir)
+                            .map_err(|e| e.to_string())
+                    });
 
-                // Try to extract, if it fails, remove temp file and restart download
-                if let Err(e) = archive.unpack(context.data_dir.clone()) {
-                    // Clean up the failed extraction
-                    let _ = fs::remove_dir_all(&extracted_dir);
-                    let _ = fs::remove_file(&temp_file);
-
-                    mpsc_sender
-                        .send(SetupMessage::Error(format!(
-                            "Failed to extract Arch Linux FS: {}. Restarting download...",
-                            e
-                        )))
-                        .unwrap_or(());
-
-                    // Continue the outer loop to retry the download
-                    continue;
+                match result {
+                    Ok(()) => {
+                        extracted = true;
+                        break;
+                    }
+                    Err(error) => {
+                        // The archive passed its checksum, so this is a local problem (disk full,
+                        // storage error). Clean up and try again, a bounded number of times.
+                        let _ = fs::remove_dir_all(&extracted_dir);
+                        let _ = fs::remove_file(&temp_file);
+                        mpsc_sender
+                            .send(SetupMessage::Error(format!(
+                                "Failed to extract Arch Linux FS: {error} (attempt {attempt}/{MAX_EXTRACT_ATTEMPTS})"
+                            )))
+                            .unwrap_or(());
+                    }
                 }
-
-                // If we get here, extraction was successful
-                break;
+            }
+            if !extracted {
+                panic!(
+                    "Could not extract the Arch Linux FS after {MAX_EXTRACT_ATTEMPTS} attempts. Check the free storage space and restart the app."
+                );
             }
 
             // Move the extracted files to the final destination
@@ -172,7 +147,7 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                 .expect("Failed to rename extracted files to final destination");
 
             // Clean up the temporary file
-            fs::remove_file(&temp_file).expect("Failed to remove temporary file");
+            let _ = fs::remove_file(&temp_file);
         }));
     }
     None
@@ -432,6 +407,170 @@ fn setup_pipewire_package_lock(_: &SetupOptions) -> StageOutput {
     None
 }
 
+/// Switches pacman to HTTPS mirrors. The mirror list shipped in the rootfs archive uses plain
+/// HTTP (packages are signature-checked, but the transport leaked what is installed and let
+/// a network attacker withhold updates). Rewritten only while it still has plain-HTTP servers,
+/// so a list the user edited to HTTPS mirrors is left alone.
+fn setup_pacman_mirrors(_: &SetupOptions) -> StageOutput {
+    let mirrorlist = Path::new(ARCH_FS_ROOT).join("etc/pacman.d/mirrorlist");
+    let Ok(content) = fs::read_to_string(&mirrorlist) else {
+        log::warn!("Skipping the HTTPS mirror switch; cannot read {}", mirrorlist.display());
+        return None;
+    };
+
+    if guest::mirrorlist_has_plain_http(&content) {
+        let backup = mirrorlist.with_extension("localdesktop-http.bak");
+        if !backup.exists() {
+            let _ = fs::write(&backup, &content);
+        }
+        fs::write(&mirrorlist, guest::managed_mirrorlist())
+            .expect("Failed to write the HTTPS pacman mirror list");
+        log::info!("Switched the pacman mirror list to HTTPS mirrors");
+    }
+    None
+}
+
+/// The rootfs archive ships a pacman signing key pair that is identical on every installation.
+/// Replace it once by a freshly generated one (see `keyring-regen.sh`: built aside and swapped
+/// in only when complete, so a failure keeps the working keyring).
+fn setup_pacman_keyring(options: &SetupOptions) -> StageOutput {
+    const MAX_ATTEMPTS: u32 = 3;
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let marker = fs_root.join("etc/pacman.d/.localdesktop-keyring");
+
+    if !fs_root.join("usr/bin/pacman-key").exists() {
+        return None;
+    }
+    let state = fs::read_to_string(&marker).unwrap_or_default();
+    let failed_attempts = state
+        .trim()
+        .strip_prefix("failed-")
+        .and_then(|n| n.parse::<u32>().ok())
+        .unwrap_or(0);
+    if state.trim() == "ok" || failed_attempts >= MAX_ATTEMPTS {
+        return None;
+    }
+
+    let mpsc_sender = options.mpsc_sender.clone();
+    Some(thread::spawn(move || {
+        let _ = mpsc_sender.send(SetupMessage::Progress(
+            "Generating a fresh pacman signing key (one time)...".to_string(),
+        ));
+
+        let script = Path::new(ARCH_FS_ROOT).join("tmp/localdesktop-keyring-regen.sh");
+        write_executable(&script, guest::KEYRING_REGEN_SCRIPT);
+        let sender = mpsc_sender.clone();
+        let output = ArchProcess {
+            command: "sh /tmp/localdesktop-keyring-regen.sh 2>&1".into(),
+            user: None,
+            log: Some(Arc::new(move |line| {
+                let _ = sender.send(SetupMessage::Progress(line));
+            })),
+        }
+        .run();
+        let _ = fs::remove_file(&script);
+
+        if output.status.success() {
+            let _ = fs::write(&marker, "ok\n");
+        } else {
+            let attempts = failed_attempts + 1;
+            let _ = fs::write(&marker, format!("failed-{attempts}\n"));
+            log::warn!("pacman keyring regeneration failed ({attempts}/{MAX_ATTEMPTS}); the shipped keyring stays in use");
+            let _ = mpsc_sender.send(SetupMessage::Progress(format!(
+                "Could not generate a fresh pacman key (attempt {attempts}/{MAX_ATTEMPTS}); keeping the existing keyring."
+            )));
+        }
+    }))
+}
+
+/// Per-start guest tuning: parallel `makepkg`, and the session environment file that
+/// `startxfce4-localdesktop` sources (llvmpipe threads, software-rendering defaults, or the
+/// opt-in GPU environment). Cheap, so it runs on every start and always follows the config.
+fn setup_guest_tuning(_: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let config = get_application_context().local_config;
+
+    let makepkg_conf = fs_root.join("etc/makepkg.conf");
+    if let Ok(content) = fs::read_to_string(&makepkg_conf) {
+        if let Some(updated) = guest::ensure_makeflags(&content) {
+            match fs::write(&makepkg_conf, updated) {
+                Ok(()) => log::info!("Enabled parallel builds in makepkg.conf"),
+                Err(error) => log::warn!("Could not update makepkg.conf: {error}"),
+            }
+        }
+    }
+
+    let cpus = thread::available_parallelism().map_or(1, |n| n.get());
+    let guest_path = |path: &str| fs_root.join(path.trim_start_matches('/'));
+    write_if_changed(
+        &guest_path(guest::SESSION_ENV_PATH),
+        &guest::session_env(&config, cpus),
+        0o644,
+    );
+    let gpu_env = guest_path(guest::GPU_ENV_PATH);
+    if config.gpu.enabled {
+        write_if_changed(&gpu_env, &guest::gpu_env(&config.gpu), 0o644);
+    } else {
+        let _ = fs::remove_file(&gpu_env);
+    }
+    None
+}
+
+/// Settings discoverability and the opt-in update path: a commented template of every key in
+/// `localdesktop.toml` (an existing file only gets missing commented sections appended), the
+/// `localdesktop-update` and `localdesktop-gpu-probe` commands, and their menu launchers.
+fn setup_settings(_: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let config = get_application_context().local_config;
+
+    let config_path = fs_root.join(CONFIG_FILE.trim_start_matches('/'));
+    let existing = match fs::read_to_string(&config_path) {
+        Ok(content) => Some(content),
+        Err(error) if error.kind() == ErrorKind::NotFound => Some(String::new()),
+        Err(error) => {
+            log::warn!("Leaving {} alone: {error}", config_path.display());
+            None
+        }
+    };
+    if let Some(existing) = existing {
+        let merged = merge_settings_template(&existing);
+        if merged != existing {
+            if let Some(parent) = config_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            fs::write(&config_path, merged).expect("Failed to write the settings template");
+        }
+    }
+
+    let bin = fs_root.join("usr/local/bin");
+    write_if_changed(&bin.join("localdesktop-update"), guest::UPDATE_SCRIPT, 0o755);
+    write_if_changed(
+        &bin.join("localdesktop-gpu-probe"),
+        &guest::render_gpu_probe(),
+        0o755,
+    );
+
+    // Menu entries are managed (rewritten when they differ); desktop icons are seeded elsewhere.
+    let applications = fs_root.join("usr/local/share/applications");
+    write_if_changed(
+        &applications.join("localdesktop-settings.desktop"),
+        &guest::settings_desktop_entry(),
+        0o644,
+    );
+    write_if_changed(
+        &applications.join("localdesktop-update.desktop"),
+        &guest::update_desktop_entry(),
+        0o644,
+    );
+    let gpu_probe_entry = applications.join("localdesktop-gpu-probe.desktop");
+    if config.gpu.enabled {
+        write_if_changed(&gpu_probe_entry, &guest::gpu_probe_desktop_entry(), 0o644);
+    } else {
+        let _ = fs::remove_file(&gpu_probe_entry);
+    }
+    None
+}
+
 fn setup_firefox_config(_: &SetupOptions) -> StageOutput {
     // Create the Firefox root directory if it doesn't exist
     let firefox_root = format!("{}/usr/lib/firefox", ARCH_FS_ROOT);
@@ -450,22 +589,14 @@ pref("general.config.sandbox_enabled", false);
     let _ = fs::write(format!("{}/autoconfig.js", pref_dir), autoconfig_js)
         .expect("Failed to write Firefox autoconfig.js");
 
-    // Create localdesktop.cfg in the Firefox root directory
-    let firefox_cfg = r#"// Auto updated by Local Desktop on each startup, do not edit manually
-defaultPref("media.cubeb.sandbox", false);
-defaultPref("security.sandbox.content.level", 0);
-defaultPref("media.allow-audio-non-utility", true);
-defaultPref("media.rdd-process.enabled", false);
-
-try {
-  var { SandboxUtils } = ChromeUtils.importESModule("resource://gre/modules/SandboxUtils.sys.mjs");
-  SandboxUtils.maybeWarnAboutDisabledContentSandbox = () => {};
-  SandboxUtils.observeContentSandboxPref = () => {};
-} catch (_) {}
-"#; // It is required that the first line of this file is a comment, even if you have nothing to comment. Docs: https://support.mozilla.org/en-US/kb/customizing-firefox-using-autoconfig
-
-    let _ = fs::write(format!("{}/localdesktop.cfg", firefox_root), firefox_cfg)
-        .expect("Failed to write Firefox configuration");
+    // Create localdesktop.cfg in the Firefox root directory: the sandbox preferences proot
+    // needs, plus CPU-rendering preferences while the GPU option is off.
+    let gpu_enabled = get_application_context().local_config.gpu.enabled;
+    let _ = fs::write(
+        format!("{}/localdesktop.cfg", firefox_root),
+        guest::firefox_autoconfig(gpu_enabled),
+    )
+    .expect("Failed to write Firefox configuration");
 
     None
 }
@@ -832,7 +963,7 @@ runpy.run_path('/usr/sbin/onboard', run_name='__main__')
     None
 }
 
-fn chroot_home_dir(fs_root: &Path, username: &str) -> PathBuf {
+pub(super) fn chroot_home_dir(fs_root: &Path, username: &str) -> PathBuf {
     if username == "root" {
         fs_root.join("root")
     } else {
@@ -840,7 +971,7 @@ fn chroot_home_dir(fs_root: &Path, username: &str) -> PathBuf {
     }
 }
 
-fn write_executable(path: &Path, contents: &str) {
+pub(super) fn write_executable(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -849,20 +980,42 @@ fn write_executable(path: &Path, contents: &str) {
         .expect("Failed to mark executable script");
 }
 
-/// Map Android density to a whole-number UI scale factor (same baseline as the old LXQt setup).
-fn android_ui_scale(density_dpi: i32) -> i32 {
-    ((density_dpi as f32) / 160.0 * 1.1).max(1.0).round() as i32
+/// Writes `contents` with permission bits `mode` unless the file already matches exactly,
+/// so a normal start does not rewrite (and re-flush) the same scripts every time.
+pub(super) fn write_if_changed(path: &Path, contents: &str, mode: u32) {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let same_content = fs::read(path).map_or(false, |existing| existing == contents.as_bytes());
+    if !same_content {
+        fs::write(path, contents)
+            .unwrap_or_else(|error| panic!("Failed to write {}: {error}", path.display()));
+    }
+    let same_mode = fs::metadata(path).map_or(false, |meta| meta.permissions().mode() & 0o7777 == mode);
+    if !same_mode {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))
+            .unwrap_or_else(|error| panic!("Failed to set permissions of {}: {error}", path.display()));
+    }
+}
+
+/// Seeds a launcher on the desktop once: written only when absent, so a user's own edits
+/// are never clobbered and deleting it re-seeds it on the next launch.
+fn seed_desktop_file(path: &Path, contents: &str) {
+    if !path.exists() {
+        write_executable(path, contents);
+    }
 }
 
 fn setup_xfce_wayland(options: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
-    let username = get_application_context().local_config.user.username;
-    let home_dir = chroot_home_dir(fs_root, &username);
+    let config = get_application_context().local_config;
+    let home_dir = chroot_home_dir(fs_root, &config.user.username);
     let labwc_dir = home_dir.join(".config/xfce4/labwc");
 
-    let ui_scale = android_ui_scale(density_dpi(&options.android_app));
-    // Xft uses 96 as the default logical DPI; multiply by scale for HiDPI fonts.
-    let xft_dpi = ui_scale * 96;
+    // First DPI of the session, used until the host reports its output state. From then on
+    // `localdesktop-wlroots-output` and the session init script follow the host's UI scale.
+    let ui_scale = guest::effective_ui_scale(&config.display, density_dpi(&options.android_app));
+    let xft_dpi = guest::xft_dpi(ui_scale);
 
     // Still useful for Xwayland clients started by labwc.
     let xresources_path = home_dir.join(".Xresources");
@@ -911,38 +1064,18 @@ fn setup_xfce_wayland(options: &SetupOptions) -> StageOutput {
 
     // https://docs.xfce.org/xfce/getting-started — `startxfce4 --wayland` starts the
     // session manager, panel, compositor (labwc), and desktop manager.
-    write_executable(
+    write_if_changed(
         &fs_root.join("usr/local/bin/startxfce4-localdesktop"),
-        &format!(
-            r#"#!/bin/sh
-export PIPEWIRE_RUNTIME_DIR={PIPEWIRE_GUEST_RUNTIME_DIR}
-export PULSE_SERVER={PULSE_GUEST_SERVER}
-: "${{XDG_RUNTIME_DIR:={PIPEWIRE_GUEST_RUNTIME_DIR}}}"
-export XDG_RUNTIME_DIR
-# Electron adds --no-sandbox when this is set; Android has no user namespaces for it to use.
-export ELECTRON_DISABLE_SANDBOX=1
-exec startxfce4 --wayland "$@"
-"#
-        ),
+        &guest::render_startxfce4(),
+        0o755,
     );
 
-    // Runs from ~/.config/autostart once xfsettingsd is up; reinforces pre-seeded /Xft/DPI and
-    // refreshes the --no-sandbox application entries for anything installed since last session.
-    write_executable(
+    // Runs from ~/.config/autostart once the Xfce session is starting; applies the host's
+    // Xft DPI and refreshes the --no-sandbox application entries when apps changed.
+    write_if_changed(
         &fs_root.join("usr/local/bin/localdesktop-xfce-session-init"),
-        &format!(
-            r#"#!/bin/sh
-for _ in $(seq 1 50); do
-    xfconf-query -c xsettings -lv >/dev/null 2>&1 && break
-    sleep 0.1
-done
-
-xfconf-query -c xsettings -p /Xft/DPI -n -t int -s {xft_dpi} 2>/dev/null || \
-xfconf-query -c xsettings -p /Xft/DPI -t int -s {xft_dpi}
-
-/usr/local/bin/localdesktop-no-sandbox-entries
-"#
-        ),
+        &guest::render_session_init(xft_dpi),
+        0o755,
     );
 
     let desktop_dir = home_dir.join("Desktop");
@@ -972,6 +1105,14 @@ StartupNotify=true
     }
     // Remove the launcher's former name so existing installs pick up the rename.
     let _ = fs::remove_file(desktop_dir.join("localdesktop-documentation.desktop"));
+    seed_desktop_file(
+        &desktop_dir.join("localdesktop-settings.desktop"),
+        &guest::settings_desktop_entry(),
+    );
+    seed_desktop_file(
+        &desktop_dir.join("localdesktop-update.desktop"),
+        &guest::update_desktop_entry(),
+    );
 
     // Open PDFs (e.g. the manual below) in Evince instead of Firefox. Create-if-missing
     // so we don't stomp a user's own default-app choices.
@@ -1017,76 +1158,21 @@ OnlyShowIn=XFCE;
     let _ = fs::remove_file(autostart_dir.join("localdesktop-wlroots-output.desktop"));
     let _ = fs::remove_file(fs_root.join("usr/local/bin/localdesktop-xfce-scale"));
 
-    // labwc runs wlr-randr from its autostart script once the compositor owns the output
-    // (labwc-config.5). Xfce stores labwc config under ~/.config/xfce4/labwc/.
+    // labwc runs the output watcher from its autostart script once the compositor owns the
+    // output (labwc-config.5). Xfce stores labwc config under ~/.config/xfce4/labwc/.
     //
-    // Host geometry is written to /tmp/localdesktop-output by the Android compositor before
-    // launch; the script waits for that file instead of applying a hardcoded fallback mode.
-    write_executable(
+    // The Android compositor writes /tmp/localdesktop-output (mode, UI scale, refresh rate) and
+    // pokes /tmp/localdesktop-output.fifo whenever the host display changes; the watcher blocks
+    // on that FIFO instead of polling, and also keeps the Xft DPI of Xwayland clients current.
+    write_if_changed(
+        &fs_root.join("usr/local/lib/localdesktop/output-lib.sh"),
+        guest::OUTPUT_LIB,
+        0o644,
+    );
+    write_if_changed(
         &fs_root.join("usr/local/bin/localdesktop-wlroots-output"),
-        &format!(
-            r#"#!/bin/sh
-# Keep labwc's wlroots output aligned with the Android host window.
-state_file="/tmp/localdesktop-output"
-lock_file="/tmp/localdesktop-wlroots-output.pid"
-fallback_scale="{ui_scale}"
-
-if [ -r "$lock_file" ]; then
-    old_pid=$(cat "$lock_file" 2>/dev/null)
-    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
-        exit 0
-    fi
-fi
-echo "$$" > "$lock_file"
-trap 'rm -f "$lock_file"' EXIT INT TERM
-
-first_output() {{
-    wlr-randr 2>/dev/null | awk 'NF > 0 && $1 !~ /^Modes:/ && $1 !~ /^Current:/ && $1 !~ /^Position:/ && $1 !~ /^Transform:/ && $1 !~ /^Scale:/ {{ print $1; exit }}'
-}}
-
-read_output_state() {{
-    target_mode=""
-    target_scale="$fallback_scale"
-    if [ -r "$state_file" ]; then
-        . "$state_file"
-        target_mode="${{LOCALDESKTOP_OUTPUT_MODE:-}}"
-        target_scale="${{LOCALDESKTOP_OUTPUT_SCALE:-$target_scale}}"
-    fi
-    case "$target_mode" in
-        *x*) ;;
-        *) return 1 ;;
-    esac
-    case "$target_scale" in
-        ''|*[!0-9]*) target_scale="$fallback_scale" ;;
-    esac
-}}
-
-apply_output() {{
-    output="$1"
-    wlr-randr --output "$output" --custom-mode "${{target_mode}}@60Hz" --scale "$target_scale" >/dev/null 2>&1 && return 0
-    wlr-randr --output "$output" --custom-mode "$target_mode" --scale "$target_scale" >/dev/null 2>&1 && return 0
-    wlr-randr --output "$output" --mode "$target_mode" --scale "$target_scale" >/dev/null 2>&1 && return 0
-    wlr-randr --output "$output" --scale "$target_scale" >/dev/null 2>&1 && return 0
-    return 1
-}}
-
-last_config=""
-while true; do
-    if ! read_output_state; then
-        sleep 0.2
-        continue
-    fi
-    output=$(first_output)
-    if [ -n "$output" ]; then
-        config="$output $target_mode $target_scale"
-        if [ "$config" != "$last_config" ] && apply_output "$output"; then
-            last_config="$config"
-        fi
-    fi
-    sleep 1
-done
-"#
-        ),
+        guest::OUTPUT_WATCHER,
+        0o755,
     );
 
     let _ = fs::create_dir_all(&labwc_dir);
@@ -1190,17 +1276,23 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     };
 
     let stages: Vec<SetupStage> = vec![
-        Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (extract)
+        Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (verified download, extract)
         Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
-        Box::new(install_dependencies),         // Step 3. Install dependencies
-        Box::new(setup_machine_id),             // Step 4. Seed /etc/machine-id for D-Bus clients
-        Box::new(setup_pipewire_package_lock), // Step 5. Hold guest PipeWire packages for the Android-side PipeWire POC
-        Box::new(setup_firefox_config),        // Step 6. Setup Firefox config
-        Box::new(setup_fake_bwrap), // Step 7. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
-        Box::new(setup_chromium_no_sandbox), // Step 8. Make Chromium/Electron apps launchable without a terminal
-        Box::new(setup_onboard_signal_fix), // Step 9. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
-        Box::new(setup_xfce_wayland),       // Step 10. Setup Xfce Wayland launch and HiDPI scaling
-        Box::new(fix_xkb_symlink),          // Step 11. Fix xkb symlink
+        Box::new(setup_pacman_mirrors),         // Step 3. HTTPS pacman mirrors
+        Box::new(setup_pacman_keyring),         // Step 4. Fresh pacman signing key (one time)
+        Box::new(install_dependencies),         // Step 5. Install dependencies
+        Box::new(setup_machine_id),             // Step 6. Seed /etc/machine-id for D-Bus clients
+        Box::new(setup_pipewire_package_lock), // Step 7. Hold guest PipeWire packages for the Android-side PipeWire POC
+        Box::new(setup_guest_tuning), // Step 8. makepkg flags and the performance/GPU session environment
+        Box::new(setup_firefox_config), // Step 9. Setup Firefox config
+        Box::new(setup_fake_bwrap), // Step 10. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
+        Box::new(setup_chromium_no_sandbox), // Step 11. Make Chromium/Electron apps launchable without a terminal
+        Box::new(setup_onboard_signal_fix), // Step 12. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
+        Box::new(setup_settings), // Step 13. Settings template, update command and launchers
+        Box::new(setup_xfce_wayland), // Step 14. Setup Xfce Wayland launch and HiDPI scaling
+        Box::new(setup_gpu),      // Step 15. Opt-in: Adreno GPU Mesa build ([gpu] enabled)
+        Box::new(setup_x86),      // Step 16. Opt-in: Box64 / Wine ([x86] box64, wine)
+        Box::new(fix_xkb_symlink), // Step 17. Fix xkb symlink
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
@@ -1270,22 +1362,9 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     };
 
     if fully_installed {
-        PolarBearBackend::Wayland(WaylandBackend {
-            compositor: Compositor::build().expect("Failed to build compositor"),
-            graphic_renderer: None,
-            clock: Clock::new(),
-            key_counter: 0,
-            guest_scale_factor: scale_factor(&android_app),
-            touch_points: std::collections::HashMap::new(),
-            scroll_centroid: None,
-            touch_mode: TouchMode::Undecided,
-            touch_down_position: None,
-            touch_down_time: None,
-            touch_slop_px: touch_slop_px(&android_app),
-            long_press_timeout_ms: long_press_timeout_ms(&android_app),
-            pointer_pressed: false,
-            android_app,
-        })
+        PolarBearBackend::Wayland(
+            WaylandBackend::new(android_app).expect("Failed to build compositor"),
+        )
     } else {
         PolarBearBackend::WebView(WebviewBackend::build(receiver, progress))
     }
