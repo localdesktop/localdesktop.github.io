@@ -6,8 +6,18 @@ use std::{
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Android application id of this fork. Distinct from upstream's `app.polarbear`
+/// so both can be installed side by side (each keeps its own rootfs).
+/// The Java classes keep the `app.polarbear` package; only the application id changes.
+macro_rules! android_package {
+    () => {
+        "app.polarbear.fold"
+    };
+}
+pub const ANDROID_PACKAGE: &str = android_package!();
+
 #[cfg(not(test))]
-pub const ARCH_FS_ROOT: &str = "/data/data/app.polarbear/files/arch";
+pub const ARCH_FS_ROOT: &str = concat!("/data/data/", android_package!(), "/files/arch");
 #[cfg(test)]
 pub const ARCH_FS_ROOT: &str = "/data/local/tmp/arch";
 
@@ -53,6 +63,136 @@ pub struct LocalConfig {
     /// => So make sure that every config group has a `#[serde(default)]` attribute to avoid invalid sections breaking unrelated parts of the config.
     #[serde(default)]
     pub command: CommandConfig,
+
+    #[serde(default)]
+    pub display: DisplayConfig,
+
+    #[serde(default)]
+    pub input: InputConfig,
+
+    #[serde(default)]
+    pub gpu: GpuConfig,
+
+    #[serde(default)]
+    pub x86: X86Config,
+
+    #[serde(default)]
+    pub session: SessionConfig,
+}
+
+/// How the hinge splits the screen when the device is half-folded (Flex mode).
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LaptopMode {
+    /// Split into desktop (top) + touchpad (bottom) only while the hinge sensor reports half-open.
+    #[default]
+    Auto,
+    /// Always split while the window is landscape.
+    On,
+    /// Never split.
+    Off,
+}
+
+/// How single-finger touches on the desktop area are interpreted.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TouchInputMode {
+    /// The pointer jumps to the finger (tablet-like). Upstream behaviour.
+    #[default]
+    Direct,
+    /// The whole screen acts as a laptop touchpad (relative pointer movement).
+    Touchpad,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct DisplayConfig {
+    /// Fraction of physical pixels the guest renders at (0.5..=1.0). Lower = faster, blurrier.
+    pub render_scale: f32,
+    /// Guest UI scale. 0 = derive from the Android density on every display change.
+    /// Fractional values (e.g. 2.5) are passed to labwc as-is.
+    pub ui_scale: f32,
+    pub laptop_mode: LaptopMode,
+    /// Preferred refresh rate hint in Hz. 0 = highest the display offers.
+    pub refresh_rate: u32,
+    pub keep_screen_on: bool,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            render_scale: 1.0,
+            ui_scale: 0.0,
+            laptop_mode: LaptopMode::Auto,
+            refresh_rate: 0,
+            keep_screen_on: true,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct InputConfig {
+    pub touch_mode: TouchInputMode,
+    /// Capture an external mouse/touchpad (DeX, Bluetooth) so the guest gets relative motion.
+    pub pointer_capture: bool,
+    pub key_repeat_delay_ms: i32,
+    /// Repeats per second.
+    pub key_repeat_rate: i32,
+}
+
+impl Default for InputConfig {
+    fn default() -> Self {
+        Self {
+            touch_mode: TouchInputMode::Direct,
+            pointer_capture: false,
+            key_repeat_delay_ms: 400,
+            key_repeat_rate: 30,
+        }
+    }
+}
+
+/// Experimental hardware acceleration (Mesa Turnip/Freedreno on KGSL). Off by default.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct GpuConfig {
+    pub enabled: bool,
+    /// `freedreno` (GL via Freedreno-on-KGSL) or `zink` (GL via Zink on Turnip).
+    pub driver: String,
+}
+
+impl Default for GpuConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            driver: "freedreno".to_string(),
+        }
+    }
+}
+
+/// Optional x86 compatibility layers, installed on demand by setup.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct X86Config {
+    /// Install Box64 so x86_64 Linux programs run.
+    pub box64: bool,
+    /// Install x86_64 Wine (runs under Box64; implies `box64`).
+    pub wine: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct SessionConfig {
+    /// Keep a foreground service (ongoing notification) so Android does not kill the session in the background.
+    pub foreground_service: bool,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            foreground_service: true,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
