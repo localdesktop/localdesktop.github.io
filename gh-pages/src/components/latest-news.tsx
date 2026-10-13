@@ -23,7 +23,7 @@ export default function LatestNews() {
     <section className="flex items-center justify-center py-8 w-full">
       <div className="container mx-auto !space-y-8">
         <h2 className="text-3xl font-bold text-center">
-          <a href="/blog">Latest News</a>
+          <a href="/blog/">Latest News</a>
         </h2>
         <div className="flex flex-wrap gap-6">
           {posts.length > 0 && (

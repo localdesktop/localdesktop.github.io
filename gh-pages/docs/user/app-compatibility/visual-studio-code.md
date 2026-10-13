@@ -12,4 +12,4 @@ You can install it from the [AUR](https://aur.archlinux.org/). See [How to insta
 
 - Launching as a root user requires the `--user-data-dir` flag. [Why?](https://stackoverflow.com/a/70453798)
 
-However, it is **recommended to use a non-root user** for running Visual Studio Code. See [Creating a Non-root User](/docs/user/2-creating-a-non-root-user.md) for instructions.
+However, it is **recommended to use a non-root user** for running Visual Studio Code. See [Creating a Non-root User](/docs/user/creating-a-non-root-user/) for instructions.
