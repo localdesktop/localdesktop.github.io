@@ -4,50 +4,60 @@ title: Configurations
 
 ## Config file
 
-On launch, Local Desktop reads the config file located at:
+On launch, Local Desktop looks for the config file at:
 
-```
+```text
 /etc/localdesktop/localdesktop.toml
 ```
 
-If the content of the config file is invalid (for example, invalid TOML format), it will be **replaced** with the default config. You can still view its original content in:
+The file is optional. When it is missing, Local Desktop uses its built-in defaults. Create the path from the default root session when you need custom settings:
 
-```
-/etc/localdesktop/localdesktop.bak
+```bash
+mkdir -p /etc/localdesktop
+touch /etc/localdesktop/localdesktop.toml
 ```
 
-Some important notes:
-- Although TOML does support multi-line strings, Local Desktop requires each config to fit in a **single line**. You can use `\n` for multi-line config values if needed.
-- We use **all lowercase** for config **keys**. For config **values**, the content is **case-sensitive**.
+If the file is malformed, Local Desktop uses the built-in defaults for that launch. The current implementation does not repair the file or create a backup automatically, so correct or remove the invalid file before trying again.
+
+Important rules:
+
+- Each setting must fit on a **single line**. Use `\n` inside a quoted value when a command needs an embedded newline.
+- Config keys are **lowercase**.
+- Config values are case-sensitive.
+- Do not repeat a key in the same TOML table. Duplicate keys are invalid TOML and must not be used to list alternative commands.
 
 ## Config schema
 
-We might draw a table or have a mechanism to generate the config schema automatically here. But for now, please check the code for the schema: [localdesktop/src/core/config.rs#L28-L87](https://github.com/localdesktop/localdesktop.github.io/blob/main/src/core/config.rs#L28-L87).
+The schema is defined in [`src/core/config.rs`](https://github.com/localdesktop/localdesktop.github.io/blob/main/src/core/config.rs#L44-L78). The main groups are `[user]` and `[command]`.
 
 ## Special `try_*` configs
 
-Some configs are so important that a misconfiguration can leave you stuck on a black screen. So we support a special `try_*` variant of each config. These configs have **higher priority**, but only get applied **once**.
+A bad user or launch setting can leave a session on a black screen. The `try_*` variant of a setting provides a one-launch recovery mechanism.
 
-For example, you just have to clone a config and prefix it with `try_`:
-
-```toml
-[user]
-username="root"
-try_username="teddy"
-```
-
-The next time Local Desktop starts, it will log in as `teddy` instead of `root`. But then the `try_` configs will be commented out like this:
+Clone a normal setting and prefix its key with `try_`:
 
 ```toml
 [user]
-username="root"
-# try_username="teddy"
+username = "root"
+try_username = "teddy"
 ```
 
-So if the config didn't work, and you got stuck on a black screen, you can just restart Local Desktop, and things will go back to normal. Then you can uncomment the config and try with another value. If the config does work, you just have to remove the `try_` prefix to persist the config.
+On the next launch, `try_username` overrides `username`, so Local Desktop attempts to launch as `teddy`. While reading the file, Local Desktop comments out the one-shot line:
 
-Some important notes:
-- This rule applies to **all** configs.
-- It is not required for the `try_` config to be inside the same group as the normal config. But it is strongly recommended to do so, and to put the `try_` variant right under its normal variant.
-- If a normal config appears multiple times, the **first** entry is applied. If a `try_` config appears multiple times, the **last** entry is applied. This behavior is not guaranteed, and is subject to change. But in general, it is **invalid** to have duplicate config keys inside a TOML file.
-- `try_x` and `x` are not duplicate keys. `try_x` always has higher priority than `x`.
+```toml
+[user]
+username = "root"
+# try_username = "teddy"
+```
+
+If the test fails, restart Local Desktop and the normal `username` value is used again. If the test succeeds, replace the normal value and remove the `try_` prefix to make the change persistent.
+
+Important rules:
+
+- This mechanism applies to every supported setting.
+- A `try_*` setting overrides its corresponding normal setting for one launch.
+- A `try_*` key and its normal key are different keys; for example, `try_launch` and `launch` may coexist.
+- The same key must not appear more than once. In particular, a table may contain only one `try_launch` entry.
+- Keep each `try_*` setting directly below its normal counterpart when both are present.
+
+See [Using other Desktop Environments](/docs/user/custom-de) for safe KDE examples and recovery instructions.
