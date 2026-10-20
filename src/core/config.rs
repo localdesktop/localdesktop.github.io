@@ -7,7 +7,7 @@ use std::{
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(not(test))]
-pub const ARCH_FS_ROOT: &str = "/data/data/app.polarbear/files/arch";
+pub const ARCH_FS_ROOT: &str = "/data/data/io.github.localdesktop/files/arch";
 #[cfg(test)]
 pub const ARCH_FS_ROOT: &str = "/data/local/tmp/arch";
 
