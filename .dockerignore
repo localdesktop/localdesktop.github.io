@@ -11,3 +11,5 @@ localdesktop.apk
 Makefile
 README.md
 target
+vscode-extension
+.localdesktop

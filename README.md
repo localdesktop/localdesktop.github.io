@@ -114,16 +114,16 @@ Recommended setup:
 - **Extensions**:
 
   - [Rust Analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
-  - [Android Debug](https://marketplace.visualstudio.com/items?itemName=nisargjhaveri.android-debug)
-  - [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
+  - Local Desktop Dev, the project's own extension in [`vscode-extension/`](./vscode-extension)
+  - [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) 1.11.4 or newer
 
 - **Instructions**:
 
   1. Open Visual Studio Code.
-  2. Launch the `[Android] Debug` configuration from the debug panel. This will:
+  2. Press <kbd>F5</kbd> (the `Local Desktop: Debug on Android` configuration). This will:
      - Build the Rust code into an APK.
-     - Install the APK on a selectable device, and launch the app in debug mode.
-     - Redirect stdout/stderr output to the terminal.
+     - Install the APK on the selected device (USB or Wi‑Fi), and launch the app with LLDB attached.
+     - Mirror the app's stdout/stderr into the Debug Console.
 
 ![It is easy to debug](./gh-pages/static/img/debugable.webp)
 

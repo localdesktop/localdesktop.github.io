@@ -1,7 +1,8 @@
 {
   "recommendations": [
     "rust-lang.rust-analyzer",
-    "nisargjhaveri.android-debug",
+    "mister-teddy.localdesktop-dev",
     "vadimcn.vscode-lldb"
-  ]
+  ],
+  "unwantedRecommendations": ["nisargjhaveri.android-debug"]
 }

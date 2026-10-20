@@ -1,0 +1,182 @@
+name: VS Code extension
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "vscode-extension/**"
+      - ".github/workflows/vscode-extension.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "vscode-extension/**"
+      - ".github/workflows/vscode-extension.yml"
+  workflow_dispatch:
+    inputs:
+      pre_release:
+        description: "Publish as a pre-release on Open VSX"
+        type: boolean
+        default: false
+      github_release:
+        description: "Also create a (non-latest) GitHub release with the .vsix"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vscode-ext-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    working-directory: vscode-extension
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      vsix: ${{ steps.package.outputs.vsix }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint workflows
+        working-directory: .
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: vscode-extension/package.json
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: vscode-extension/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Read version
+        id: meta
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Unit tests
+        run: pnpm run test
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Integration tests
+        run: xvfb-run -a pnpm run test:vscode
+
+      - name: Package
+        id: package
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          VSIX="localdesktop-dev-${VERSION}.vsix"
+          pnpm exec vsce package --no-dependencies -o "$VSIX"
+          echo "vsix=${VSIX}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v7
+        with:
+          path: vscode-extension/${{ steps.package.outputs.vsix }}
+          if-no-files-found: error
+          archive: false
+
+      - name: Hand VSIX to the publish job
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7
+        with:
+          name: vsix
+          path: vscode-extension/${{ steps.package.outputs.vsix }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: open-vsx
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: vscode-extension/package.json
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: vscode-extension/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download VSIX
+        uses: actions/download-artifact@v5
+        with:
+          name: vsix
+          path: vscode-extension
+
+      - name: Publish to Open VSX
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          VSIX: ${{ needs.build.outputs.vsix }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          PRE_RELEASE: ${{ inputs.pre_release && '--pre-release' || '' }}
+        run: |
+          if curl -sf "https://open-vsx.org/api/mister-teddy/localdesktop-dev/${VERSION}" > /dev/null; then
+            echo "Open VSX already has $VERSION"
+          else
+            # shellcheck disable=SC2086
+            pnpm exec ovsx publish "$VSIX" $PRE_RELEASE
+          fi
+
+      # extension-v* never matches the app's v*.*.* tag filters.
+      - name: Tag extension release
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          TAG="extension-v${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" > /dev/null; then
+            echo "Tag ${TAG} already exists"
+          else
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/${TAG}"
+          fi
+
+      - name: GitHub release
+        if: inputs.github_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: extension-v${{ needs.build.outputs.version }}
+          name: VS Code extension ${{ needs.build.outputs.version }}
+          prerelease: true
+          make_latest: "false"
+          files: vscode-extension/${{ needs.build.outputs.vsix }}

@@ -1,18 +1,21 @@
 {
-  // Use IntelliSense to learn about possible attributes.
-  // Hover to view descriptions of existing attributes.
-  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  // Debugging Local Desktop on Android needs the "Local Desktop Dev" extension (vscode-extension/)
+  // and CodeLLDB. F5 builds with xbuild, installs on the selected device, launches the app waiting
+  // for the debugger and attaches LLDB. See gh-pages/docs/developer/4-how-to-dev.md.
   "version": "0.2.0",
   "configurations": [
     {
+      "type": "localdesktop",
       "request": "launch",
-      "type": "android-debug",
-      "name": "[Android] Debug",
-      "preLaunchTask": "[Android] Build Debug",
-      "target": "select",
-      "mode": "native",
-      "apkPath": "${workspaceFolder}/target/x/debug/android/gradle/app/build/outputs/apk/debug/app-debug.apk",
-      "launchActivity": "android.app.NativeActivity"
+      "name": "Local Desktop: Debug on Android",
+      // "auto" = the selected/only device, "pick" = always ask, or an adb serial.
+      "device": "auto"
+    },
+    {
+      "type": "localdesktop",
+      "request": "attach",
+      "name": "Local Desktop: Attach to Running App",
+      "pid": "${command:localdesktop.pickAppProcess}"
     }
   ]
 }

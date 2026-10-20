@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "localdesktop": {
+      "command": "node",
+      "args": ["vscode-extension/bin/localdesktop-mcp.cjs"]
+    }
+  }
+}
