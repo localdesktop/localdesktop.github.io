@@ -28,10 +28,15 @@
       }
     },
     {
+      // Everything the app's uid logs (Rust stdout/stderr, log:: output, proot and PipeWire children).
       "type": "shell",
       "label": "[Android] Logcat",
       "command": "sh",
-      "args": ["-c", "adb logcat -c && adb logcat -s RustStdoutStderr"]
+      "args": [
+        "-c",
+        "PKG=$(awk '/^ *package:/ {print $2; exit}' manifest.yaml); UID_=$(adb shell pm list packages -U \"$PKG\" | sed -n \"s/^package:$PKG uid://p\" | tr -d '\\r'); adb logcat -c && adb logcat --uid=\"$UID_\""
+      ],
+      "problemMatcher": []
     }
   ]
 }

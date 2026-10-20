@@ -1,0 +1,1343 @@
+{
+  "name": "localdesktop-dev",
+  "displayName": "Local Desktop Dev",
+  "description": "Build, debug and release Local Desktop: one-key Android debugging, agent device tools (MCP), CI builds, release management, website editing and maintainer chat.",
+  "version": "0.1.0",
+  "publisher": "mister-teddy",
+  "license": "GPL-3.0-only",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/localdesktop/localdesktop.github.io.git",
+    "directory": "vscode-extension"
+  },
+  "bugs": {
+    "url": "https://github.com/localdesktop/localdesktop.github.io/issues"
+  },
+  "homepage": "https://localdesktop.github.io/docs/developer/",
+  "packageManager": "pnpm@10.21.0",
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "categories": [
+    "Debuggers",
+    "Other"
+  ],
+  "keywords": [
+    "android",
+    "rust",
+    "lldb",
+    "adb",
+    "mcp"
+  ],
+  "main": "./dist/extension.js",
+  "bin": {
+    "localdesktop": "./bin/localdesktop.cjs",
+    "localdesktop-mcp": "./bin/localdesktop-mcp.cjs"
+  },
+  "activationEvents": [
+    "workspaceContains:manifest.yaml",
+    "onDebugResolve:localdesktop",
+    "onDebugDynamicConfigurations:localdesktop"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Local Desktop Dev runs build tools and adb from the workspace."
+    }
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "localdesktop",
+          "title": "Local Desktop",
+          "icon": "media/activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "localdesktop": [
+        {
+          "id": "localdesktop.devices",
+          "name": "Devices",
+          "icon": "$(device-mobile)"
+        },
+        {
+          "id": "localdesktop.releases",
+          "name": "Releases & CI",
+          "icon": "$(rocket)"
+        },
+        {
+          "id": "localdesktop.website",
+          "name": "Website",
+          "icon": "$(globe)",
+          "when": "localdesktop.hasWebsite"
+        },
+        {
+          "id": "localdesktop.chat",
+          "name": "Chat",
+          "type": "webview",
+          "icon": "$(comment-discussion)"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "localdesktop.devices",
+        "contents": "No Android device connected.\n[Pair over Wi‑Fi (QR)](command:localdesktop.devices.pairQr)\n[Pair with code](command:localdesktop.devices.pairCode)\n[Connect to ip:port](command:localdesktop.devices.connect)\nOr plug in a phone with USB debugging enabled.\n[Run environment check](command:localdesktop.doctor)",
+        "when": "localdesktop.devices.count == 0"
+      },
+      {
+        "view": "localdesktop.releases",
+        "contents": "Sign in with GitHub to see releases, CI runs and pull requests.\n[Sign in with GitHub](command:localdesktop.signIn)\n[Use a personal access token](command:localdesktop.signInWithToken)",
+        "when": "!localdesktop.signedIn"
+      }
+    ],
+    "commands": [
+      {
+        "command": "localdesktop.doctor",
+        "title": "Check Environment",
+        "category": "Local Desktop",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "localdesktop.devices.refresh",
+        "title": "Refresh Devices",
+        "category": "Local Desktop",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "localdesktop.devices.select",
+        "title": "Select Device",
+        "category": "Local Desktop",
+        "icon": "$(check)"
+      },
+      {
+        "command": "localdesktop.devices.pairQr",
+        "title": "Pair Device over Wi‑Fi (QR Code)",
+        "category": "Local Desktop",
+        "icon": "$(broadcast)"
+      },
+      {
+        "command": "localdesktop.devices.pairCode",
+        "title": "Pair Device over Wi‑Fi (Pairing Code)",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.devices.connect",
+        "title": "Connect to Device over Wi‑Fi",
+        "category": "Local Desktop",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "localdesktop.devices.disconnect",
+        "title": "Disconnect Device",
+        "category": "Local Desktop",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "localdesktop.devices.tcpip",
+        "title": "Switch USB Device to Wi‑Fi (adb tcpip)",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.devices.screenshot",
+        "title": "Take Screenshot",
+        "category": "Local Desktop",
+        "icon": "$(device-camera)"
+      },
+      {
+        "command": "localdesktop.devices.mirror",
+        "title": "Mirror Screen (scrcpy)",
+        "category": "Local Desktop",
+        "icon": "$(screen-full)"
+      },
+      {
+        "command": "localdesktop.devices.installApk",
+        "title": "Install APK on Device…",
+        "category": "Local Desktop",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "localdesktop.app.start",
+        "title": "Start App",
+        "category": "Local Desktop",
+        "icon": "$(play)"
+      },
+      {
+        "command": "localdesktop.app.stop",
+        "title": "Stop App",
+        "category": "Local Desktop",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "localdesktop.app.restart",
+        "title": "Restart App",
+        "category": "Local Desktop",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "localdesktop.logcat.show",
+        "title": "Show Logcat",
+        "category": "Local Desktop",
+        "icon": "$(output)"
+      },
+      {
+        "command": "localdesktop.logcat.clear",
+        "title": "Clear Logcat",
+        "category": "Local Desktop",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "localdesktop.logcat.filter",
+        "title": "Filter Logcat…",
+        "category": "Local Desktop",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "localdesktop.logcat.openFile",
+        "title": "Open Logcat File",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.build.debug",
+        "title": "Build Debug APK",
+        "category": "Local Desktop",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "localdesktop.build.release",
+        "title": "Build Release APK",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.build.installXbuild",
+        "title": "Install Patched xbuild",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.pickAppProcess",
+        "title": "Pick Local Desktop Process",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.agent.setup",
+        "title": "Set Up Agent Tools (MCP)…",
+        "category": "Local Desktop",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "localdesktop.signIn",
+        "title": "Sign in with GitHub",
+        "category": "Local Desktop",
+        "icon": "$(github)"
+      },
+      {
+        "command": "localdesktop.signInWithToken",
+        "title": "Sign in with a Personal Access Token",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.signOut",
+        "title": "Sign out (forget token)",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.releases.refresh",
+        "title": "Refresh Releases & CI",
+        "category": "Local Desktop",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "localdesktop.ci.buildApk",
+        "title": "Build APK on CI",
+        "category": "Local Desktop",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "localdesktop.ci.buildApkWithOptions",
+        "title": "Build APK on CI (Options)…",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.ci.openRun",
+        "title": "Open Run on GitHub",
+        "category": "Local Desktop",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "localdesktop.ci.cancelRun",
+        "title": "Cancel Run",
+        "category": "Local Desktop",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "localdesktop.ci.rerunRun",
+        "title": "Re-run",
+        "category": "Local Desktop",
+        "icon": "$(debug-rerun)"
+      },
+      {
+        "command": "localdesktop.ci.rerunFailed",
+        "title": "Re-run Failed Jobs",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.ci.downloadArtifact",
+        "title": "Download Artifact",
+        "category": "Local Desktop",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "localdesktop.ci.installArtifact",
+        "title": "Install on Device",
+        "category": "Local Desktop",
+        "icon": "$(device-mobile)"
+      },
+      {
+        "command": "localdesktop.release.downloadAsset",
+        "title": "Download Asset",
+        "category": "Local Desktop",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "localdesktop.release.installAsset",
+        "title": "Install on Device",
+        "category": "Local Desktop",
+        "icon": "$(device-mobile)"
+      },
+      {
+        "command": "localdesktop.release.copyLink",
+        "title": "Copy Download Link",
+        "category": "Local Desktop",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "localdesktop.release.editNotes",
+        "title": "Edit Release Notes",
+        "category": "Local Desktop",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "localdesktop.release.openOnGitHub",
+        "title": "Open on GitHub",
+        "category": "Local Desktop",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "localdesktop.release.uploadToPlay",
+        "title": "Upload to Google Play (alpha)…",
+        "category": "Local Desktop",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "localdesktop.pr.setReleaseLabel",
+        "title": "Set Release Label…",
+        "category": "Local Desktop",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "localdesktop.pr.editReleaseNotes",
+        "title": "Edit Release Notes (PR Body)",
+        "category": "Local Desktop",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "localdesktop.pr.create",
+        "title": "Create Pull Request…",
+        "category": "Local Desktop",
+        "icon": "$(git-pull-request-create)"
+      },
+      {
+        "command": "localdesktop.pr.open",
+        "title": "Open Pull Request on GitHub",
+        "category": "Local Desktop",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "localdesktop.website.refresh",
+        "title": "Refresh Website",
+        "category": "Local Desktop",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "localdesktop.website.newPost",
+        "title": "New Blog Post…",
+        "category": "Local Desktop",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "localdesktop.website.newDoc",
+        "title": "New Doc Page…",
+        "category": "Local Desktop",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "localdesktop.website.newCategory",
+        "title": "New Doc Category…",
+        "category": "Local Desktop",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "localdesktop.website.addImage",
+        "title": "Add Image to Post…",
+        "category": "Local Desktop",
+        "icon": "$(file-media)"
+      },
+      {
+        "command": "localdesktop.website.preview",
+        "title": "Preview Website",
+        "category": "Local Desktop",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "localdesktop.website.previewActive",
+        "title": "Preview This Page",
+        "category": "Local Desktop",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "localdesktop.website.build",
+        "title": "Build Website (Check Links)",
+        "category": "Local Desktop",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "localdesktop.website.publish",
+        "title": "Publish Website Changes (PR)…",
+        "category": "Local Desktop",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "localdesktop.website.openLive",
+        "title": "Open Live Page",
+        "category": "Local Desktop",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "localdesktop.website.deploy",
+        "title": "Deploy Website Now",
+        "category": "Local Desktop",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "localdesktop.realtime.setup",
+        "title": "Set Up Realtime Updates (Webhook)…",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.realtime.status",
+        "title": "Realtime Status",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.chat.setup",
+        "title": "Set Up Maintainer Chat…",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.chat.newChannel",
+        "title": "New Chat Channel…",
+        "category": "Local Desktop",
+        "icon": "$(add)"
+      },
+      {
+        "command": "localdesktop.chat.setPrivacy",
+        "title": "Change Channel Privacy…",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.chat.rotateKey",
+        "title": "Rotate Chat Encryption Key",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.chat.manageDevices",
+        "title": "Manage Chat Devices…",
+        "category": "Local Desktop"
+      },
+      {
+        "command": "localdesktop.chat.openInPanel",
+        "title": "Open Chat in Editor",
+        "category": "Local Desktop",
+        "icon": "$(multiple-windows)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "localdesktop.devices.select",
+          "when": "localdesktop.devices.count > 0"
+        },
+        {
+          "command": "localdesktop.devices.disconnect",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.pickAppProcess",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.ci.openRun",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.ci.cancelRun",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.ci.rerunRun",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.ci.rerunFailed",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.ci.downloadArtifact",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.ci.installArtifact",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.release.downloadAsset",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.release.installAsset",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.release.copyLink",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.release.openOnGitHub",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.website.openLive",
+          "when": "false"
+        },
+        {
+          "command": "localdesktop.realtime.setup",
+          "when": "localdesktop.chat.isAdmin"
+        },
+        {
+          "command": "localdesktop.chat.setup",
+          "when": "localdesktop.chat.isAdmin"
+        },
+        {
+          "command": "localdesktop.chat.newChannel",
+          "when": "localdesktop.chat.canMaintain"
+        },
+        {
+          "command": "localdesktop.chat.setPrivacy",
+          "when": "localdesktop.chat.canMaintain"
+        },
+        {
+          "command": "localdesktop.ci.buildApk",
+          "when": "localdesktop.canWrite && localdesktop.workflows.build"
+        },
+        {
+          "command": "localdesktop.ci.buildApkWithOptions",
+          "when": "localdesktop.canWrite && localdesktop.workflows.build"
+        },
+        {
+          "command": "localdesktop.release.uploadToPlay",
+          "when": "localdesktop.canWrite && localdesktop.workflows.play"
+        },
+        {
+          "command": "localdesktop.website.deploy",
+          "when": "localdesktop.canWrite && localdesktop.workflows.pages"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "localdesktop.devices.pairQr",
+          "when": "view == localdesktop.devices",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localdesktop.logcat.show",
+          "when": "view == localdesktop.devices",
+          "group": "navigation@2"
+        },
+        {
+          "command": "localdesktop.devices.refresh",
+          "when": "view == localdesktop.devices",
+          "group": "navigation@9"
+        },
+        {
+          "command": "localdesktop.devices.pairCode",
+          "when": "view == localdesktop.devices",
+          "group": "1_wireless@1"
+        },
+        {
+          "command": "localdesktop.devices.connect",
+          "when": "view == localdesktop.devices",
+          "group": "1_wireless@2"
+        },
+        {
+          "command": "localdesktop.devices.tcpip",
+          "when": "view == localdesktop.devices",
+          "group": "1_wireless@3"
+        },
+        {
+          "command": "localdesktop.build.debug",
+          "when": "view == localdesktop.devices",
+          "group": "2_build@1"
+        },
+        {
+          "command": "localdesktop.build.release",
+          "when": "view == localdesktop.devices",
+          "group": "2_build@2"
+        },
+        {
+          "command": "localdesktop.devices.installApk",
+          "when": "view == localdesktop.devices",
+          "group": "2_build@3"
+        },
+        {
+          "command": "localdesktop.agent.setup",
+          "when": "view == localdesktop.devices",
+          "group": "3_tools@1"
+        },
+        {
+          "command": "localdesktop.doctor",
+          "when": "view == localdesktop.devices",
+          "group": "3_tools@2"
+        },
+        {
+          "command": "localdesktop.ci.buildApk",
+          "when": "view == localdesktop.releases && localdesktop.canWrite && localdesktop.workflows.build",
+          "group": "navigation@1",
+          "alt": "localdesktop.ci.buildApkWithOptions"
+        },
+        {
+          "command": "localdesktop.releases.refresh",
+          "when": "view == localdesktop.releases",
+          "group": "navigation@9"
+        },
+        {
+          "command": "localdesktop.pr.setReleaseLabel",
+          "when": "view == localdesktop.releases && localdesktop.canWrite",
+          "group": "1_pr@1"
+        },
+        {
+          "command": "localdesktop.pr.editReleaseNotes",
+          "when": "view == localdesktop.releases && localdesktop.canWrite",
+          "group": "1_pr@2"
+        },
+        {
+          "command": "localdesktop.release.uploadToPlay",
+          "when": "view == localdesktop.releases && localdesktop.canWrite && localdesktop.workflows.play",
+          "group": "2_release@1"
+        },
+        {
+          "command": "localdesktop.website.deploy",
+          "when": "view == localdesktop.releases && localdesktop.canWrite && localdesktop.workflows.pages",
+          "group": "2_release@2"
+        },
+        {
+          "command": "localdesktop.realtime.setup",
+          "when": "view == localdesktop.releases && localdesktop.chat.isAdmin",
+          "group": "3_setup@1"
+        },
+        {
+          "command": "localdesktop.signOut",
+          "when": "view == localdesktop.releases && localdesktop.signedIn",
+          "group": "3_setup@9"
+        },
+        {
+          "command": "localdesktop.website.newPost",
+          "when": "view == localdesktop.website",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localdesktop.website.preview",
+          "when": "view == localdesktop.website",
+          "group": "navigation@2"
+        },
+        {
+          "command": "localdesktop.website.publish",
+          "when": "view == localdesktop.website && localdesktop.signedIn",
+          "group": "navigation@3"
+        },
+        {
+          "command": "localdesktop.website.refresh",
+          "when": "view == localdesktop.website",
+          "group": "navigation@9"
+        },
+        {
+          "command": "localdesktop.website.newDoc",
+          "when": "view == localdesktop.website",
+          "group": "1_new@1"
+        },
+        {
+          "command": "localdesktop.website.newCategory",
+          "when": "view == localdesktop.website",
+          "group": "1_new@2"
+        },
+        {
+          "command": "localdesktop.website.build",
+          "when": "view == localdesktop.website",
+          "group": "2_build@1"
+        },
+        {
+          "command": "localdesktop.website.deploy",
+          "when": "view == localdesktop.website && localdesktop.canWrite && localdesktop.workflows.pages",
+          "group": "2_build@2"
+        },
+        {
+          "command": "localdesktop.chat.newChannel",
+          "when": "view == localdesktop.chat && localdesktop.chat.canMaintain",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localdesktop.chat.openInPanel",
+          "when": "view == localdesktop.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "localdesktop.chat.manageDevices",
+          "when": "view == localdesktop.chat",
+          "group": "1_chat@1"
+        },
+        {
+          "command": "localdesktop.chat.setPrivacy",
+          "when": "view == localdesktop.chat && localdesktop.chat.canMaintain",
+          "group": "1_chat@2"
+        },
+        {
+          "command": "localdesktop.chat.rotateKey",
+          "when": "view == localdesktop.chat && localdesktop.chat.canWrite",
+          "group": "1_chat@3"
+        },
+        {
+          "command": "localdesktop.chat.setup",
+          "when": "view == localdesktop.chat && localdesktop.chat.isAdmin",
+          "group": "2_setup@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "localdesktop.devices.select",
+          "when": "view == localdesktop.devices && viewItem =~ /^device\\.ready(?!\\.selected)/",
+          "group": "inline@1"
+        },
+        {
+          "command": "localdesktop.devices.screenshot",
+          "when": "view == localdesktop.devices && viewItem =~ /^device\\.ready/",
+          "group": "inline@2"
+        },
+        {
+          "command": "localdesktop.devices.mirror",
+          "when": "view == localdesktop.devices && viewItem =~ /^device\\.ready/",
+          "group": "inline@3"
+        },
+        {
+          "command": "localdesktop.app.start",
+          "when": "view == localdesktop.devices && viewItem =~ /^device\\.ready/",
+          "group": "1_app@1"
+        },
+        {
+          "command": "localdesktop.app.stop",
+          "when": "view == localdesktop.devices && viewItem =~ /^device\\.ready/",
+          "group": "1_app@2"
+        },
+        {
+          "command": "localdesktop.app.restart",
+          "when": "view == localdesktop.devices && viewItem =~ /^device\\.ready/",
+          "group": "1_app@3"
+        },
+        {
+          "command": "localdesktop.devices.installApk",
+          "when": "view == localdesktop.devices && viewItem =~ /^device\\.ready/",
+          "group": "1_app@4"
+        },
+        {
+          "command": "localdesktop.logcat.show",
+          "when": "view == localdesktop.devices && viewItem =~ /^device\\.ready/",
+          "group": "2_tools@1"
+        },
+        {
+          "command": "localdesktop.devices.disconnect",
+          "when": "view == localdesktop.devices && viewItem =~ /\\.wifi/",
+          "group": "3_conn@1"
+        },
+        {
+          "command": "localdesktop.ci.openRun",
+          "when": "view == localdesktop.releases && viewItem =~ /^run\\./",
+          "group": "inline@9"
+        },
+        {
+          "command": "localdesktop.ci.cancelRun",
+          "when": "view == localdesktop.releases && viewItem == run.inProgress && localdesktop.canWrite",
+          "group": "inline@1"
+        },
+        {
+          "command": "localdesktop.ci.rerunRun",
+          "when": "view == localdesktop.releases && viewItem =~ /^run\\.completed/ && localdesktop.canWrite",
+          "group": "inline@1"
+        },
+        {
+          "command": "localdesktop.ci.rerunFailed",
+          "when": "view == localdesktop.releases && viewItem == run.completed.failed && localdesktop.canWrite",
+          "group": "1_run@1"
+        },
+        {
+          "command": "localdesktop.ci.downloadArtifact",
+          "when": "view == localdesktop.releases && viewItem =~ /^artifact\\./",
+          "group": "inline@2"
+        },
+        {
+          "command": "localdesktop.ci.installArtifact",
+          "when": "view == localdesktop.releases && viewItem == artifact.apk && localdesktop.devices.available",
+          "group": "inline@1"
+        },
+        {
+          "command": "localdesktop.release.downloadAsset",
+          "when": "view == localdesktop.releases && viewItem =~ /^asset\\./",
+          "group": "inline@2"
+        },
+        {
+          "command": "localdesktop.release.installAsset",
+          "when": "view == localdesktop.releases && viewItem == asset.apk && localdesktop.devices.available",
+          "group": "inline@1"
+        },
+        {
+          "command": "localdesktop.release.copyLink",
+          "when": "view == localdesktop.releases && viewItem =~ /^asset\\./",
+          "group": "1_asset@1"
+        },
+        {
+          "command": "localdesktop.release.editNotes",
+          "when": "view == localdesktop.releases && viewItem =~ /^release\\./ && localdesktop.canWrite",
+          "group": "1_release@1"
+        },
+        {
+          "command": "localdesktop.release.openOnGitHub",
+          "when": "view == localdesktop.releases && viewItem =~ /^release\\./",
+          "group": "inline@9"
+        },
+        {
+          "command": "localdesktop.release.uploadToPlay",
+          "when": "view == localdesktop.releases && viewItem =~ /^(release\\.|play\\.run)/ && localdesktop.canWrite && localdesktop.workflows.play",
+          "group": "1_release@2"
+        },
+        {
+          "command": "localdesktop.pr.setReleaseLabel",
+          "when": "view == localdesktop.releases && viewItem =~ /^pr(\\.label)?$/ && localdesktop.canWrite",
+          "group": "inline@1"
+        },
+        {
+          "command": "localdesktop.pr.editReleaseNotes",
+          "when": "view == localdesktop.releases && viewItem =~ /^pr(\\.notes)?$/ && localdesktop.canWrite",
+          "group": "inline@2"
+        },
+        {
+          "command": "localdesktop.pr.open",
+          "when": "view == localdesktop.releases && viewItem == pr",
+          "group": "inline@9"
+        },
+        {
+          "command": "localdesktop.pr.create",
+          "when": "view == localdesktop.releases && viewItem == pr.none && localdesktop.canWrite",
+          "group": "inline@1"
+        },
+        {
+          "command": "localdesktop.website.previewActive",
+          "when": "view == localdesktop.website && viewItem =~ /^(blog\\.post|doc\\.page)/",
+          "group": "inline@1"
+        },
+        {
+          "command": "localdesktop.website.openLive",
+          "when": "view == localdesktop.website && viewItem =~ /^(blog\\.post|doc\\.page)/",
+          "group": "inline@2"
+        },
+        {
+          "command": "localdesktop.website.addImage",
+          "when": "view == localdesktop.website && viewItem =~ /^blog\\.post/",
+          "group": "1_post@1"
+        },
+        {
+          "command": "localdesktop.website.newPost",
+          "when": "view == localdesktop.website && viewItem == blog.root",
+          "group": "inline@1"
+        },
+        {
+          "command": "localdesktop.website.newDoc",
+          "when": "view == localdesktop.website && viewItem =~ /^doc\\.(root|folder)/",
+          "group": "inline@1"
+        },
+        {
+          "command": "localdesktop.website.newCategory",
+          "when": "view == localdesktop.website && viewItem =~ /^doc\\.(root|folder)/",
+          "group": "inline@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "localdesktop.website.previewActive",
+          "when": "resourcePath =~ /gh-pages[\\/\\\\](blog|docs)[\\/\\\\].*\\.mdx?$/",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "localdesktop.devices.installApk",
+          "when": "resourceExtname == .apk",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Local Desktop",
+      "properties": {
+        "localdesktop.adbPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to `adb`. Empty = `$ANDROID_HOME/platform-tools/adb`, then `adb` on `PATH`."
+        },
+        "localdesktop.xPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the patched xbuild binary `x`. Empty = `~/.cargo/bin/x`, then `x` on `PATH`."
+        },
+        "localdesktop.androidHome": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Android SDK location. Empty = `$ANDROID_HOME`, `$ANDROID_SDK_ROOT`, then the platform default."
+        },
+        "localdesktop.lldbServerPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to an arm64 `lldb-server`. Empty = search the NDKs."
+        },
+        "localdesktop.scrcpyPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to `scrcpy` (mirroring and audio capture). Empty = `scrcpy` on `PATH`."
+        },
+        "localdesktop.logcat.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Stream the app's logcat when a device is selected."
+        },
+        "localdesktop.logcat.maxFileMB": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "markdownDescription": "Rotate `.localdesktop/logs/logcat.log` at this size."
+        },
+        "localdesktop.mcp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Offer the Local Desktop MCP server (device tools for coding agents) to the editor's built-in agent."
+        },
+        "localdesktop.repository": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "GitHub repository (`owner/name`) for Releases & CI and Website. Empty = the repository of the workspace's `origin` remote, so a fork uses its own. Chat always uses the main Local Desktop repository."
+        },
+        "localdesktop.realtime.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Subscribe to the repository's realtime doorbell (ntfy/smee) for instant CI and chat updates."
+        },
+        "localdesktop.realtime.pollSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 15,
+          "description": "Fallback polling interval when realtime updates are unavailable."
+        },
+        "localdesktop.chat.notify": {
+          "type": "string",
+          "enum": [
+            "mentions",
+            "all",
+            "none"
+          ],
+          "default": "mentions",
+          "description": "Show a notification for new chat messages."
+        },
+        "localdesktop.chat.autoGrant": {
+          "type": "string",
+          "enum": [
+            "members",
+            "prompt"
+          ],
+          "default": "members",
+          "markdownDescription": "Share the chat key with new devices of maintainers (write access) automatically, or ask first."
+        },
+        "localdesktop.chat.ccMentions": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Default for **Notify on GitHub**: add a plain-text `cc @user` line to encrypted messages so GitHub notifies mentioned maintainers."
+        },
+        "localdesktop.website.previewPort": {
+          "type": "number",
+          "default": 3000,
+          "description": "Preferred port for the Docusaurus preview server."
+        }
+      }
+    },
+    "taskDefinitions": [
+      {
+        "type": "localdesktop",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "enum": [
+              "build",
+              "installXbuild"
+            ],
+            "description": "What to run."
+          },
+          "profile": {
+            "type": "string",
+            "enum": [
+              "debug",
+              "release"
+            ],
+            "default": "debug"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "apk",
+              "aab"
+            ],
+            "default": "apk"
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "localdesktop-rustc",
+        "owner": "rustc",
+        "source": "rustc",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "pattern": [
+          {
+            "regexp": "^(warning|warn|error)(?:\\[(.*?)\\])?: (.*)$",
+            "severity": 1,
+            "code": 2,
+            "message": 3
+          },
+          {
+            "regexp": "^[\\s->=]*(.*?):(\\d*):(\\d*)\\s*$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "rust"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "localdesktop",
+        "label": "Local Desktop (Android)",
+        "languages": [
+          "rust"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "device": {
+                "type": "string",
+                "default": "auto",
+                "markdownDescription": "`auto` (selected/only device), `pick` (always ask) or an adb serial."
+              },
+              "build": {
+                "type": "boolean",
+                "default": true,
+                "description": "Build the APK with xbuild before installing."
+              },
+              "profile": {
+                "type": "string",
+                "enum": [
+                  "debug",
+                  "release"
+                ],
+                "default": "debug",
+                "description": "Build profile. Release libraries are stripped, so breakpoints won't bind."
+              },
+              "apk": {
+                "type": "string",
+                "description": "Install this APK instead of the build output."
+              },
+              "install": {
+                "type": "boolean",
+                "default": true,
+                "description": "Install the APK before launching."
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "default": false,
+                "description": "Stop right after attaching."
+              },
+              "stopAppOnDisconnect": {
+                "type": "boolean",
+                "default": true,
+                "description": "Force-stop the app when the session ends."
+              },
+              "logcat": {
+                "type": "string",
+                "enum": [
+                  "rust",
+                  "warnings",
+                  "all",
+                  "none"
+                ],
+                "default": "rust",
+                "markdownDescription": "Which logcat lines to mirror into the Debug Console. `rust` = `RustStdoutStderr` + warnings and errors."
+              },
+              "symbolSearchPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Extra directories with unstripped .so files."
+              },
+              "lldbServer": {
+                "type": "string",
+                "description": "Path to an arm64 lldb-server (overrides the NDK search)."
+              },
+              "lldbServerLog": {
+                "type": "boolean",
+                "default": false,
+                "description": "Write lldb-server logs on the device (lldb/platform.log in the app's data dir)."
+              },
+              "initCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "preRunCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "postRunCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "exitCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sourceMap": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "lldb": {
+                "type": "object",
+                "description": "Merged last into the generated CodeLLDB configuration."
+              }
+            }
+          },
+          "attach": {
+            "properties": {
+              "device": {
+                "type": "string",
+                "default": "auto"
+              },
+              "pid": {
+                "type": [
+                  "number",
+                  "string"
+                ],
+                "default": "${command:localdesktop.pickAppProcess}",
+                "description": "Process to attach to."
+              },
+              "symbolSearchPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "lldbServer": {
+                "type": "string"
+              },
+              "lldbServerLog": {
+                "type": "boolean",
+                "default": false
+              },
+              "initCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "preRunCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "postRunCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "exitCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sourceMap": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "lldb": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "localdesktop",
+            "request": "launch",
+            "name": "Local Desktop: Debug on Android"
+          },
+          {
+            "type": "localdesktop",
+            "request": "attach",
+            "name": "Local Desktop: Attach to Running App",
+            "pid": "${command:localdesktop.pickAppProcess}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Local Desktop: Debug on Android",
+            "description": "Build, install, launch and attach LLDB",
+            "body": {
+              "type": "localdesktop",
+              "request": "launch",
+              "name": "Local Desktop: Debug on Android"
+            }
+          },
+          {
+            "label": "Local Desktop: Attach to Running App",
+            "description": "Attach LLDB to a running Local Desktop process",
+            "body": {
+              "type": "localdesktop",
+              "request": "attach",
+              "name": "Local Desktop: Attach to Running App",
+              "pid": "^\"\\${command:localdesktop.pickAppProcess}\""
+            }
+          }
+        ]
+      }
+    ],
+    "languages": [
+      {
+        "id": "logcat",
+        "aliases": [
+          "Logcat"
+        ],
+        "extensions": [
+          ".logcat"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "logcat",
+        "scopeName": "source.logcat",
+        "path": "./syntaxes/logcat.tmLanguage.json"
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "localdesktop.mcp",
+        "label": "Local Desktop devices"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p test/integration",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:vscode": "node esbuild.mjs --tests && vscode-test",
+    "package": "vsce package --no-dependencies",
+    "vscode:prepublish": "node esbuild.mjs --production"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/jsdom": "^27.0.0",
+    "@types/libsodium-wrappers": "^0.8.2",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^22.15.0",
+    "@types/pngjs": "^6.0.5",
+    "@types/qrcode": "^1.5.5",
+    "@types/vscode": "~1.101.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.39.0",
+    "happy-dom": "^21.0.3",
+    "jsdom": "^27.4.0",
+    "ovsx": "^1.3.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.0",
+    "vitest": "^5.0.5",
+    "@types/mocha": "^10.0.10"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@octokit/graphql": "^9.0.5",
+    "@octokit/plugin-retry": "^8.1.1",
+    "@octokit/plugin-throttling": "^11.0.5",
+    "@octokit/rest": "^22.0.1",
+    "@vscode/debugadapter": "^1.68.0",
+    "dompurify": "^3.4.17",
+    "jpeg-js": "^0.4.4",
+    "libsodium-wrappers": "0.8.4",
+    "markdown-it": "^15.0.3",
+    "pngjs": "^7.0.0",
+    "qrcode": "^1.5.4",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@vscode/vsce-sign",
+      "esbuild"
+    ]
+  }
+}

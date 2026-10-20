@@ -38,19 +38,26 @@ Common issues:
 
 ### Logcat
 
-Run the following command to capture logcat output:
+Local Desktop logs from several processes (the app itself, proot, PipeWire), so the most reliable filter is the app's user ID. Run the following commands to capture its logcat output:
 
+```sh
+APP_UID=$(adb shell pm list packages -U app.polarbear | sed 's/.*uid://' | tr -d '\r')
+adb logcat --uid=$APP_UID
 ```
-adb logcat -e app.polarbear
-```
+
+:::tip
+Newer builds use the package name `io.github.localdesktop`. If the first command prints nothing, replace `app.polarbear` with `io.github.localdesktop`.
+:::
 
 - The command above will keep waiting for new logcat entries in real-time. You can stop watching by pressing `Ctrl + C`.
 - You can run `adb logcat -c` to clear old logcat entries so that you can start fresh.
 - To automatically save logcat output to a file so that you can share it with us, use the `>` operator:
 
+```sh
+adb logcat --uid=$APP_UID > logcat.txt
 ```
-adb logcat -e app.polarbear > logcat.txt
-```
+
+- On Windows (or if the commands above don't work for you), capture everything instead with `adb logcat > logcat.txt`. It's a bigger file, but it contains Local Desktop's logs too.
 
 ## Via Logcat Reader
 

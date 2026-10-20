@@ -1,7 +1,16 @@
 name: Upload AAB to Google Play
+run-name: >-
+  ${{ github.event_name == 'release' && github.event.release.name
+      || format('Upload {0} to Google Play', inputs.tag || 'latest release') }}
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload (empty = latest release)"
+        type: string
+        required: false
+        default: ""
   release:
     types: [published]
 
@@ -10,6 +19,8 @@ permissions:
 
 jobs:
   upload:
+    # VS Code extension releases (extension-v*) carry no AAB.
+    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'extension-') }}
     runs-on: ubuntu-latest
 
     steps:
@@ -17,16 +28,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Download AAB from release tag
-        if: github.event.release != null
+        if: github.event.release != null || inputs.tag != ''
         uses: robinraju/release-downloader@v1
         with:
-          tag: ${{ github.event.release.tag_name }}
+          tag: ${{ github.event.release.tag_name || inputs.tag }}
           fileName: "localdesktop-*.aab"
           out-file-path: "target"
           extract: false
 
-      - name: Download latest AAB (if manually triggered)
-        if: github.event.release == null
+      - name: Download latest AAB (if manually triggered without a tag)
+        if: github.event.release == null && inputs.tag == ''
         uses: robinraju/release-downloader@v1
         with:
           latest: true

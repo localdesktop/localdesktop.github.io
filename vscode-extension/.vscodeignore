@@ -1,0 +1,10 @@
+**
+!dist/**
+!bin/**
+!media/**
+!syntaxes/**
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
+dist/**/*.map
