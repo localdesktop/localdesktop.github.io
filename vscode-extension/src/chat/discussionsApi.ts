@@ -171,21 +171,21 @@ export class DiscussionsApi {
   }
 
   /** Key-directory comments after `cursor`, oldest first (records are processed in order). */
-  async keyComments(discussionId: string, after?: string | null): Promise<{ comments: KeyComment[]; cursor: string | null }> {
+  async keyComments(discussionId: string): Promise<KeyComment[]> {
     const comments: KeyComment[] = [];
-    let cursor = after ?? null;
+    let cursor: string | null = null;
     for (let page = 0; page < 20; page++) {
-      const r = await this.client.graphql<any>(
+      const r: any = await this.client.graphql<any>(
         `query($id: ID!, $after: String) { node(id: $id) { ... on Discussion {
           comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { id databaseId createdAt lastEditedAt body author { login } } } } } }`,
         { id: discussionId, after: cursor },
       );
-      const c = r.node.comments;
+      const c: any = r.node.comments;
       for (const n of c.nodes) comments.push({ id: n.id, databaseId: n.databaseId, createdAt: n.createdAt, lastEditedAt: n.lastEditedAt, author: n.author?.login ?? "ghost", body: n.body ?? "" });
       if (c.pageInfo.endCursor) cursor = c.pageInfo.endCursor;
       if (!c.pageInfo.hasNextPage) break;
     }
-    return { comments, cursor };
+    return comments;
   }
 
   async addComment(discussionId: string, body: string, replyToId?: string): Promise<CommentNode> {

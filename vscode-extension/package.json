@@ -2,7 +2,7 @@
   "name": "localdesktop-dev",
   "displayName": "Local Desktop Dev",
   "description": "Build, debug and release Local Desktop: one-key Android debugging, agent device tools (MCP), CI builds, release management, website editing and maintainer chat.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "mister-teddy",
   "license": "GPL-3.0-only",
   "icon": "media/icon.png",

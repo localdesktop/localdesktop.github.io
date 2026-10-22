@@ -107,7 +107,7 @@ export async function runChatSetup(s: Services, onDone: () => Promise<void>): Pr
     const keysDiscussion = await ensureDiscussion(api, category, (d) => parseDiscussionMarker(d.body)?.kind === "keys", { title: "🔑 Chat keys", body: keysBody() });
     progress.report({ message: "Registering this device and creating the first key…" });
     await cryptoReady();
-    const directory = new KeyDirectory(api, new Keyring(s.context.secrets, client.repo.nodeId), s.context.globalState, keysDiscussion.id, s.output);
+    const directory = new KeyDirectory(api, new Keyring(s.context.secrets, client.repo.nodeId), keysDiscussion.id, s.output);
     try {
       await directory.initialize();
     } finally {

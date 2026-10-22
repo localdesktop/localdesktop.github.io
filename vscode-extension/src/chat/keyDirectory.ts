@@ -13,18 +13,11 @@ import {
   unwrapKeys,
   type AcceptedDevice,
   type DirectoryState,
-  type KeyComment,
 } from "./keystate";
 import type { EncryptionInfo } from "../shared/messages";
 
-interface CachedKeys {
-  discussionId: string;
-  cursor: string | null;
-  comments: KeyComment[];
-  fullAt: number;
-}
 
-const FULL_RESYNC_MS = 6 * 60 * 60_000;
+const STALE_CHECK_MS = 6 * 60 * 60_000;
 
 export function deviceName(): string {
   const os = process.platform === "darwin" ? "macOS" : process.platform === "win32" ? "Windows" : "Linux";
@@ -48,7 +41,6 @@ export class KeyDirectory implements vscode.Disposable {
   constructor(
     private readonly api: DiscussionsApi,
     private readonly keyring: Keyring,
-    private readonly memento: vscode.Memento,
     private readonly keysDiscussionId: string,
     private readonly output: vscode.LogOutputChannel,
   ) {}
@@ -61,27 +53,14 @@ export class KeyDirectory implements vscode.Disposable {
     return this.api.client.repo.viewerLogin;
   }
 
-  private get cacheKey(): string {
-    return `ld.chat.keysCache.${this.repoNodeId}`;
-  }
-
-  /** Reads new key records (all of them every 6 h) and recomputes the directory. */
-  sync(opts: { full?: boolean; checkStale?: boolean } = {}): Promise<void> {
+  sync(opts: { checkStale?: boolean } = {}): Promise<void> {
     this.syncing ??= this.doSync(opts).finally(() => (this.syncing = undefined));
     return this.syncing;
   }
 
-  private async doSync(opts: { full?: boolean; checkStale?: boolean }): Promise<void> {
-    let cache = this.memento.get<CachedKeys>(this.cacheKey);
-    const full = opts.full || !cache || cache.discussionId !== this.keysDiscussionId || Date.now() - cache.fullAt > FULL_RESYNC_MS;
-    if (full) cache = { discussionId: this.keysDiscussionId, cursor: null, comments: [], fullAt: Date.now() };
-    const page = await this.api.keyComments(this.keysDiscussionId, cache!.cursor);
-    const known = new Set(cache!.comments.map((c) => c.id));
-    cache!.comments.push(...page.comments.filter((c) => !known.has(c.id)));
-    cache!.cursor = page.cursor;
-    await this.memento.update(this.cacheKey, cache);
-
-    this.state = await processKeyComments(cache!.comments, { repoNodeId: this.repoNodeId, permission: (l) => this.api.permission(l) });
+  private async doSync(opts: { checkStale?: boolean }): Promise<void> {
+    const comments = await this.api.keyComments(this.keysDiscussionId);
+    this.state = await processKeyComments(comments, { repoNodeId: this.repoNodeId, permission: (l) => this.api.permission(l) });
     for (const r of this.state.rejected) this.output.debug(`chat keys: ignored record ${r.commentId}: ${r.reason}`);
 
     const device = await this.keyring.getDevice();
@@ -90,7 +69,7 @@ export class KeyDirectory implements vscode.Disposable {
       if (added) this.output.info(`chat: unlocked ${added} key epoch(s)`);
     }
     const epoch = currentEpoch(this.state);
-    if (epoch && (opts.checkStale || Date.now() - this.staleCheckedAt > FULL_RESYNC_MS)) {
+    if (epoch && (opts.checkStale || Date.now() - this.staleCheckedAt > STALE_CHECK_MS)) {
       this.staleCheckedAt = Date.now();
       this.stale = await staleHolders(this.state, epoch.kid, (l) => this.api.permission(l));
     }
@@ -150,6 +129,7 @@ export class KeyDirectory implements vscode.Disposable {
 
   /** Setup only: creates epoch 1 and grants it to this device. */
   async initialize(): Promise<void> {
+    await this.sync();
     await this.ensureRegistered();
     if (this.state && currentEpoch(this.state)) return;
     const device = (await this.keyring.getDevice())!;

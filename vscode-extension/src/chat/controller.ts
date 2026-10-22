@@ -225,7 +225,7 @@ export class ChatController implements vscode.Disposable {
     store.channels = channels;
     if (keys && keys.id !== session.keysDiscussion?.id) {
       session.keys?.dispose();
-      session.keys = new KeyDirectory(api, session.keyring, this.s.context.globalState, keys.id, this.s.output);
+      session.keys = new KeyDirectory(api, session.keyring, keys.id, this.s.output);
     }
     session.keysDiscussion = keys;
   }
