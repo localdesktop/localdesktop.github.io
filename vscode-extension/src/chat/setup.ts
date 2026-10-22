@@ -119,8 +119,8 @@ export async function runChatSetup(s: Services, onDone: () => Promise<void>): Pr
   });
 
   let prUrl: string | undefined;
-  if (cfg.chat?.category !== category.slug || cfg.chat?.keysDiscussion !== keysDiscussion.number) {
-    const chat = { category: category.slug, keysDiscussion: keysDiscussion.number };
+  if (category.slug !== CATEGORY_SLUG && cfg.chat?.category !== category.slug) {
+    const chat = { category: category.slug };
     applyRealtimeConfig({ ...realtimeConfig(), version: 1, chat });
     const pr = await proposeRepoConfig(client, (c) => ({ ...c, version: 1, chat }), {
       branch: "localdesktop/chat-setup",

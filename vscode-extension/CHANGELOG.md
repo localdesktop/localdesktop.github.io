@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- Chat setup no longer opens duplicate config pull requests.
+
 ## 0.1.1
 
 - Fix chat encryption after key records were deleted.
