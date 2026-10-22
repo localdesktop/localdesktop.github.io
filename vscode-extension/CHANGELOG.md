@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Fix chat encryption after key records were deleted.
+
 ## 0.1.0
 
 First pre-release.
