@@ -68,6 +68,9 @@ export async function proposeRepoConfig(
 ): Promise<{ number: number; url: string }> {
   const { rest, params, repo } = client;
   const base = repo.defaultBranch;
+  const { data: open } = await rest.pulls.list({ ...params, state: "open", base, per_page: 100 });
+  const existing = open.find((p) => p.head.ref === opts.branch || p.head.ref.startsWith(`${opts.branch}-`));
+  if (existing) return { number: existing.number, url: existing.html_url };
   const current = await loadRepoConfig(client, undefined);
   const next = mutate(structuredClone(current));
   const { data: ref } = await rest.git.getRef({ ...params, ref: `heads/${base}` });
