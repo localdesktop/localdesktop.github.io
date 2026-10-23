@@ -14,6 +14,7 @@ import { symbolize } from "./crash/symbolize";
 import { formatChecks, runDoctor } from "./doctor";
 import { LdError } from "./errors";
 import { downscalePng } from "./image";
+import { LOCKED_HINT, wakeAndUnlock } from "./power";
 import { drag, longPress, mouse, pressKey, swipe, tap, typeText, type Point } from "./input";
 import { queryLogcat, queryLogFile, parseLevel } from "./logcat/query";
 import { captureScreen, pngSize, timestampName } from "./screen";
@@ -197,12 +198,12 @@ export const TOOLS: ToolDef<any>[] = [
     async run(args, rt) {
       const { adb, pkg, device } = await app(rt, args.serial);
       const epoch = await deviceEpoch(adb);
-      await startApp(adb, pkg, { restart: args.restart });
+      const screen = await startApp(adb, pkg, { restart: args.restart });
       const pid = await waitForPid(adb, pkg, 15_000, rt.signal).catch(() => undefined);
       updateState(rt.core.root, (s) => {
         s.lastLaunch = { serial: device.serial, pid, deviceEpoch: epoch, at: new Date().toISOString() };
       });
-      return { text: `Started ${pkg}${pid ? ` (pid ${pid})` : ""}.`, structured: { pid } };
+      return { text: `Started ${pkg}${pid ? ` (pid ${pid})` : ""}.${screen.locked ? ` ${LOCKED_HINT}` : ""}`, structured: { pid, locked: screen.locked } };
     },
   }),
 
@@ -329,6 +330,7 @@ export const TOOLS: ToolDef<any>[] = [
     annotations: { readOnlyHint: true },
     async run(args, rt) {
       const { adb, device } = await app(rt, args.serial);
+      const screen = await wakeAndUnlock(adb);
       const png = await captureScreen(adb);
       const { width: deviceWidth, height: deviceHeight } = pngSize(png);
       const dir = localDir(rt.core.root, "screenshots");
@@ -339,8 +341,8 @@ export const TOOLS: ToolDef<any>[] = [
         s.lastScreenshot = { serial: device.serial, width: scaled.width, height: scaled.height, deviceWidth, deviceHeight, at: new Date().toISOString() };
       });
       return {
-        text: `Screenshot ${scaled.width}×${scaled.height} (device ${deviceWidth}×${deviceHeight}); full PNG: ${path.relative(rt.core.root, file)}`,
-        structured: { file, width: scaled.width, height: scaled.height, deviceWidth, deviceHeight, scale: scaled.scale },
+        text: `Screenshot ${scaled.width}×${scaled.height} (device ${deviceWidth}×${deviceHeight}); full PNG: ${path.relative(rt.core.root, file)}${screen.locked ? `\n${LOCKED_HINT} The image shows the lock screen.` : ""}`,
+        structured: { locked: screen.locked, file, width: scaled.width, height: scaled.height, deviceWidth, deviceHeight, scale: scaled.scale },
         image: { data: scaled.data, mimeType: scaled.mimeType },
       };
     },

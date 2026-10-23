@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Wake the device before screenshots and starting the app.
+- Fix screenshots on foldables.
+
 ## 0.1.2
 
 - Chat setup no longer opens duplicate config pull requests.
