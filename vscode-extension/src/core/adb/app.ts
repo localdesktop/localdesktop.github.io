@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { LdError } from "../errors";
+import { wakeAndUnlock, type ScreenState } from "../power";
 import { sleep } from "../exec";
 import { shQuote } from "../shell";
 import type { Adb } from "./adb";
@@ -37,7 +38,8 @@ export interface StartOptions {
   restart?: boolean;
 }
 
-export async function startApp(adb: Adb, pkg: string, opts: StartOptions = {}): Promise<void> {
+export async function startApp(adb: Adb, pkg: string, opts: StartOptions = {}): Promise<ScreenState> {
+  const screen = await wakeAndUnlock(adb);
   const activity = await resolveActivity(adb, pkg);
   const args = ["am", "start"];
   if (opts.waitForDebugger) args.push("-D");
@@ -47,6 +49,7 @@ export async function startApp(adb: Adb, pkg: string, opts: StartOptions = {}): 
   if (/^Error|Exception/m.test(out)) {
     throw new LdError("LAUNCH_FAILED", `Couldn't start ${pkg}: ${out.trim()}`, "Is the app installed? Run `install_apk` first.");
   }
+  return screen;
 }
 
 export async function forceStop(adb: Adb, pkg: string): Promise<void> {

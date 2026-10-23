@@ -12,6 +12,7 @@ import { rustToolchain, type RustToolchain } from "../../core/debug/rust";
 import { findLldbServer } from "../../core/env";
 import { isLdError, LdError } from "../../core/errors";
 import { consoleFilter, type LogEntry } from "../../core/logcat/parse";
+import { LOCKED_HINT } from "../../core/power";
 import { updateState } from "../../core/state";
 import { buildArtifacts, findApk, type AppInfo, type Profile } from "../../core/workspace";
 import { installOnDevice } from "../deviceCommands";
@@ -169,7 +170,8 @@ export class DebugOrchestrator {
 
     // 8. Launch.
     this.io.log(noDebug ? "Starting the app…" : "Starting the app (waiting for debugger)…");
-    await startApp(adb, app.packageName, { waitForDebugger: !noDebug });
+    const screen = await startApp(adb, app.packageName, { waitForDebugger: !noDebug });
+    if (screen.locked) this.io.output(`${LOCKED_HINT}\n`, "important");
     if (config.stopAppOnDisconnect !== false) this.onCleanup(() => forceStop(adb, app.packageName));
     const pid = await waitForPid(adb, app.packageName, 15_000, abortSignal(this.token));
     this.io.log(`App process: ${pid}`);

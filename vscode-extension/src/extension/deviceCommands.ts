@@ -6,6 +6,7 @@ import { deviceEpoch } from "../core/adb/props";
 import { findScrcpy } from "../core/env";
 import { formatChecks, runDoctor, type Check } from "../core/doctor";
 import { LdError } from "../core/errors";
+import { LOCKED_HINT } from "../core/power";
 import { saveScreenshot } from "../core/screen";
 import { readState, updateState } from "../core/state";
 import { findApk, localDir } from "../core/workspace";
@@ -142,7 +143,8 @@ export function registerDeviceCommands(s: Services): void {
     const adb = s.devices.adb().forDevice(d.serial);
     const pkg = s.app().packageName;
     const since = await deviceEpoch(adb).catch(() => undefined);
-    await startApp(adb, pkg);
+    const screen = await startApp(adb, pkg);
+    if (screen.locked) void vscode.window.showWarningMessage(LOCKED_HINT);
     s.logcat.marker(`started ${pkg}`);
     void s.logcat.follow(d.serial, { sinceEpoch: since });
   });
@@ -158,7 +160,8 @@ export function registerDeviceCommands(s: Services): void {
     const adb = s.devices.adb().forDevice(d.serial);
     const pkg = s.app().packageName;
     const since = await deviceEpoch(adb).catch(() => undefined);
-    await startApp(adb, pkg, { restart: true });
+    const screen = await startApp(adb, pkg, { restart: true });
+    if (screen.locked) void vscode.window.showWarningMessage(LOCKED_HINT);
     s.logcat.marker(`restarted ${pkg}`);
     void s.logcat.follow(d.serial, { sinceEpoch: since });
   });
