@@ -58,9 +58,6 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 /// - Simple/light tasks or important settings that must be run every launch (e.g. the Firefox config) can be done inline on the `None` path.
 type StageOutput = Option<JoinHandle<()>>;
 
-/// GSettings defaults for the guest, in `/usr/share/glib-2.0/schemas`.
-const GSCHEMA_OVERRIDE: &str = "90_localdesktop.gschema.override";
-
 const PIPEWIRE_GUEST_LOCK_PACKAGES: &[&str] = &[
     "libpipewire",
     "pipewire",
@@ -857,6 +854,9 @@ fn android_ui_scale(density_dpi: i32) -> i32 {
     ((density_dpi as f32) / 160.0 * 1.1).max(1.0).round() as i32
 }
 
+/// GSettings defaults for the guest, in `/usr/share/glib-2.0/schemas`.
+const GSCHEMA_OVERRIDE: &str = "90_localdesktop.gschema.override";
+
 fn setup_xfce_wayland(options: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let username = get_application_context().local_config.user.username;
@@ -918,15 +918,15 @@ fn setup_xfce_wayland(options: &SetupOptions) -> StageOutput {
         &fs_root.join("usr/local/bin/startxfce4-localdesktop"),
         &format!(
             r#"#!/bin/sh
+# Pick up our GSettings defaults (see {GSCHEMA_OVERRIDE}) until a pacman hook recompiles them.
+schemas=/usr/share/glib-2.0/schemas
+[ "$schemas/{GSCHEMA_OVERRIDE}" -nt "$schemas/gschemas.compiled" ] && glib-compile-schemas "$schemas"
 export PIPEWIRE_RUNTIME_DIR={PIPEWIRE_GUEST_RUNTIME_DIR}
 export PULSE_SERVER={PULSE_GUEST_SERVER}
 : "${{XDG_RUNTIME_DIR:={PIPEWIRE_GUEST_RUNTIME_DIR}}}"
 export XDG_RUNTIME_DIR
 # Electron adds --no-sandbox when this is set; Android has no user namespaces for it to use.
 export ELECTRON_DISABLE_SANDBOX=1
-# Pick up our GSettings defaults (see {GSCHEMA_OVERRIDE}) until a pacman hook recompiles them.
-schemas=/usr/share/glib-2.0/schemas
-[ "$schemas/{GSCHEMA_OVERRIDE}" -nt "$schemas/gschemas.compiled" ] && glib-compile-schemas "$schemas"
 exec startxfce4 --wayland "$@"
 "#
         ),
