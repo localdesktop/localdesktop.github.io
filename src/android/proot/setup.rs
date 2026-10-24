@@ -940,6 +940,10 @@ done
 xfconf-query -c xsettings -p /Xft/DPI -n -t int -s {xft_dpi} 2>/dev/null || \
 xfconf-query -c xsettings -p /Xft/DPI -t int -s {xft_dpi}
 
+# labwc gives keyboard focus to a top-layer panel each time it maps, and an auto-hiding dock maps
+# again whenever a window moves over or away from it, taking focus from the window being typed in.
+xfconf-query -c xfce4-panel -p /panels/panel-2/autohide-behavior -s 0 2>/dev/null
+
 /usr/local/bin/localdesktop-no-sandbox-entries
 "#
         ),
