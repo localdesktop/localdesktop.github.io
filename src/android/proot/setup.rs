@@ -1140,17 +1140,19 @@ apply_output() {{
     return 1
 }}
 
-last_config=""
+last_state=""
 while true; do
     if ! read_output_state; then
         sleep 0.2
         continue
     fi
-    output=$(first_output)
-    if [ -n "$output" ]; then
-        config="$output $target_mode $target_scale"
-        if [ "$config" != "$last_config" ] && apply_output "$output"; then
-            last_config="$config"
+    # Only query labwc when the host wrote a new size or scale; spawning wlr-randr every
+    # second costs a steady few percent of a core under proot.
+    state="$target_mode $target_scale"
+    if [ "$state" != "$last_state" ]; then
+        output=$(first_output)
+        if [ -n "$output" ] && apply_output "$output"; then
+            last_state="$state"
         fi
     fi
     sleep 1
