@@ -139,6 +139,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Setup Gradle 8.14.3
         uses: gradle/actions/setup-gradle@v4
         with:
