@@ -184,6 +184,13 @@ fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let mpsc_sender = options.mpsc_sender.clone();
 
+    // Android denies reading /proc/bus/pci/devices, and libpci exits on that inside Firefox's
+    // GPU probe, which then turns off hardware rendering and WebGL. An empty list lets it go on.
+    let pci_devices = fs_root.join("proc/.pci_devices");
+    if fs_root.join("proc").is_dir() && !pci_devices.exists() {
+        let _ = fs::write(&pci_devices, "");
+    }
+
     if !fs_root.join("proc/.version").exists() {
         return Some(thread::spawn(move || {
             mpsc_sender
@@ -219,6 +226,7 @@ fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
                     ("proc/.vmstat", "nr_free_pages 1743136\nnr_zone_inactive_anon 179281\nnr_zone_active_anon 7183\n"),
                     ("proc/.sysctl_entry_cap_last_cap", "40\n"),
                     ("proc/.sysctl_inotify_max_user_watches", "4096\n"),
+                    ("proc/.pci_devices", ""),
                 ];
 
             for (path, content) in proc_files {

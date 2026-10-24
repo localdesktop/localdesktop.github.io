@@ -147,6 +147,7 @@ impl ArchProcess {
             .arg(format!("--bind={}/proc/.uptime:/proc/uptime", config::ARCH_FS_ROOT))
             .arg(format!("--bind={}/proc/.version:/proc/version", config::ARCH_FS_ROOT))
             .arg(format!("--bind={}/proc/.vmstat:/proc/vmstat", config::ARCH_FS_ROOT))
+            .arg(format!("--bind={}/proc/.pci_devices:/proc/bus/pci/devices", config::ARCH_FS_ROOT))
             .arg(format!("--bind={}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap", config::ARCH_FS_ROOT))
             .arg(format!("--bind={}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches", config::ARCH_FS_ROOT))
             .arg(format!("--bind={}/sys/.empty:/sys/fs/selinux", config::ARCH_FS_ROOT));
