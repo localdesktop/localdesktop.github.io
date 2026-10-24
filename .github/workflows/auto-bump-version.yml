@@ -17,12 +17,18 @@ permissions:
   contents: read
   pull-requests: read
 
+# Label swaps fire unlabeled + labeled back to back; serialize them so two runs
+# never race to push the version commit.
+concurrency:
+  group: release-pr-${{ github.event.pull_request.number }}-${{ github.event.action == 'closed' && 'tag' || 'prep' }}
+  cancel-in-progress: false
+
 jobs:
   classify-pr:
     name: Classify PR
     runs-on: ubuntu-latest
     outputs:
-      gh_pages_only: ${{ steps.classify.outputs.gh_pages_only }}
+      non_app_only: ${{ steps.classify.outputs.non_app_only }}
 
     steps:
       - name: Classify PR
@@ -38,11 +44,26 @@ jobs:
               per_page: 100,
             });
 
-            const ghPagesOnly =
+            // Keep in sync with build.yml and vscode-extension/src/release/exemptPaths.ts
+            const NON_APP_PREFIXES = ["gh-pages/", "vscode-extension/", ".vscode/"];
+            const NON_APP_FILES = new Set([
+              ".mcp.json",
+              ".cursor/mcp.json",
+              "AGENTS.md",
+              "CLAUDE.md",
+              ".github/localdesktop-dev.json",
+              ".github/workflows/vscode-extension.yml",
+            ]);
+            const isNonApp = (path) =>
+              NON_APP_PREFIXES.some((prefix) => path.startsWith(prefix)) || NON_APP_FILES.has(path);
+            const nonAppOnly =
               files.length > 0 &&
-              files.every((file) => file.filename.startsWith("gh-pages/"));
+              files.every((file) =>
+                isNonApp(file.filename) &&
+                (!file.previous_filename || isNonApp(file.previous_filename))
+              );
 
-            core.setOutput("gh_pages_only", ghPagesOnly ? "true" : "false");
+            core.setOutput("non_app_only", nonAppOnly ? "true" : "false");
 
   prepare-release:
     name: Prepare Release
@@ -54,12 +75,12 @@ jobs:
       pull-requests: read
 
     steps:
-      - name: Skip gh-pages-only PR
-        if: needs.classify-pr.outputs.gh_pages_only == 'true'
-        run: echo "Release workflow skipped for gh-pages-only PR."
+      - name: Skip website/tooling-only PR
+        if: needs.classify-pr.outputs.non_app_only == 'true'
+        run: echo "Release workflow skipped for website/tooling-only PR."
 
       - name: Resolve release label
-        if: needs.classify-pr.outputs.gh_pages_only != 'true'
+        if: needs.classify-pr.outputs.non_app_only != 'true'
         id: release
         env:
           LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
@@ -102,14 +123,14 @@ jobs:
           PY
 
       - name: Require same-repo branch
-        if: needs.classify-pr.outputs.gh_pages_only != 'true' && github.event.pull_request.head.repo.full_name != github.repository
+        if: needs.classify-pr.outputs.non_app_only != 'true' && github.event.pull_request.head.repo.full_name != github.repository
         run: |
           echo "::error::Release version automation can only push to branches in ${GITHUB_REPOSITORY}."
           echo "::error::Please add the Cargo.toml/Cargo.lock version bump manually for fork PRs."
           exit 1
 
       - name: Check out PR branch
-        if: needs.classify-pr.outputs.gh_pages_only != 'true'
+        if: needs.classify-pr.outputs.non_app_only != 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.ref }}
@@ -117,7 +138,7 @@ jobs:
           token: ${{ secrets.PAT }}
 
       - name: Sync release version commit
-        if: needs.classify-pr.outputs.gh_pages_only != 'true'
+        if: needs.classify-pr.outputs.non_app_only != 'true'
         env:
           BUMP_LEVEL: ${{ steps.release.outputs.level }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -227,7 +248,7 @@ jobs:
   tag-release:
     name: Tag Release
     needs: classify-pr
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.gh_pages_only != 'true' && !contains(github.event.pull_request.labels.*.name, 'release:docs')
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.classify-pr.outputs.non_app_only != 'true' && !contains(github.event.pull_request.labels.*.name, 'release:docs')
     runs-on: ubuntu-latest
     permissions:
       contents: write

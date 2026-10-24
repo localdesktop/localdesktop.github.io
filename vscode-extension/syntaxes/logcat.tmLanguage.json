@@ -1,0 +1,24 @@
+{
+  "scopeName": "source.logcat",
+  "name": "Logcat",
+  "patterns": [
+    { "match": "^---.*---$", "name": "comment.line.marker.logcat" },
+    { "match": "^--------- beginning of .*$", "name": "comment.line.buffer.logcat" },
+    {
+      "match": "^((?:\\d{4}-)?\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}\\.\\d{3})\\s+(\\d+)\\s+(\\d+)\\s+([EF])\\s+(.*?)\\s*:(.*)$",
+      "captures": { "1": { "name": "comment.line.time.logcat" }, "2": { "name": "constant.numeric.pid.logcat" }, "3": { "name": "constant.numeric.tid.logcat" }, "4": { "name": "invalid.illegal.level.logcat" }, "5": { "name": "entity.name.tag.logcat" }, "6": { "name": "invalid.illegal.message.logcat" } }
+    },
+    {
+      "match": "^((?:\\d{4}-)?\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}\\.\\d{3})\\s+(\\d+)\\s+(\\d+)\\s+(W)\\s+(.*?)\\s*:(.*)$",
+      "captures": { "1": { "name": "comment.line.time.logcat" }, "2": { "name": "constant.numeric.pid.logcat" }, "3": { "name": "constant.numeric.tid.logcat" }, "4": { "name": "markup.changed.level.logcat" }, "5": { "name": "entity.name.tag.logcat" }, "6": { "name": "markup.changed.message.logcat" } }
+    },
+    {
+      "match": "^((?:\\d{4}-)?\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}\\.\\d{3})\\s+(\\d+)\\s+(\\d+)\\s+(I)\\s+(.*?)\\s*:(.*)$",
+      "captures": { "1": { "name": "comment.line.time.logcat" }, "2": { "name": "constant.numeric.pid.logcat" }, "3": { "name": "constant.numeric.tid.logcat" }, "4": { "name": "markup.inserted.level.logcat" }, "5": { "name": "entity.name.tag.logcat" } }
+    },
+    {
+      "match": "^((?:\\d{4}-)?\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}\\.\\d{3})\\s+(\\d+)\\s+(\\d+)\\s+([VD])\\s+(.*?)\\s*:(.*)$",
+      "captures": { "1": { "name": "comment.line.time.logcat" }, "2": { "name": "constant.numeric.pid.logcat" }, "3": { "name": "constant.numeric.tid.logcat" }, "4": { "name": "comment.line.level.logcat" }, "5": { "name": "entity.name.tag.logcat" }, "6": { "name": "comment.line.message.logcat" } }
+    }
+  ]
+}

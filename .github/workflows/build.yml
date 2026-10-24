@@ -1,7 +1,26 @@
 name: Build APK & AAB
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('Build APK · {0}{1}', github.ref_name, inputs.dispatch_id && format(' · {0}', inputs.dispatch_id) || '')
+      || github.event_name == 'pull_request' && github.event.pull_request.title
+      || format('Release {0}', github.ref_name) }}
 
 on:
   workflow_dispatch:
+    inputs:
+      include_debug_apk:
+        description: "Also upload the debug APK as an artifact"
+        type: boolean
+        default: false
+      include_aab:
+        description: "Also build and upload the AAB as an artifact"
+        type: boolean
+        default: false
+      dispatch_id:
+        description: "Correlation id (set by the Local Desktop VS Code extension)"
+        type: string
+        required: false
+        default: ""
   pull_request:
     types:
       - opened
@@ -33,6 +52,8 @@ jobs:
   validate-release-label:
     name: Validate Release Label
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
     outputs:
       should_build: ${{ steps.classify.outputs.should_build }}
 
@@ -48,6 +69,38 @@ jobs:
             }
 
             const pr = context.payload.pull_request;
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            // Keep in sync with auto-bump-version.yml and vscode-extension/src/release/exemptPaths.ts
+            const NON_APP_PREFIXES = ["gh-pages/", "vscode-extension/", ".vscode/"];
+            const NON_APP_FILES = new Set([
+              ".mcp.json",
+              ".cursor/mcp.json",
+              "AGENTS.md",
+              "CLAUDE.md",
+              ".github/localdesktop-dev.json",
+              ".github/workflows/vscode-extension.yml",
+            ]);
+            const isNonApp = (path) =>
+              NON_APP_PREFIXES.some((prefix) => path.startsWith(prefix)) || NON_APP_FILES.has(path);
+            const nonAppOnly =
+              files.length > 0 &&
+              files.every((file) =>
+                isNonApp(file.filename) &&
+                (!file.previous_filename || isNonApp(file.previous_filename))
+              );
+
+            if (nonAppOnly) {
+              core.info("Skipping release label validation and APK build for website/tooling-only PR.");
+              core.setOutput("should_build", "false");
+              return;
+            }
+
             const appReleaseLabels = new Set([
               "release:breaking",
               "release:feature",
@@ -141,7 +194,7 @@ jobs:
           mkdir -p target/x/release/android/gradle/app
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > target/x/release/android/gradle/app/release-key.jks
           # Verify keystore
-          keytool -list -v -keystore target/x/release/android/gradle/app/release-key.jks -storepass $ANDROID_KEYSTORE_PASSWORD
+          keytool -list -v -keystore target/x/release/android/gradle/app/release-key.jks -storepass "$ANDROID_KEYSTORE_PASSWORD"
 
       - name: Update manifest.yaml to target API 35
         run: |
@@ -159,15 +212,15 @@ jobs:
       - name: Prepare Android.ndk # Replicate these steps from Xbuild's release workflow, so a fully compatible Android.ndk folder with NDK r28 is available offline in the working directory where Xbuild proceeds.
         run: |
           TOOLCHAIN=android-ndk-r28/toolchains/llvm/prebuilt/linux-x86_64
-          CLANG_VERSION=$(ls $TOOLCHAIN/lib/clang | head -n 1)
-          CLANG=$TOOLCHAIN/lib/clang/$CLANG_VERSION
+          CLANG_VERSION=$(find "$TOOLCHAIN/lib/clang" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | head -n 1)
+          CLANG="$TOOLCHAIN/lib/clang/$CLANG_VERSION"
 
           mkdir Android.ndk
-          cp -r $TOOLCHAIN/sysroot/usr Android.ndk/
-          cp -r $CLANG/lib/linux/aarch64/* Android.ndk/usr/lib/aarch64-linux-android/
-          cp -r $CLANG/lib/linux/arm/* Android.ndk/usr/lib/arm-linux-androideabi/
-          cp -r $CLANG/lib/linux/x86_64/* Android.ndk/usr/lib/x86_64-linux-android/
-          cp -r $CLANG/lib/linux/i386/* Android.ndk/usr/lib/i686-linux-android/
+          cp -r "$TOOLCHAIN/sysroot/usr" Android.ndk/
+          cp -r "$CLANG/lib/linux/aarch64"/* Android.ndk/usr/lib/aarch64-linux-android/
+          cp -r "$CLANG/lib/linux/arm"/* Android.ndk/usr/lib/arm-linux-androideabi/
+          cp -r "$CLANG/lib/linux/x86_64"/* Android.ndk/usr/lib/x86_64-linux-android/
+          cp -r "$CLANG/lib/linux/i386"/* Android.ndk/usr/lib/i686-linux-android/
 
           echo "INPUT(-lunwind)" > Android.ndk/usr/lib/aarch64-linux-android/libgcc.a
           echo "INPUT(-lunwind)" > Android.ndk/usr/lib/arm-linux-androideabi/libgcc.a
@@ -189,42 +242,77 @@ jobs:
           mv target/x/release/android/gradle/app/build/outputs/apk/debug/app-debug.apk target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.apk
           mv target/x/release/android/gradle/app/build/outputs/apk/release/app-release.apk target/x/localdesktop-${{ steps.extract_version.outputs.version }}.apk
 
-      - name: Prepare PR APK artifact
-        id: pr_apk_artifact
-        if: github.event_name == 'pull_request'
+      - name: Prepare APK artifacts
+        id: apk_artifact
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
         env:
-          HEAD_REF: ${{ github.head_ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FALLBACK_REF: ${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_number) }}
+          INCLUDE_DEBUG: ${{ inputs.include_debug_apk && 'true' || 'false' }}
           VERSION: ${{ steps.extract_version.outputs.version }}
         run: |
           SAFE_REF=$(printf '%s' "$HEAD_REF" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g' | cut -c1-60)
           if [ -z "$SAFE_REF" ]; then
-            SAFE_REF="pr-${PR_NUMBER}"
+            SAFE_REF="$FALLBACK_REF"
           fi
           SHORT_SHA="${HEAD_SHA:0:7}"
-          ARTIFACT_FILE="localdesktop-${VERSION}-${SAFE_REF}-${SHORT_SHA}-release.apk"
-          ARTIFACT_PATH="target/x/${ARTIFACT_FILE}"
+          BASE="localdesktop-${VERSION}-${SAFE_REF}-${SHORT_SHA}"
+          ARTIFACT_PATH="target/x/${BASE}-release.apk"
           cp "target/x/localdesktop-${VERSION}.apk" "$ARTIFACT_PATH"
+          echo "base=${BASE}" >> "$GITHUB_OUTPUT"
           echo "path=${ARTIFACT_PATH}" >> "$GITHUB_OUTPUT"
+          if [ "$INCLUDE_DEBUG" = "true" ]; then
+            DEBUG_PATH="target/x/${BASE}-debug.apk"
+            cp "target/x/localdesktop-${VERSION}-debug.apk" "$DEBUG_PATH"
+            echo "debug_path=${DEBUG_PATH}" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Upload PR release APK
-        if: github.event_name == 'pull_request'
+      - name: Upload release APK
+        if: steps.apk_artifact.outputs.path != ''
         uses: actions/upload-artifact@v7
         with:
-          path: ${{ steps.pr_apk_artifact.outputs.path }}
+          path: ${{ steps.apk_artifact.outputs.path }}
+          if-no-files-found: error
+          archive: false
+
+      - name: Upload debug APK
+        if: steps.apk_artifact.outputs.debug_path != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.apk_artifact.outputs.debug_path }}
           if-no-files-found: error
           archive: false
 
       - name: Build AAB
-        if: github.event_name != 'pull_request'
+        if: github.ref_type == 'tag' || inputs.include_aab
         run: x build --release --platform=android --arch=arm64 --format=aab
 
       - name: Rename AAB
-        if: github.event_name != 'pull_request'
+        if: github.ref_type == 'tag' || inputs.include_aab
         run: |
           mv target/x/release/android/gradle/app/build/outputs/bundle/debug/app-debug.aab target/x/localdesktop-${{ steps.extract_version.outputs.version }}-debug.aab
           mv target/x/release/android/gradle/app/build/outputs/bundle/release/app-release.aab target/x/localdesktop-${{ steps.extract_version.outputs.version }}.aab
+
+      - name: Prepare AAB artifact
+        id: aab_artifact
+        if: github.event_name == 'workflow_dispatch' && github.ref_type != 'tag' && inputs.include_aab
+        env:
+          BASE: ${{ steps.apk_artifact.outputs.base }}
+          VERSION: ${{ steps.extract_version.outputs.version }}
+        run: |
+          AAB_PATH="target/x/${BASE}-release.aab"
+          cp "target/x/localdesktop-${VERSION}.aab" "$AAB_PATH"
+          echo "path=${AAB_PATH}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload AAB
+        if: steps.aab_artifact.outputs.path != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.aab_artifact.outputs.path }}
+          if-no-files-found: error
+          archive: false
+
       - name: Build User Manual PDFs
         if: github.ref_type == 'tag'
         run: |

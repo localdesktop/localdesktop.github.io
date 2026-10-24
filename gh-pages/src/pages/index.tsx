@@ -152,7 +152,7 @@ export default function Home(): ReactNode {
                 <Link className="button button--primary button--lg" to={config.customFields.downloadUrl as string}>
                   Download APK
                 </Link>
-                <Link className="button button--secondary button--lg" to={`${repositoryUrl}/stargazers`}>
+                <Link className="button button--secondary button--lg" to={repositoryUrl}>
                   ⭐️ Star us on GitHub
                 </Link>
               </div>
