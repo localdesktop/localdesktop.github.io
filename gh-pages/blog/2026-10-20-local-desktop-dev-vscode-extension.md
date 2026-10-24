@@ -49,7 +49,7 @@ The **Website** view lists every blog post and doc page. Write a new post with a
 
 ## A maintainer chat on GitHub
 
-We tried Google Chat and Matrix, and neither stuck. So the extension has a small chat built on GitHub Discussions in our own repository: everyone already has an account, and there's nothing to host. Private channels are end-to-end encrypted, so GitHub only stores ciphertext, and new maintainers get the key automatically from the editors of existing ones. A webhook makes new messages show up within seconds.
+We tried Google Chat and Matrix, and neither stuck. So the extension has a small chat built on GitHub Discussions in our own repository: everyone already has an account, and there's nothing to host. Private channels are encrypted on GitHub, so you read and post in them with the extension. A webhook makes new messages show up within seconds.
 
 ## It works in forks too
 

@@ -30,10 +30,9 @@ Debugging with F5 is described in [How to develop locally?](4-how-to-dev.md).
 
 A lightweight maintainer chat built on GitHub Discussions in this repository, so everyone already has an account.
 
-- Channels marked 🔒 **private** are end-to-end encrypted: GitHub only stores ciphertext, readable in the extension. Who posted and when is still public, because Discussions in a public repository are public.
+- Channels marked 🔒 **private** are encrypted on GitHub, so they aren't readable on github.com. Anyone with the extension can read and post in them: this keeps casual readers out, it isn't secret. Who posted and when is public.
 - Channels marked 🌐 **public** are ordinary discussion comments that anyone can read.
 - A message posted from github.com into a private channel is shown with an "Unencrypted" badge.
-- New devices of maintainers (anyone with write access) receive the channel key automatically from another maintainer's editor. When someone leaves the team, run **Rotate Chat Encryption Key**. They keep access to history they could already read.
 
 ### One-time setup (admins)
 

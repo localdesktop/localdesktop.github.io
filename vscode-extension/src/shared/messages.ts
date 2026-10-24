@@ -14,11 +14,11 @@ export interface ChannelView {
 }
 
 /**
- * verified: decrypted and signed by a known device. unencrypted: plain text in a private channel
- * (visible to everyone). plain: ordinary comment in a public channel. undecryptable: no key (yet).
+ * verified: decrypted. unencrypted: plain text in a private channel
+ * (visible to everyone). plain: ordinary comment in a public channel.
  * invalid: signature/authentication failed or replayed. pending/failed: local echo.
  */
-export type MessageStatus = "verified" | "unencrypted" | "plain" | "undecryptable" | "invalid" | "pending" | "failed";
+export type MessageStatus = "verified" | "unencrypted" | "plain" | "invalid" | "pending" | "failed";
 
 export interface ReactionView {
   content: string;
@@ -48,16 +48,6 @@ export interface MessageView {
   replies: MessageView[];
 }
 
-export interface EncryptionInfo {
-  /** ready: can send encrypted. waiting: device registered, waiting for a key grant. noKey: not set up. notMember: no write access. */
-  status: "ready" | "waiting" | "noKey" | "notMember" | "unavailable";
-  recipients: number;
-  devices: number;
-  fingerprint?: string;
-  /** Key holders lost write access: the key should be rotated. */
-  rotateNeeded?: string[];
-}
-
 export interface ChatState {
   signedIn: boolean;
   setup: "ready" | "noDiscussions" | "noCategory" | "noChannels" | "loading";
@@ -70,14 +60,13 @@ export interface ChatState {
   messages: MessageView[];
   hasOlder: boolean;
   loading: boolean;
-  encryption: EncryptionInfo;
   ccDefault: boolean;
   error?: string;
 }
 
 export type HostToWebview = { type: "state"; state: ChatState } | { type: "focusComposer" };
 
-export type WebviewCommand = "newChannel" | "setPrivacy" | "manageDevices" | "rotateKey" | "openOnGitHub" | "signIn" | "setup" | "refresh";
+export type WebviewCommand = "newChannel" | "setPrivacy" | "openOnGitHub" | "signIn" | "setup" | "refresh";
 
 export type WebviewToHost =
   | { type: "ready" }
@@ -103,7 +92,7 @@ export const REACTIONS: Record<string, string> = {
   EYES: "👀",
 };
 
-const COMMANDS: WebviewCommand[] = ["newChannel", "setPrivacy", "manageDevices", "rotateKey", "openOnGitHub", "signIn", "setup", "refresh"];
+const COMMANDS: WebviewCommand[] = ["newChannel", "setPrivacy", "openOnGitHub", "signIn", "setup", "refresh"];
 const str = (x: unknown, max = 100_000): x is string => typeof x === "string" && x.length <= max;
 
 /** Validates untrusted webview input before the host acts on it. */

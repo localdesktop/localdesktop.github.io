@@ -49,7 +49,6 @@ function state(over: Partial<ChatState> = {}): ChatState {
     messages: [message()],
     hasOlder: false,
     loading: false,
-    encryption: { status: "ready", recipients: 3, devices: 5 },
     ccDefault: false,
     ...over,
   };
@@ -93,11 +92,11 @@ describe("chat webview", () => {
     const tabs = [...root.querySelectorAll(".channel")].map((t) => t.textContent);
     expect(tabs).toEqual(["🔒 #general", "🌐 #public3"]);
     const text = root.textContent!;
-    expect(text).toContain("Unencrypted — visible to everyone");
+    expect(text).toContain("Unencrypted, visible to everyone");
     expect(text).toContain("⛔ Invalid");
     expect(text).toContain("modified by @mallory");
     expect(text).toContain("edited");
-    expect(text).toContain("Encrypted for 3 maintainers / 5 devices");
+    expect(text).toContain("Encrypted on GitHub");
     expect(root.querySelector(".day")?.textContent).toBe("Today");
   });
 
@@ -143,16 +142,6 @@ describe("chat webview", () => {
     expect(root.textContent).toContain("Ask a repository admin");
   });
 
-  it("shows the waiting banner and an unencrypted warning when the device has no key", () => {
-    const { root, ui } = setup();
-    ui.receive({ type: "state", state: state({ encryption: { status: "waiting", recipients: 2, devices: 2, fingerprint: "aaaa bbbb" } }) });
-    expect(root.textContent).toContain("Waiting for a maintainer to share the chat key");
-    expect(root.textContent).toContain("aaaa bbbb");
-    expect(root.querySelector(".enc-line")!.textContent).toContain("can't encrypt yet");
-  });
-});
-
-describe("host message validation", () => {
   it("rejects malformed or unknown messages", () => {
     expect(parseWebviewMessage({ type: "openLink" })).toBeUndefined();
     expect(parseWebviewMessage({ type: "command", command: "rm -rf" })).toBeUndefined();

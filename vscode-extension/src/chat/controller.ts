@@ -7,10 +7,7 @@ import { hintMatches, type RefreshHint } from "../realtime/hub";
 import { realtimeConfig } from "../realtime";
 import { REACTIONS, type ChatState, type ChannelView, type HostToWebview, type MessageView, type WebviewToHost } from "../shared/messages";
 import { cryptoReady, decryptMessage, encryptMessage } from "./crypto";
-import { DiscussionsApi, type CommentNode, type DiscussionCategory, type DiscussionSummary } from "./discussionsApi";
-import { KeyDirectory } from "./keyDirectory";
-import { Keyring } from "./keyring";
-import { permissionAtLeast } from "./keystate";
+import { DiscussionsApi, permissionAtLeast, type CommentNode, type DiscussionCategory } from "./discussionsApi";
 import { channelBody, extractMentions, isEncryptedBody, parseDiscussionMarker, withPrivacy, type Privacy } from "./protocol";
 import { renderMarkdown, undecryptableHtml } from "./render";
 import { ChatStore, type Channel } from "./store";
@@ -26,11 +23,8 @@ const DEFAULT_CATEGORY = "chat";
 interface Session {
   client: GitHubClient;
   api: DiscussionsApi;
-  keyring: Keyring;
   store: ChatStore;
-  keys?: KeyDirectory;
   category?: DiscussionCategory;
-  keysDiscussion?: DiscussionSummary;
 }
 
 /**
@@ -51,10 +45,9 @@ export class ChatController implements vscode.Disposable {
   constructor(private readonly s: Services) {
     this.subs.push(
       s.hub.onHint((h) => {
-        if (hintMatches(h, "chat:", "keys", "members", "all")) void this.refresh(h);
+        if (hintMatches(h, "chat:", "members", "all")) void this.refresh(h);
       }),
       s.upstream.onDidChange(() => {
-        this.session?.keys?.dispose();
         this.session = undefined;
         void this.refresh({ scope: "all", source: "manual" });
       }),
@@ -106,12 +99,10 @@ export class ChatController implements vscode.Disposable {
       return undefined;
     }
     if (this.session?.client !== client) {
-      this.session?.keys?.dispose();
       await cryptoReady();
       this.session = {
         client,
         api: new DiscussionsApi(client),
-        keyring: new Keyring(this.s.context.secrets, client.repo.nodeId),
         store: new ChatStore(this.s.context.globalState, client.repo.nodeId),
       };
     }
@@ -129,7 +120,7 @@ export class ChatController implements vscode.Disposable {
     const base: Partial<ChatState> = {
       signedIn: true,
       viewer: client.repo.viewerLogin,
-      canWrite: atLeast(perm, "WRITE"),
+      canWrite: true,
       canMaintain: atLeast(perm, "MAINTAIN"),
       isAdmin: atLeast(perm, "ADMIN"),
       ccDefault: vscode.workspace.getConfiguration("localdesktop").get<boolean>("chat.ccMentions", false),
@@ -150,14 +141,9 @@ export class ChatController implements vscode.Disposable {
         return;
       }
     }
-    if (session.keys && (full || hintMatches(hint, "keys", "members"))) {
-      await session.keys.sync({ checkStale: hint.scope === "members" });
-      if (this.anyVisible) await session.keys.ensureRegistered().catch((e) => this.s.output.warn(`chat: couldn't register device: ${errorMessage(e)}`));
-    }
-
     const channels = store.channels;
     if (!channels.length) {
-      this.publish({ ...base, setup: "noChannels", channels: [], messages: [], loading: false, encryption: await this.encryptionInfo() });
+      this.publish({ ...base, setup: "noChannels", channels: [], messages: [], loading: false });
       return;
     }
     let active = channels.find((c) => c.discussion.id === (this.state.activeChannel ?? store.activeChannel)) ?? channels[0]!;
@@ -189,7 +175,6 @@ export class ChatController implements vscode.Disposable {
       activeChannel: active.discussion.id,
       messages: this.messagesFor(session, active),
       hasOlder: Boolean(store.comments.get(active.discussion.id)?.olderCursor),
-      encryption: await this.encryptionInfo(),
     });
   }
 
@@ -204,17 +189,12 @@ export class ChatController implements vscode.Disposable {
     }
     const discussions = await api.discussions(session.category.id);
     const channels: Channel[] = [];
-    let keys: DiscussionSummary | undefined;
     for (const d of discussions) {
       const meta = parseDiscussionMarker(d.body);
       if (!meta) continue;
       // Only discussions created by people with write access count (anyone else's are ignored).
       if (!permissionAtLeast(await api.permission(d.author), "write")) continue;
-      if (meta.kind === "keys") {
-        if (!keys || d.number === cfg.chat?.keysDiscussion) keys = d;
-        continue;
-      }
-      let privacy: Privacy = meta.privacy ?? "private";
+      let privacy: Privacy = meta.privacy;
       let privacyWarning: string | undefined;
       if (d.lastEditedAt && d.editor && !permissionAtLeast(await api.permission(d.editor), "write")) {
         privacy = "private";
@@ -223,11 +203,6 @@ export class ChatController implements vscode.Disposable {
       channels.push({ discussion: d, privacy, privacyWarning });
     }
     store.channels = channels;
-    if (keys && keys.id !== session.keysDiscussion?.id) {
-      session.keys?.dispose();
-      session.keys = new KeyDirectory(api, session.keyring, keys.id, this.s.output);
-    }
-    session.keysDiscussion = keys;
   }
 
   private channelView(store: ChatStore, c: Channel): ChannelView {
@@ -240,12 +215,6 @@ export class ChatController implements vscode.Disposable {
       url: c.discussion.url,
       privacyWarning: c.privacyWarning,
     };
-  }
-
-  private async encryptionInfo() {
-    const keys = this.session?.keys;
-    if (!keys) return { status: "unavailable" as const, recipients: 0, devices: 0 };
-    return keys.info();
   }
 
   private messagesFor(session: Session, channel: Channel): MessageView[] {
@@ -299,15 +268,7 @@ export class ChatController implements vscode.Disposable {
     if (c.isMinimized) {
       view.html = '<p class="muted">Hidden by a moderator.</p>';
     } else if (isEncryptedBody(c.body)) {
-      const keys = session.keys;
-      const res = decryptMessage(c.body, {
-        repoNodeId: session.client.repo.nodeId,
-        channelNodeId: channel.discussion.id,
-        authorLogin: c.author.login,
-        parentId,
-        keyFor: (kid) => session.keyring.keySync(kid),
-        signPkFor: (login, dev) => keys?.signPkFor(login, dev),
-      });
+      const res = decryptMessage(c.body, { repoNodeId: session.client.repo.nodeId, channelNodeId: channel.discussion.id, authorLogin: c.author.login, parentId });
       if (res.ok) {
         if (seenMids.has(res.header.mid)) return undefined; // same message posted twice: show it once
         seenMids.add(res.header.mid);
@@ -322,15 +283,10 @@ export class ChatController implements vscode.Disposable {
           view.html = renderMarkdown(res.plaintext.text);
           if (own) view.editableText = res.plaintext.text;
         }
-      } else if (res.reason === "noKey") {
-        view.status = "undecryptable";
-        view.statusDetail = "This device doesn't have the key for this message yet.";
-        view.html = undecryptableHtml("Encrypted — waiting for the chat key.");
       } else {
         view.status = "invalid";
-        view.statusDetail =
-          res.reason === "unknownDevice" ? "Sent from a device that isn't registered for this account (or was revoked)." : "The message failed authentication (tampered or moved).";
-        view.html = undecryptableHtml("Couldn't verify this message.");
+        view.statusDetail = "The message couldn't be decrypted (tampered or moved).";
+        view.html = undecryptableHtml("Couldn't decrypt this message.");
       }
     } else if (own && !c.isMinimized) {
       view.editableText = c.body;
@@ -358,14 +314,7 @@ export class ChatController implements vscode.Disposable {
     for (const n of fresh.slice(-3)) {
       let text = n.body;
       if (isEncryptedBody(n.body)) {
-        const res = decryptMessage(n.body, {
-          repoNodeId: session.client.repo.nodeId,
-          channelNodeId: channel.discussion.id,
-          authorLogin: n.author.login,
-          parentId: n.replyToId ?? "",
-          keyFor: (kid) => session.keyring.keySync(kid),
-          signPkFor: (login, dev) => session.keys?.signPkFor(login, dev),
-        });
+        const res = decryptMessage(n.body, { repoNodeId: session.client.repo.nodeId, channelNodeId: channel.discussion.id, authorLogin: n.author.login, parentId: n.replyToId ?? "" });
         text = res.ok ? res.plaintext.text : "🔒 encrypted message";
       }
       const mentioned = extractMentions(text).includes(viewer);
@@ -454,28 +403,14 @@ export class ChatController implements vscode.Disposable {
     if (!channel || !text.trim()) return;
     let body = text;
     if (channel.privacy === "private") {
-      const current = session.keys?.currentKey();
-      const device = await session.keyring.getDevice();
-      if (!current || !device) {
-        const choice = await vscode.window.showWarningMessage(
-          "This device can't encrypt yet (no maintainer has shared the chat key with it). Send this message unencrypted? Everyone can read it on GitHub.",
-          { modal: true },
-          "Send Unencrypted",
-        );
-        if (!choice) return;
-      } else {
-        body = encryptMessage({
-          text,
-          epochKey: current.key,
-          ep: current.ep,
-          device,
-          repoNodeId: session.client.repo.nodeId,
-          channelNodeId: channel.discussion.id,
-          authorLogin: session.client.repo.viewerLogin,
-          parentId: replyTo ?? "",
-          cc: notify ? extractMentions(text) : [],
-        }).body;
-      }
+      body = encryptMessage({
+        text,
+        repoNodeId: session.client.repo.nodeId,
+        channelNodeId: channel.discussion.id,
+        authorLogin: session.client.repo.viewerLogin,
+        parentId: replyTo ?? "",
+        cc: notify ? extractMentions(text) : [],
+      }).body;
     }
     const pending = { localId, channelId: channel.discussion.id, text, replyTo, notify, status: "pending" as const, createdAt: new Date().toISOString() };
     session.store.pending.push(pending);
@@ -501,22 +436,10 @@ export class ChatController implements vscode.Disposable {
     let body = text;
     if (isEncryptedBody(node.body)) {
       const parentId = node.replyToId ?? "";
-      const res = decryptMessage(node.body, {
-        repoNodeId: session.client.repo.nodeId,
-        channelNodeId: channel.discussion.id,
-        authorLogin: node.author.login,
-        parentId,
-        keyFor: (kid) => session.keyring.keySync(kid),
-        signPkFor: (login, dev) => session.keys?.signPkFor(login, dev),
-      });
-      const current = session.keys?.currentKey();
-      const device = await session.keyring.getDevice();
-      if (!res.ok || !current || !device) throw new LdError("COMMAND_FAILED", "This device can't re-encrypt that message.");
+      const res = decryptMessage(node.body, { repoNodeId: session.client.repo.nodeId, channelNodeId: channel.discussion.id, authorLogin: node.author.login, parentId });
+      if (!res.ok) throw new LdError("COMMAND_FAILED", "That message couldn't be decrypted, so it can't be edited.");
       body = encryptMessage({
         text,
-        epochKey: current.key,
-        ep: current.ep,
-        device,
         repoNodeId: session.client.repo.nodeId,
         channelNodeId: channel.discussion.id,
         authorLogin: session.client.repo.viewerLogin,
@@ -550,10 +473,6 @@ export class ChatController implements vscode.Disposable {
         return this.newChannel();
       case "setPrivacy":
         return this.setPrivacy();
-      case "rotateKey":
-        return this.rotateKey();
-      case "manageDevices":
-        return this.requireKeys().manage();
       case "openOnGitHub": {
         const url = this.activeChannel()?.discussion.url;
         if (url) await vscode.env.openExternal(vscode.Uri.parse(url));
@@ -570,12 +489,6 @@ export class ChatController implements vscode.Disposable {
     }
   }
 
-  private requireKeys(): KeyDirectory {
-    const keys = this.session?.keys;
-    if (!keys) throw new LdError("COMMAND_FAILED", "The chat isn't set up in this repository yet.", "An admin can run Local Desktop: Set Up Maintainer Chat.");
-    return keys;
-  }
-
   private async newChannel(): Promise<void> {
     const session = this.requireSession();
     if (!atLeast(session.client.repo.viewerPermission, "MAINTAIN")) throw new LdError("COMMAND_FAILED", "Only maintainers can create channels.");
@@ -590,7 +503,6 @@ export class ChatController implements vscode.Disposable {
     const privacy = await pickPrivacy();
     if (!privacy) return;
     const d = await session.api.createDiscussion(session.category.id, `#${name.trim().replace(/^#/, "")}`, channelBody(privacy));
-    await session.api.lock(d.id);
     await session.api.setSubscribed(d.id, false).catch(() => undefined);
     this.publish({ activeChannel: d.id });
     await session.store.setActiveChannel(d.id);
@@ -615,28 +527,13 @@ export class ChatController implements vscode.Disposable {
     await this.refresh({ scope: "all", source: "manual" });
   }
 
-  private async rotateKey(): Promise<void> {
-    const keys = this.requireKeys();
-    const ok = await vscode.window.showWarningMessage(
-      "Rotate the chat key? Every current maintainer device gets a new key; devices of people who lost write access won't. Former members can still read the history they already had.",
-      { modal: true },
-      "Rotate",
-    );
-    if (!ok) return;
-    await keys.rotate();
-    void vscode.window.showInformationMessage("Chat key rotated.");
-    await this.refresh({ scope: "keys", source: "manual" });
-  }
-
   /** For the setup flow: reset and reload everything. */
   async reload(): Promise<void> {
-    this.session?.keys?.dispose();
     this.session = undefined;
     await this.refresh({ scope: "all", source: "manual" });
   }
 
   dispose(): void {
-    this.session?.keys?.dispose();
     this.subs.forEach((d) => d.dispose());
     this.badgeEmitter.dispose();
   }
@@ -645,7 +542,7 @@ export class ChatController implements vscode.Disposable {
 async function pickPrivacy(current?: Privacy): Promise<Privacy | undefined> {
   const pick = await vscode.window.showQuickPick(
     [
-      { label: "🔒 Private", description: current === "private" ? "current" : undefined, detail: "End-to-end encrypted; only maintainers' devices can read it.", value: "private" as const },
+      { label: "🔒 Private", description: current === "private" ? "current" : undefined, detail: "Encrypted on GitHub; readable with the Local Desktop extension.", value: "private" as const },
       { label: "🌐 Public", description: current === "public" ? "current" : undefined, detail: "Plain GitHub Discussions comments, readable by everyone.", value: "public" as const },
     ],
     { title: "Channel privacy" },
@@ -664,7 +561,6 @@ function emptyState(): ChatState {
     messages: [],
     hasOlder: false,
     loading: true,
-    encryption: { status: "unavailable", recipients: 0, devices: 0 },
     ccDefault: false,
   };
 }

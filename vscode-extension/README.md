@@ -8,7 +8,7 @@ Maintainer tooling for [Local Desktop](https://localdesktop.github.io), the Andr
 - **Agent tools (MCP + CLI).** Coding agents can read logs and crash reports, take screenshots, tap, swipe and type on the device, and record and analyse audio. See [AGENTS.md](https://github.com/localdesktop/localdesktop.github.io/blob/main/AGENTS.md).
 - **Releases & CI.** Release status, one-click signed APK builds on GitHub Actions, release labels and notes, and Google Play uploads.
 - **Website.** Blog and docs trees, new-post wizard, live preview, and publishing as a pull request.
-- **Maintainer chat.** Channels backed by GitHub Discussions, end-to-end encrypted for private channels, with realtime updates.
+- **Maintainer chat.** Channels backed by GitHub Discussions; private channels are encrypted on GitHub and readable with the extension, with realtime updates.
 
 ## Requirements
 
