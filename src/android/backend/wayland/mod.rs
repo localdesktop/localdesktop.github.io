@@ -3,6 +3,7 @@ mod compositor;
 mod event_centralizer;
 mod event_handler;
 mod frame_clock;
+mod hardware_buffer;
 mod input;
 mod keymap;
 mod output_state;

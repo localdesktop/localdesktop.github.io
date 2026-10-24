@@ -303,6 +303,11 @@ where
         &mut self.renderer
     }
 
+    /// Raw handle of the EGL display the renderer runs on.
+    pub fn egl_display(&self) -> smithay::backend::egl::ffi::egl::types::EGLDisplay {
+        self._display.get_display_handle().handle
+    }
+
     /// Bind the underlying window to the underlying renderer.
     pub fn bind(&mut self) -> Result<(&mut R, R::Framebuffer<'_>), SwapBuffersError> {
         // NOTE: we must resize before making the current context current, otherwise the back

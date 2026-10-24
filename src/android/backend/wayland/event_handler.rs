@@ -2,16 +2,17 @@ use crate::android::{
     accessibility::{self, AppUserEvent},
     backend::wayland::{
         compositor::{send_frames_surface_tree, ClientState, State},
-        write_guest_output_state, CentralizedEvent, FrameClock, TouchMode, WaylandBackend,
-        WaylandWatcher,
+        hardware_buffer, write_guest_output_state, CentralizedEvent, FrameClock, TouchMode,
+        WaylandBackend, WaylandWatcher,
     },
 };
 use smithay::backend::input::ButtonState;
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
-use smithay::backend::renderer::element::Kind;
-use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::element::texture::TextureRenderElement;
+use smithay::backend::renderer::element::{render_elements, Kind};
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::utils::draw_render_elements;
 use smithay::backend::renderer::{Color32F, Frame, Renderer};
 use smithay::input::keyboard::FilterResult;
@@ -528,6 +529,12 @@ fn render_frame(backend: &mut WaylandBackend) {
     }
 }
 
+render_elements! {
+    SurfaceElement<=GlesRenderer>;
+    HardwareBuffer=TextureRenderElement<GlesTexture>,
+    Surface=WaylandSurfaceRenderElement<GlesRenderer>,
+}
+
 fn render(backend: &mut WaylandBackend) -> Result<(), String> {
     let Some(winit) = backend.graphic_renderer.as_mut() else {
         return Ok(());
@@ -535,28 +542,34 @@ fn render(backend: &mut WaylandBackend) -> Result<(), String> {
 
     let size = winit.window_size();
     let damage = Rectangle::from_size(size);
+    let display = winit.egl_display();
     {
         let (renderer, mut framebuffer) = winit
             .bind()
             .map_err(|error| format!("Failed to bind EGL surface: {error}"))?;
 
-        let elements = backend
-            .compositor
-            .state
-            .xdg_shell_state
-            .toplevel_surfaces()
-            .iter()
-            .flat_map(|surface| {
-                render_elements_from_surface_tree(
+        let mut elements = Vec::new();
+        let mut from_hardware_buffers = Vec::new();
+        for surface in backend.compositor.state.xdg_shell_state.toplevel_surfaces() {
+            let surface = surface.wl_surface();
+            if let Some(element) = hardware_buffer::render_element(renderer, display, surface) {
+                elements.push(SurfaceElement::HardwareBuffer(element));
+                from_hardware_buffers.push(surface.clone());
+                continue;
+            }
+            elements.extend(
+                render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<_>>(
                     renderer,
-                    surface.wl_surface(),
+                    surface,
                     (0, 0),
                     1.0,
                     1.0,
                     Kind::Unspecified,
                 )
-            })
-            .collect::<Vec<WaylandSurfaceRenderElement<GlesRenderer>>>();
+                .into_iter()
+                .map(SurfaceElement::Surface),
+            );
+        }
 
         let mut frame = renderer
             .render(&mut framebuffer, size, Transform::Flipped180)
@@ -570,6 +583,7 @@ fn render(backend: &mut WaylandBackend) -> Result<(), String> {
         let _ = frame
             .finish()
             .map_err(|error| format!("Failed to finish frame: {error:?}"))?;
+        hardware_buffer::frame_submitted(display, &from_hardware_buffers);
     }
 
     winit
