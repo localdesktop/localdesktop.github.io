@@ -7,7 +7,9 @@ use crate::{
             webview::{ErrorVariant, WebviewBackend},
         },
         utils::application_context::get_application_context,
-        utils::ndk::{density_dpi, long_press_timeout_ms, scale_factor, touch_slop_px},
+        utils::ndk::{
+            density_dpi, long_press_timeout_ms, refresh_rate_millihz, scale_factor, touch_slop_px,
+        },
     },
     core::config::{
         CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL, PIPEWIRE_GUEST_RUNTIME_DIR,
@@ -1336,6 +1338,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             clock: Clock::new(),
             key_counter: 0,
             guest_scale_factor: scale_factor(&android_app),
+            refresh_millihz: refresh_rate_millihz(&android_app),
             touch_points: std::collections::HashMap::new(),
             scroll_centroid: None,
             touch_mode: TouchMode::Undecided,
@@ -1344,6 +1347,9 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             touch_slop_px: touch_slop_px(&android_app),
             long_press_timeout_ms: long_press_timeout_ms(&android_app),
             pointer_pressed: false,
+            watcher: None,
+            frame_clock: None,
+            rendered_since_vsync: false,
             android_app,
         })
     } else {

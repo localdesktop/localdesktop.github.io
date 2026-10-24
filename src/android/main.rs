@@ -79,7 +79,7 @@ fn android_main(android_app: AndroidApp) {
     event_loop.set_control_flow(ControlFlow::Wait);
 
     // Phase 1: Setup
-    let mut app = PolarBearApp::build(android_app);
+    let mut app = PolarBearApp::build(android_app, event_loop.create_proxy());
 
     // Phase 2: Run
     event_loop.run_app(&mut app).expect("Failed to run app");

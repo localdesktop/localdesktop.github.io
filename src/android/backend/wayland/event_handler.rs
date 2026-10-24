@@ -1,8 +1,9 @@
 use crate::android::{
-    accessibility,
+    accessibility::{self, AppUserEvent},
     backend::wayland::{
         compositor::{send_frames_surface_tree, ClientState, State},
-        write_guest_output_state, CentralizedEvent, TouchMode, WaylandBackend,
+        write_guest_output_state, CentralizedEvent, FrameClock, TouchMode, WaylandBackend,
+        WaylandWatcher,
     },
 };
 use smithay::backend::input::ButtonState;
@@ -25,8 +26,10 @@ use smithay::{
     },
     output::{Mode, Scale},
 };
+use std::os::fd::AsFd;
 use std::sync::Arc;
-use winit::event_loop::{ActiveEventLoop, ControlFlow};
+use std::time::{Duration, Instant};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 
 /// Linux input event code for the left mouse button (`BTN_LEFT`).
 const BTN_LEFT: u32 = 0x110;
@@ -140,23 +143,30 @@ fn emit_pointer_click(
     emit_pointer_release(compositor, button, time);
 }
 
+/// How long until the finger that is down becomes a long press, if it still can.
+fn long_press_remaining(backend: &WaylandBackend) -> Option<Duration> {
+    if backend.touch_mode != TouchMode::Undecided || backend.touch_points.len() != 1 {
+        return None;
+    }
+    let down_time = backend.touch_down_time?;
+    let now = backend.clock.now().as_millis() as u64;
+    let deadline = down_time + backend.long_press_timeout_ms;
+    Some(Duration::from_millis(deadline.saturating_sub(now)))
+}
+
 /// Arm the long press once the finger has stayed put for `ViewConfiguration`'s timeout.
 ///
 /// No button is sent here: moving afterwards starts a drag with the left button held, lifting
-/// instead fires a right click. Called from the redraw loop, which already ticks every frame.
+/// instead fires a right click. Called whenever the loop goes idle, which `idle` schedules for
+/// the timeout.
 fn poll_long_press(backend: &mut WaylandBackend) {
-    if backend.touch_mode != TouchMode::Undecided || backend.touch_points.len() != 1 {
+    if long_press_remaining(backend) != Some(Duration::ZERO) {
         return;
     }
-    let (Some(down_time), Some(down_position)) =
-        (backend.touch_down_time, backend.touch_down_position)
-    else {
+    let Some(down_position) = backend.touch_down_position else {
         return;
     };
     let now = backend.clock.now().as_millis() as u64;
-    if now.saturating_sub(down_time) < backend.long_press_timeout_ms {
-        return;
-    }
 
     backend.touch_mode = TouchMode::LongPress;
     // Anchor the pointer where the finger landed, so a drag selects from there.
@@ -174,32 +184,10 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
             event_loop.exit();
         }
         CentralizedEvent::Redraw => {
-            poll_long_press(backend);
-
-            if let Err(error) = redraw(backend) {
-                log::error!("Redraw failed; dropping renderer until next resume: {error}");
-                backend.graphic_renderer = None;
-                accessibility::set_runtime_active(false);
-                event_loop.set_control_flow(ControlFlow::Wait);
-                return;
-            }
-
-            // Redraw the application.
-            //
-            // It's preferable for applications that do not render continuously to render in
-            // this event rather than in AboutToWait, since rendering in here allows
-            // the program to gracefully handle redraws requested by the OS.
-
-            // Draw.
-
-            // Queue a RedrawRequested event.
-            //
-            // You only need to call this if you've determined that you need to redraw in
-            // applications which do not always need to. Applications that redraw continuously
-            // can render here instead.
-            if let Some(winit) = backend.graphic_renderer.as_ref() {
-                winit.window().request_redraw();
-            }
+            // Requested by the OS (e.g. the surface was recreated), so draw even without damage.
+            backend.compositor.state.render_pending = true;
+            backend.rendered_since_vsync = false;
+            schedule_frame(backend);
         }
         CentralizedEvent::Input(event) => match event {
             InputEvent::Keyboard { event } => {
@@ -386,7 +374,7 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                 output.change_current_state(
                     Some(Mode {
                         size: size.into(),
-                        refresh: 60000,
+                        refresh: backend.refresh_millihz,
                     }),
                     Some(Transform::Normal),
                     Some(Scale::Integer(1)),
@@ -400,12 +388,147 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
             if let Some(surface) = get_surface(&backend.compositor.state) {
                 surface.xdg_toplevel().configure(size.w, size.h, vec![]);
             }
+
+            backend.compositor.state.render_pending = true;
+            schedule_frame(backend);
         }
         _ => (),
     }
 }
 
-fn redraw(backend: &mut WaylandBackend) -> Result<(), String> {
+/// Start waking up for client requests and display refreshes instead of polling every frame.
+pub fn start_frame_loop(backend: &mut WaylandBackend, proxy: &EventLoopProxy<AppUserEvent>) {
+    if backend.watcher.is_none() {
+        let compositor = &mut backend.compositor;
+        let fds = [
+            compositor.display.backend().poll_fd().try_clone_to_owned(),
+            compositor.listener.as_fd().try_clone_to_owned(),
+        ]
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>();
+        match fds {
+            Ok(fds) => backend.watcher = Some(WaylandWatcher::spawn(fds, proxy.clone())),
+            Err(error) => log::error!("Failed to watch the Wayland sockets: {error}"),
+        }
+    }
+    if backend.frame_clock.is_none() {
+        backend.frame_clock = Some(FrameClock::new(proxy.clone(), backend.refresh_millihz));
+    }
+}
+
+/// Accept new clients and handle their requests, then draw whatever they committed.
+pub fn dispatch_clients(backend: &mut WaylandBackend) {
+    let compositor = &mut backend.compositor;
+    loop {
+        match compositor.listener.accept() {
+            Ok(Some(stream)) => match compositor
+                .display
+                .handle()
+                .insert_client(stream, Arc::new(ClientState::default()))
+            {
+                Ok(client) => compositor.clients.push(client),
+                Err(error) => log::error!("Failed to insert Wayland client: {error}"),
+            },
+            Ok(None) => break,
+            Err(error) => {
+                log::error!("Failed to accept Wayland client: {error}");
+                break;
+            }
+        }
+    }
+    if let Err(error) = compositor.display.dispatch_clients(&mut compositor.state) {
+        log::error!("Failed to dispatch Wayland clients: {error}");
+    }
+    if let Some(watcher) = &backend.watcher {
+        watcher.rearm();
+    }
+    schedule_frame(backend);
+}
+
+/// The display is about to refresh: draw what arrived since the last frame and let clients
+/// start on their next one.
+pub fn on_vsync(backend: &mut WaylandBackend) {
+    if let Some(clock) = backend.frame_clock.as_mut() {
+        clock.ticked();
+    }
+    backend.rendered_since_vsync = false;
+    if backend.graphic_renderer.is_none() {
+        return;
+    }
+
+    if backend.compositor.state.render_pending {
+        render_frame(backend);
+    }
+
+    let compositor = &mut backend.compositor;
+    if compositor.state.frame_pending {
+        compositor.state.frame_pending = false;
+        let time = compositor.start_time.elapsed().as_millis() as u32;
+        for surface in compositor.state.xdg_shell_state.toplevel_surfaces() {
+            send_frames_surface_tree(surface.wl_surface(), time);
+        }
+    }
+
+    schedule_frame(backend);
+}
+
+/// Called when the event loop runs out of events: deliver what input produced and sleep until
+/// the next thing that needs attention.
+pub fn idle(backend: &mut WaylandBackend, event_loop: &ActiveEventLoop) {
+    poll_long_press(backend);
+
+    if let Some(deadline) = backend.frame_clock.as_ref().and_then(FrameClock::deadline) {
+        if Instant::now() >= deadline {
+            on_vsync(backend);
+        }
+    }
+
+    if let Err(error) = backend.compositor.display.flush_clients() {
+        log::warn!("Failed to flush Wayland clients: {error}");
+    }
+
+    let long_press = long_press_remaining(backend).map(|remaining| Instant::now() + remaining);
+    let frame = backend.frame_clock.as_ref().and_then(FrameClock::deadline);
+    event_loop.set_control_flow(match long_press.into_iter().chain(frame).min() {
+        Some(deadline) => ControlFlow::WaitUntil(deadline),
+        None => ControlFlow::Wait,
+    });
+}
+
+/// Draw new content right away unless a frame already went out for this refresh, and keep
+/// vsync ticking while anything is left for it.
+fn schedule_frame(backend: &mut WaylandBackend) {
+    // While hidden, clients get no frame callbacks and stop drawing until we are visible again.
+    if backend.graphic_renderer.is_none() {
+        return;
+    }
+    if backend.compositor.state.render_pending && !backend.rendered_since_vsync {
+        render_frame(backend);
+    }
+
+    let state = &backend.compositor.state;
+    if state.render_pending || state.frame_pending {
+        if let Some(clock) = backend.frame_clock.as_mut() {
+            clock.request();
+        }
+    }
+}
+
+fn render_frame(backend: &mut WaylandBackend) {
+    match render(backend) {
+        Ok(()) => {
+            backend.compositor.state.render_pending = false;
+            backend.rendered_since_vsync = true;
+        }
+        Err(error) => {
+            log::error!("Redraw failed; dropping renderer until next resume: {error}");
+            backend.graphic_renderer = None;
+            accessibility::set_runtime_active(false);
+        }
+    }
+}
+
+fn render(backend: &mut WaylandBackend) -> Result<(), String> {
     let Some(winit) = backend.graphic_renderer.as_mut() else {
         return Ok(());
     };
@@ -417,9 +540,8 @@ fn redraw(backend: &mut WaylandBackend) -> Result<(), String> {
             .bind()
             .map_err(|error| format!("Failed to bind EGL surface: {error}"))?;
 
-        let compositor = &mut backend.compositor;
-
-        let elements = compositor
+        let elements = backend
+            .compositor
             .state
             .xdg_shell_state
             .toplevel_surfaces()
@@ -448,39 +570,8 @@ fn redraw(backend: &mut WaylandBackend) -> Result<(), String> {
         let _ = frame
             .finish()
             .map_err(|error| format!("Failed to finish frame: {error:?}"))?;
-
-        for surface in compositor.state.xdg_shell_state.toplevel_surfaces() {
-            send_frames_surface_tree(
-                surface.wl_surface(),
-                compositor.start_time.elapsed().as_millis() as u32,
-            );
-        }
-
-        match compositor.listener.accept() {
-            Ok(Some(stream)) => match compositor
-                .display
-                .handle()
-                .insert_client(stream, Arc::new(ClientState::default()))
-            {
-                Ok(client) => compositor.clients.push(client),
-                Err(error) => log::error!("Failed to insert Wayland client: {error}"),
-            },
-            Ok(None) => {}
-            Err(error) => log::error!("Failed to accept Wayland client: {error}"),
-        }
-
-        compositor
-            .display
-            .dispatch_clients(&mut compositor.state)
-            .map_err(|error| format!("Failed to dispatch clients: {error}"))?;
-        compositor
-            .display
-            .flush_clients()
-            .map_err(|error| format!("Failed to flush clients: {error}"))?;
     }
 
-    // It is important that all events on the display have been dispatched and flushed to clients
-    // before swapping buffers because this operation may block.
     winit
         .submit(Some(&[damage]))
         .map_err(|error| format!("Failed to submit frame: {error}"))?;

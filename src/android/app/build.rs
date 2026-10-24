@@ -1,6 +1,8 @@
+use winit::event_loop::EventLoopProxy;
 use winit::platform::android::activity::AndroidApp;
 
 use crate::android::{
+    accessibility::AppUserEvent,
     backend::{wayland::WaylandBackend, webview::WebviewBackend},
     proot::setup::setup,
 };
@@ -12,6 +14,7 @@ pub struct PolarBearApp {
 
 pub struct PolarBearFrontend {
     pub android_app: AndroidApp,
+    pub proxy: EventLoopProxy<AppUserEvent>,
 }
 
 pub enum PolarBearBackend {
@@ -24,10 +27,10 @@ pub enum PolarBearBackend {
 }
 
 impl PolarBearApp {
-    pub fn build(android_app: AndroidApp) -> Self {
+    pub fn build(android_app: AndroidApp, proxy: EventLoopProxy<AppUserEvent>) -> Self {
         Self {
             backend: setup(android_app.clone()),
-            frontend: PolarBearFrontend { android_app },
+            frontend: PolarBearFrontend { android_app, proxy },
         }
     }
 }
