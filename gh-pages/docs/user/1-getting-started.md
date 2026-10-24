@@ -51,9 +51,9 @@ The hardest part is installing `yay` or `paru`. You have to follow the `README.m
 
 ## I don't have a physical keyboard.
 
-After Xfce launches, go to _"Applications"_ > _"Accessories"_ > _"Onboard"_. This is an on-screen keyboard. But you are highly recommended to get a physical keyboard.
+An on-screen keyboard slides up when you tap a text field, and hides again when you tap elsewhere. For apps where it doesn't appear on its own, open _"Applications"_ > _"Accessories"_ > _"On-screen keyboard"_ to show or hide it. A physical keyboard is still more comfortable for long sessions.
 
-![Onboard](/img/onboard.webp#boxed)
+![On-screen keyboard](/img/squeekboard.webp#boxed)
 
 ## Text is too small
 

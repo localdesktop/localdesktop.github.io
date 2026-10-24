@@ -58,6 +58,9 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 /// - Simple/light tasks or important settings that must be run every launch (e.g. the Firefox config) can be done inline on the `None` path.
 type StageOutput = Option<JoinHandle<()>>;
 
+/// GSettings defaults for the guest, in `/usr/share/glib-2.0/schemas`.
+const GSCHEMA_OVERRIDE: &str = "90_localdesktop.gschema.override";
+
 const PIPEWIRE_GUEST_LOCK_PACKAGES: &[&str] = &[
     "libpipewire",
     "pipewire",
@@ -921,6 +924,9 @@ export PULSE_SERVER={PULSE_GUEST_SERVER}
 export XDG_RUNTIME_DIR
 # Electron adds --no-sandbox when this is set; Android has no user namespaces for it to use.
 export ELECTRON_DISABLE_SANDBOX=1
+# Pick up our GSettings defaults (see {GSCHEMA_OVERRIDE}) until a pacman hook recompiles them.
+schemas=/usr/share/glib-2.0/schemas
+[ "$schemas/{GSCHEMA_OVERRIDE}" -nt "$schemas/gschemas.compiled" ] && glib-compile-schemas "$schemas"
 exec startxfce4 --wayland "$@"
 "#
         ),
@@ -947,6 +953,41 @@ xfconf-query -c xfce4-panel -p /panels/panel-2/autohide-behavior -s 0 2>/dev/nul
 /usr/local/bin/localdesktop-no-sandbox-entries
 "#
         ),
+    );
+
+    // Squeekboard types through labwc's virtual-keyboard protocol and pops up when a text field
+    // gets focus. Onboard can only type through X11 (XTest) or /dev/uinput, neither of which
+    // reaches Wayland apps here, and as a regular window it takes focus from what it types into.
+    let _ = fs::write(
+        fs_root
+            .join("usr/share/glib-2.0/schemas")
+            .join(GSCHEMA_OVERRIDE),
+        "[org.gnome.desktop.a11y.applications]\nscreen-keyboard-enabled=true\n",
+    );
+    // For apps that don't report focused text fields (X11 apps, for one).
+    write_executable(
+        &fs_root.join("usr/local/bin/localdesktop-keyboard"),
+        r#"#!/bin/sh
+osk() { gdbus call --session --dest sm.puri.OSK0 --object-path /sm/puri/OSK0 "$@"; }
+case "$(osk --method org.freedesktop.DBus.Properties.Get sm.puri.OSK0 Visible 2>/dev/null)" in
+    *true*) osk --method sm.puri.OSK0.SetVisible false >/dev/null ;;
+    *) osk --method sm.puri.OSK0.SetVisible true >/dev/null ;;
+esac
+"#,
+    );
+    let applications_dir = fs_root.join("usr/local/share/applications");
+    let _ = fs::create_dir_all(&applications_dir);
+    let _ = fs::write(
+        applications_dir.join("localdesktop-keyboard.desktop"),
+        r#"[Desktop Entry]
+Type=Application
+Name=On-screen keyboard
+Comment=Show or hide the on-screen keyboard
+Exec=/usr/local/bin/localdesktop-keyboard
+Icon=input-keyboard
+Terminal=false
+Categories=Utility;Accessibility;
+"#,
     );
 
     let desktop_dir = home_dir.join("Desktop");
@@ -1004,6 +1045,21 @@ X-GNOME-Autostart-enabled=true
 "#,
     )
     .expect("Failed to write Xfce session init autostart entry");
+
+    fs::write(
+        autostart_dir.join("localdesktop-squeekboard.desktop"),
+        r#"[Desktop Entry]
+Version=1.0
+Type=Application
+Name=On-screen keyboard
+Comment=Show a keyboard when a text field gets focus
+Exec=squeekboard
+Terminal=false
+OnlyShowIn=XFCE;
+X-GNOME-Autostart-enabled=true
+"#,
+    )
+    .expect("Failed to write Squeekboard autostart entry");
 
     // xfce4-power-manager expects host power interfaces that proot cannot provide.
     fs::write(
