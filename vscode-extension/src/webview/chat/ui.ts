@@ -85,9 +85,8 @@ function timeLabel(iso: string): string {
 }
 
 const BADGES: Partial<Record<MessageView["status"], { text: string; cls: string; title: string }>> = {
-  verified: { text: "🔒", cls: "badge ok", title: "End-to-end encrypted and signed by a registered device" },
-  unencrypted: { text: "⚠ Unencrypted — visible to everyone", cls: "badge warn", title: "Posted without encryption (e.g. from github.com)" },
-  undecryptable: { text: "🔒 Can't decrypt", cls: "badge muted", title: "This device doesn't have the key" },
+  verified: { text: "🔒", cls: "badge ok", title: "Encrypted on GitHub" },
+  unencrypted: { text: "⚠ Unencrypted, visible to everyone", cls: "badge warn", title: "Posted without encryption (e.g. from github.com)" },
   invalid: { text: "⛔ Invalid", cls: "badge error", title: "Failed verification" },
   pending: { text: "Sending…", cls: "badge muted", title: "" },
   failed: { text: "Not sent", cls: "badge error", title: "" },
@@ -291,8 +290,6 @@ export function createChatUi(root: HTMLElement, opts: ChatUiOptions): ChatUi {
           "div",
           { class: "menu", role: "menu" },
           s.canMaintain && item("setPrivacy", "Channel privacy…"),
-          item("manageDevices", "Devices & fingerprints…"),
-          s.canWrite && item("rotateKey", "Rotate encryption key…"),
           item("openOnGitHub", "Open channel on GitHub"),
           item("refresh", "Refresh"),
         ),
@@ -306,23 +303,6 @@ export function createChatUi(root: HTMLElement, opts: ChatUiOptions): ChatUi {
     if (s.error) banner("error", `⚠ ${s.error} `, h(doc, "button", { class: "link", "data-action": "command", "data-command": "refresh" }, "Retry"));
     const channel = s.channels.find((c) => c.id === s.activeChannel);
     if (channel?.privacyWarning) banner("warn", `⚠ ${channel.privacyWarning}`);
-    const enc = s.encryption;
-    if (enc.rotateNeeded?.length) {
-      banner(
-        "warn",
-        `♻ ${enc.rotateNeeded.map((l) => `@${l}`).join(", ")} no longer have write access but hold the current key. `,
-        s.canWrite && h(doc, "button", { class: "link", "data-action": "command", "data-command": "rotateKey" }, "Rotate key"),
-      );
-    }
-    if (channel?.privacy === "private") {
-      if (enc.status === "waiting") {
-        banner("info", "⏳ Waiting for a maintainer to share the chat key with this device.", enc.fingerprint ? h(doc, "div", { class: "fingerprint" }, `Fingerprint: ${enc.fingerprint}`) : undefined);
-      } else if (enc.status === "notMember") {
-        banner("info", "You need write access to read and send encrypted messages.");
-      } else if (enc.status === "noKey") {
-        banner("info", "Encryption isn't initialized for this repository yet.");
-      }
-    }
   }
 
   function renderMessage(m: MessageView, s: ChatState, isReply: boolean): HTMLElement {
@@ -440,16 +420,12 @@ export function createChatUi(root: HTMLElement, opts: ChatUiOptions): ChatUi {
     replyBar.textContent = "";
     if (reply) replyBar.append(`↩ Replying to @${reply.author.login} `, h(doc, "button", { class: "link", "data-action": "cancel-reply" }, "Cancel"));
     if (channel.privacy === "private") {
-      const enc = s.encryption;
-      encLine.textContent =
-        enc.status === "ready"
-          ? `🔒 Encrypted for ${enc.recipients} maintainer${enc.recipients === 1 ? "" : "s"} / ${enc.devices} device${enc.devices === 1 ? "" : "s"}`
-          : "⚠ This device can't encrypt yet — messages would be sent unencrypted";
-      encLine.className = `enc-line ${enc.status === "ready" ? "ok" : "warn"}`;
+      encLine.textContent = "🔒 Encrypted on GitHub";
+      encLine.className = "enc-line ok";
       notifyLabel.hidden = false;
       notifyBox.checked = local.notify ?? s.ccDefault;
     } else {
-      encLine.textContent = "🌐 Public channel — visible to everyone";
+      encLine.textContent = "🌐 Public channel, visible to everyone";
       encLine.className = "enc-line";
       notifyLabel.hidden = true;
     }

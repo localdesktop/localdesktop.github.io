@@ -5,12 +5,8 @@ import { withProgress } from "../extension/ui";
 import { atLeast, type GitHubClient } from "../github/client";
 import { applyRealtimeConfig, realtimeConfig } from "../realtime";
 import { loadRepoConfig, proposeRepoConfig } from "../realtime/config";
-import { cryptoReady } from "./crypto";
-import { DiscussionsApi, type DiscussionCategory, type DiscussionSummary } from "./discussionsApi";
-import { KeyDirectory } from "./keyDirectory";
-import { Keyring } from "./keyring";
-import { permissionAtLeast } from "./keystate";
-import { channelBody, keysBody, parseDiscussionMarker } from "./protocol";
+import { DiscussionsApi, permissionAtLeast, type DiscussionCategory, type DiscussionSummary } from "./discussionsApi";
+import { channelBody, parseDiscussionMarker } from "./protocol";
 
 const CATEGORY_NAME = "Chat";
 const CATEGORY_SLUG = "chat";
@@ -18,7 +14,7 @@ const CATEGORY_SLUG = "chat";
 async function enableDiscussions(s: Services, client: GitHubClient): Promise<GitHubClient> {
   if (client.repo.hasDiscussions) return client;
   const ok = await vscode.window.showWarningMessage(
-    `Enable GitHub Discussions for ${client.repo.fullName}? The chat lives in a Discussions category of this public repository: channel names, who posted and when are visible to everyone, while private channels' messages are end-to-end encrypted. GitHub also creates default categories (General, Q&A, Ideas…) that the community can use; you can delete them on GitHub afterwards.`,
+    `Enable GitHub Discussions for ${client.repo.fullName}? The chat lives in a Discussions category of this public repository: channel names, who posted and when are visible to everyone, while private channels' messages are encrypted and readable with the extension. GitHub also creates default categories (General, Q&A, Ideas…) that the community can use; you can delete them on GitHub afterwards.`,
     { modal: true },
     "Enable Discussions",
   );
@@ -76,12 +72,10 @@ async function ensureDiscussion(
   const all = await api.discussions(category.id);
   for (const d of all) {
     if (match(d) && permissionAtLeast(await api.permission(d.author), "write")) {
-      if (!d.locked) await api.lock(d.id);
       return d;
     }
   }
   const d = await api.createDiscussion(category.id, create.title, create.body);
-  await api.lock(d.id);
   // GitHub would email the creator about every comment; the extension notifies instead.
   await api.setSubscribed(d.id, false).catch(() => undefined);
   return d;
@@ -102,20 +96,12 @@ export async function runChatSetup(s: Services, onDone: () => Promise<void>): Pr
   const slug = cfg.chat?.category ?? CATEGORY_SLUG;
   const category = await ensureCategory(api, client, slug);
 
-  const { keysDiscussion, general } = await withProgress("Setting up the maintainer chat", async (progress) => {
-    progress.report({ message: "Key directory…" });
-    const keysDiscussion = await ensureDiscussion(api, category, (d) => parseDiscussionMarker(d.body)?.kind === "keys", { title: "🔑 Chat keys", body: keysBody() });
-    progress.report({ message: "Registering this device and creating the first key…" });
-    await cryptoReady();
-    const directory = new KeyDirectory(api, new Keyring(s.context.secrets, client.repo.nodeId), keysDiscussion.id, s.output);
-    try {
-      await directory.initialize();
-    } finally {
-      directory.dispose();
-    }
-    progress.report({ message: "#general channel…" });
+  const general = await withProgress("Setting up the chat", async () => {
     const general = await ensureDiscussion(api, category, (d) => parseDiscussionMarker(d.body)?.kind === "channel", { title: "#general", body: channelBody("private") });
-    return { keysDiscussion, general };
+    for (const d of await api.discussions(category.id)) {
+      if (d.locked && parseDiscussionMarker(d.body)) await api.unlock(d.id);
+    }
+    return general;
   });
 
   let prUrl: string | undefined;
@@ -125,7 +111,7 @@ export async function runChatSetup(s: Services, onDone: () => Promise<void>): Pr
     const pr = await proposeRepoConfig(client, (c) => ({ ...c, version: 1, chat }), {
       branch: "localdesktop/chat-setup",
       title: "chore: configure the maintainer chat for the Local Desktop extension",
-      body: `Points maintainers' editors at the chat in the **${category.name}** discussion category (key directory: #${keysDiscussion.number}).`,
+      body: `Points maintainers' editors at the chat in the **${category.name}** discussion category.`,
     });
     prUrl = pr.url;
   }

@@ -2,7 +2,7 @@
   "name": "localdesktop-dev",
   "displayName": "Local Desktop Dev",
   "description": "Build, debug and release Local Desktop: one-key Android debugging, agent device tools (MCP), CI builds, release management, website editing and maintainer chat.",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "publisher": "mister-teddy",
   "license": "GPL-3.0-only",
   "icon": "media/icon.png",
@@ -448,16 +448,6 @@
         "category": "Local Desktop"
       },
       {
-        "command": "localdesktop.chat.rotateKey",
-        "title": "Rotate Chat Encryption Key",
-        "category": "Local Desktop"
-      },
-      {
-        "command": "localdesktop.chat.manageDevices",
-        "title": "Manage Chat Devices…",
-        "category": "Local Desktop"
-      },
-      {
         "command": "localdesktop.chat.openInPanel",
         "title": "Open Chat in Editor",
         "category": "Local Desktop",
@@ -703,19 +693,9 @@
           "group": "navigation@2"
         },
         {
-          "command": "localdesktop.chat.manageDevices",
-          "when": "view == localdesktop.chat",
-          "group": "1_chat@1"
-        },
-        {
           "command": "localdesktop.chat.setPrivacy",
           "when": "view == localdesktop.chat && localdesktop.chat.canMaintain",
           "group": "1_chat@2"
-        },
-        {
-          "command": "localdesktop.chat.rotateKey",
-          "when": "view == localdesktop.chat && localdesktop.chat.canWrite",
-          "group": "1_chat@3"
         },
         {
           "command": "localdesktop.chat.setup",
@@ -964,15 +944,6 @@
           ],
           "default": "mentions",
           "description": "Show a notification for new chat messages."
-        },
-        "localdesktop.chat.autoGrant": {
-          "type": "string",
-          "enum": [
-            "members",
-            "prompt"
-          ],
-          "default": "members",
-          "markdownDescription": "Share the chat key with new devices of maintainers (write access) automatically, or ask first."
         },
         "localdesktop.chat.ccMentions": {
           "type": "boolean",

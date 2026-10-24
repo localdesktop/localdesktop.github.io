@@ -1,5 +1,10 @@
 import type { GitHubClient } from "../github/client";
-import type { KeyComment, Permission } from "./keystate";
+export type Permission = "admin" | "maintain" | "write" | "triage" | "read" | "none";
+
+const RANK: Record<Permission, number> = { none: 0, read: 1, triage: 2, write: 3, maintain: 4, admin: 5 };
+export function permissionAtLeast(p: Permission, min: Permission): boolean {
+  return RANK[p] >= RANK[min];
+}
 
 export interface DiscussionCategory {
   id: string;
@@ -171,23 +176,6 @@ export class DiscussionsApi {
   }
 
   /** Key-directory comments after `cursor`, oldest first (records are processed in order). */
-  async keyComments(discussionId: string): Promise<KeyComment[]> {
-    const comments: KeyComment[] = [];
-    let cursor: string | null = null;
-    for (let page = 0; page < 20; page++) {
-      const r: any = await this.client.graphql<any>(
-        `query($id: ID!, $after: String) { node(id: $id) { ... on Discussion {
-          comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { id databaseId createdAt lastEditedAt body author { login } } } } } }`,
-        { id: discussionId, after: cursor },
-      );
-      const c: any = r.node.comments;
-      for (const n of c.nodes) comments.push({ id: n.id, databaseId: n.databaseId, createdAt: n.createdAt, lastEditedAt: n.lastEditedAt, author: n.author?.login ?? "ghost", body: n.body ?? "" });
-      if (c.pageInfo.endCursor) cursor = c.pageInfo.endCursor;
-      if (!c.pageInfo.hasNextPage) break;
-    }
-    return comments;
-  }
-
   async addComment(discussionId: string, body: string, replyToId?: string): Promise<CommentNode> {
     const r = await this.client.graphql<any>(
       `mutation($id: ID!, $body: String!, $reply: ID) { addDiscussionComment(input: { discussionId: $id, body: $body, replyToId: $reply }) { comment { ${COMMENT_FIELDS} } } }`,
@@ -217,8 +205,8 @@ export class DiscussionsApi {
     return toDiscussion(r.createDiscussion.discussion);
   }
 
-  async lock(discussionId: string): Promise<void> {
-    await this.client.graphql(`mutation($id: ID!) { lockLockable(input: { lockableId: $id }) { clientMutationId } }`, { id: discussionId });
+  async unlock(discussionId: string): Promise<void> {
+    await this.client.graphql(`mutation($id: ID!) { unlockLockable(input: { lockableId: $id }) { clientMutationId } }`, { id: discussionId });
   }
 
   async updateDiscussionBody(discussionId: string, body: string): Promise<void> {

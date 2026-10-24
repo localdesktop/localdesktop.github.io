@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+
+- Anyone with the extension can read and post in the chat; no more chat keys.
+
 ## 0.1.3
 
 - Wake the device before screenshots and starting the app.
