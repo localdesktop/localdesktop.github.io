@@ -9,7 +9,7 @@ Local Desktop is an Android app, written in Rust, that runs Arch Linux ARM in pr
 | `src/android/` | The app: `main.rs` (`android_main`), compositor backend, proot, PipeWire/AAudio, accessibility keyboard (Java under `src/android/java/`) |
 | `src/bin/` | `build_apk` (on-device builder), `build_docs` (PDF manuals), the PipeWire AAudio sink |
 | `manifest.yaml` | Android manifest/config for xbuild. **The package name comes from here**; don't hard-code it |
-| `patches/` | Vendored, patched xbuild, smithay, winit, proot and libxkbcommon builds |
+| `patches/` | Vendored, patched xbuild, smithay, winit, proot and libxkbcommon builds, plus the guest's GPU Mesa (`build-mesa`) |
 | `gh-pages/` | Docusaurus website: `blog/`, `docs/user/`, `docs/developer/` |
 | `vscode-extension/` | The "Local Desktop Dev" editor extension and the device tools described below |
 

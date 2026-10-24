@@ -25,3 +25,9 @@ The content of the patched code can be found [here](https://github.com/localdesk
 ## build-proot-android & build-libxkbcommon
 
 The patched code and configurations are intended to make cross-compilation work, since these repositories were originally created to build binaries for the host architecture. **Local Desktop does not intend to merge these changes back upstream, as the original repositories are not designed for cross-compilation**.
+
+One PRoot change is about speed rather than building: its seccomp filter only stops the guest for the few `ioctl` requests PRoot rewrites (terminal settings and `FICLONE`). It used to stop on every `ioctl`, which is how GPU drivers talk to the kernel, several times per frame.
+
+## build-mesa
+
+A Docker build of [Mesa](https://mesa3d.org) for the Arch Linux ARM guest, producing `assets/guest-mesa.tar.xz` (run `patches/build-mesa/build.sh`, which needs Docker with `linux/arm64`). It enables the KGSL backend for Turnip, which Arch Linux ARM's Mesa leaves out, and carries one patch: Zink can present through kopper on Wayland compositors that offer no DRM render node, which is how labwc runs under proot. See [How it works](/docs/developer/how-it-works#gpu-acceleration-in-the-guest).

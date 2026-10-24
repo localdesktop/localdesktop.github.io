@@ -6,8 +6,8 @@ use crate::android::{
     backend::{
         pipewire_standalone_aaudio,
         wayland::{
-            bind, centralize, centralize_injected_keyboard, handle, write_guest_output_state,
-            CentralizedEvent, State,
+            bind, centralize, centralize_injected_keyboard, dispatch_clients, handle, idle,
+            on_vsync, start_frame_loop, write_guest_output_state, CentralizedEvent, State,
         },
         webview::ErrorVariant,
     },
@@ -38,6 +38,7 @@ fn configure_output(backend: &mut crate::android::backend::wayland::WaylandBacke
     // default on the first launch and only becomes accurate after a configuration change.
     let guest_scale_factor = ndk::scale_factor(&backend.android_app);
     backend.guest_scale_factor = guest_scale_factor;
+    backend.refresh_millihz = ndk::refresh_rate_millihz(&backend.android_app);
     backend.compositor.state.size = size.into();
 
     let output = backend
@@ -64,7 +65,7 @@ fn configure_output(backend: &mut crate::android::backend::wayland::WaylandBacke
     output.change_current_state(
         Some(Mode {
             size: size.into(),
-            refresh: 60000,
+            refresh: backend.refresh_millihz,
         }),
         Some(Transform::Normal),
         Some(Scale::Integer(1)),
@@ -129,9 +130,7 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
                 configure_output(backend);
                 accessibility::set_runtime_active(true);
 
-                if let Some(winit) = backend.graphic_renderer.as_ref() {
-                    winit.window().request_redraw();
-                }
+                start_frame_loop(backend, &self.frontend.proxy);
                 handle(CentralizedEvent::Redraw, backend, event_loop);
                 launch();
                 // Start the standalone-client PipeWire/AAudio backend.
@@ -140,20 +139,32 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: AppUserEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppUserEvent) {
         let PolarBearBackend::Wayland(backend) = &mut self.backend else {
             accessibility::drain_pending_events();
             return;
         };
 
-        for event in accessibility::drain_pending_events() {
-            let event = centralize_injected_keyboard(
-                event.scancode,
-                event.state,
-                event.event_time_ms,
-                backend,
-            );
-            handle(event, backend, event_loop);
+        match event {
+            AppUserEvent::AccessibilityInputReady => {
+                for event in accessibility::drain_pending_events() {
+                    let event = centralize_injected_keyboard(
+                        event.scancode,
+                        event.state,
+                        event.event_time_ms,
+                        backend,
+                    );
+                    handle(event, backend, event_loop);
+                }
+            }
+            AppUserEvent::WaylandReady => dispatch_clients(backend),
+            AppUserEvent::Vsync => on_vsync(backend),
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let PolarBearBackend::Wayland(backend) = &mut self.backend {
+            idle(backend, event_loop);
         }
     }
 

@@ -13,6 +13,10 @@ use winit::{event::ElementState, event_loop::EventLoopProxy};
 #[derive(Clone, Copy, Debug)]
 pub enum AppUserEvent {
     AccessibilityInputReady,
+    /// A Wayland client connected or sent requests.
+    WaylandReady,
+    /// The display is about to refresh.
+    Vsync,
 }
 
 #[derive(Clone, Copy, Debug)]

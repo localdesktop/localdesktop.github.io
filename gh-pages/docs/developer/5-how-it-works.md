@@ -84,3 +84,22 @@ The magic behind Local Desktop is that:
 - Applications (Firefox, Thunar, the Xfce panel, and so on) render through that nested Wayland stack back to the Android window. Xwayland remains available for legacy X11-only apps when needed.
 
 Fun fact: [Termux:X11](https://github.com/termux/termux-x11) also implements a display server, but it is based on X11. Just like how Xwayland is an X11 server running on top of Wayland, Termux:X11 is an X11 server running on top of an Android activity. (And Xorg is an X11 server running on top of the Linux kernel, remember that?)
+
+## Rendering
+
+### The frame loop
+
+The compositor only works when something happens. A `wayland-watcher` thread polls the client sockets and wakes the winit event loop (`AppUserEvent::WaylandReady`) when a client connects or sends requests. When a client attaches a new buffer, the compositor draws it right away, at most once per display refresh. Frame callbacks, which tell clients to draw their next frame, are released on the next vsync (`AChoreographer`, delivered as `AppUserEvent::Vsync`). With nothing changing on screen, the compositor sleeps and presents no frames.
+
+labwc hands over its frames as shared memory (`wl_shm`). Uploading them with `glTexSubImage2D` makes Adreno's driver re-tile every damaged pixel on the CPU, so `hardware_buffer.rs` copies the damaged rows into one of two `AHardwareBuffer`s instead, and the GPU samples that linear memory directly. Other buffers, and devices without `AHardwareBuffer` (Android 7 and older) or GLES 3, keep Smithay's upload path.
+
+### GPU acceleration in the guest
+
+Android lets apps open exactly one GPU device: Qualcomm's KGSL (`/dev/kgsl-3d0`). The DRM nodes under `/dev/dri` are off limits. Arch Linux ARM's Mesa only talks to DRM, so on its own every guest app renders on the CPU (llvmpipe).
+
+Local Desktop ships its own Mesa build (`patches/build-mesa`, unpacked to `/opt/localdesktop-mesa`):
+
+- **Turnip** (Vulkan) built with the KGSL backend.
+- **Zink** (OpenGL on top of Vulkan), selected through glvnd (`__EGL_VENDOR_LIBRARY_FILENAMES`, `__GLX_VENDOR_LIBRARY_NAME`) so the distro's Mesa stays installed and untouched.
+
+labwc renders with pixman and offers no dma-buf, so GPU apps present through shared memory. Vulkan swapchains use `MESA_VK_WSI_DEBUG=sw`, and Zink presents through kopper, its Vulkan WSI path. Upstream Mesa can only force that path on X11 (`LIBGL_KOPPER_DRI2`); our patch adds the same for Wayland. The session sources `/opt/localdesktop-mesa/env.sh`, which only switches drivers when `vkprobe` finds a Turnip device, so unsupported GPUs fall back to llvmpipe.

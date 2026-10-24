@@ -5,6 +5,7 @@ android:
     - assets/unsupported.html
     - assets/ld-linux-aarch64.so.1
     - assets/wireplumber-share.tar
+    - assets/guest-mesa.tar.xz
   runtime_libs:
     - assets/libs
   gradle: true

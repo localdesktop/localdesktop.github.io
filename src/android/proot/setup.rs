@@ -7,16 +7,19 @@ use crate::{
             webview::{ErrorVariant, WebviewBackend},
         },
         utils::application_context::get_application_context,
-        utils::ndk::{density_dpi, long_press_timeout_ms, scale_factor, touch_slop_px},
+        utils::ndk::{
+            density_dpi, long_press_timeout_ms, refresh_rate_millihz, scale_factor, touch_slop_px,
+        },
     },
     core::config::{
-        CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL, PIPEWIRE_GUEST_RUNTIME_DIR,
-        PULSE_GUEST_SERVER,
+        self, CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL,
+        PIPEWIRE_GUEST_RUNTIME_DIR, PULSE_GUEST_SERVER,
     },
 };
 use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
+    ffi::CString,
     fs::{self, File},
     io::{ErrorKind, Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
@@ -57,6 +60,8 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 /// - Heavy/long work belongs inside the spawned thread of a returned `Some(JoinHandle)`, so it runs once at install and surfaces as setup progress.
 /// - Simple/light tasks or important settings that must be run every launch (e.g. the Firefox config) can be done inline on the `None` path.
 type StageOutput = Option<JoinHandle<()>>;
+
+const GUEST_MESA_ASSET: &str = "guest-mesa.tar.xz";
 
 const PIPEWIRE_GUEST_LOCK_PACKAGES: &[&str] = &[
     "libpipewire",
@@ -182,6 +187,13 @@ fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let mpsc_sender = options.mpsc_sender.clone();
 
+    // Android denies reading /proc/bus/pci/devices, and libpci exits on that inside Firefox's
+    // GPU probe, which then turns off hardware rendering and WebGL. An empty list lets it go on.
+    let pci_devices = fs_root.join("proc/.pci_devices");
+    if fs_root.join("proc").is_dir() && !pci_devices.exists() {
+        let _ = fs::write(&pci_devices, "");
+    }
+
     if !fs_root.join("proc/.version").exists() {
         return Some(thread::spawn(move || {
             mpsc_sender
@@ -217,6 +229,7 @@ fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
                     ("proc/.vmstat", "nr_free_pages 1743136\nnr_zone_inactive_anon 179281\nnr_zone_active_anon 7183\n"),
                     ("proc/.sysctl_entry_cap_last_cap", "40\n"),
                     ("proc/.sysctl_inotify_max_user_watches", "4096\n"),
+                    ("proc/.pci_devices", ""),
                 ];
 
             for (path, content) in proc_files {
@@ -404,6 +417,55 @@ fn clear_pipewire_package_lock_for_install() {
             .expect("Failed to clear PipeWire pacman lock before install");
         log::info!("Temporarily cleared guest PipeWire package lock before dependency install");
     }
+}
+
+/// Turnip (Vulkan on KGSL) and Zink built by `patches/build-mesa`, unpacked to
+/// `/opt/localdesktop-mesa`. The session's `env.sh` switches to it only when Turnip finds a GPU.
+fn setup_guest_mesa(options: &SetupOptions) -> StageOutput {
+    // KGSL is Qualcomm's GPU device and the only one Android lets apps open.
+    if fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/kgsl-3d0")
+        .is_err()
+    {
+        return None;
+    }
+
+    let asset_name = CString::new(GUEST_MESA_ASSET).expect("Invalid asset name");
+    let Some(mut asset) = options.android_app.asset_manager().open(&asset_name) else {
+        return None;
+    };
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let prefix = fs_root.join("opt/localdesktop-mesa");
+    let stamp_path = prefix.join(".asset");
+    // Unpack again only when the APK carries a different build.
+    let stamp = format!("{} {}", config::VERSION, asset.length());
+    if fs::read_to_string(&stamp_path).is_ok_and(|current| current == stamp) {
+        return None;
+    }
+
+    let mut bytes = Vec::with_capacity(asset.length());
+    if let Err(error) = asset.read_to_end(&mut bytes) {
+        log::warn!("Failed to read {GUEST_MESA_ASSET}: {error}");
+        return None;
+    }
+    let _ = fs::remove_dir_all(&prefix);
+    if let Err(error) = Archive::new(XzDecoder::new(bytes.as_slice())).unpack(fs_root) {
+        log::warn!("Failed to unpack {GUEST_MESA_ASSET}: {error}");
+        let _ = fs::remove_dir_all(&prefix);
+        return None;
+    }
+
+    // glvnd finds GLX vendors by library name, so `__GLX_VENDOR_LIBRARY_NAME=localdesktop`
+    // needs the library on the default search path.
+    let glx = fs_root.join("usr/lib/libGLX_localdesktop.so.0");
+    let _ = fs::remove_file(&glx);
+    let _ = symlink("/opt/localdesktop-mesa/lib/libGLX_localdesktop.so.0", &glx);
+
+    let _ = fs::write(&stamp_path, stamp);
+    log::info!("Installed the guest GPU drivers from {GUEST_MESA_ASSET}");
+    None
 }
 
 fn setup_pipewire_package_lock(_: &SetupOptions) -> StageOutput {
@@ -927,6 +989,8 @@ export PULSE_SERVER={PULSE_GUEST_SERVER}
 export XDG_RUNTIME_DIR
 # Electron adds --no-sandbox when this is set; Android has no user namespaces for it to use.
 export ELECTRON_DISABLE_SANDBOX=1
+# GPU acceleration on Qualcomm devices (Turnip and Zink), when the GPU is supported.
+[ -r /opt/localdesktop-mesa/env.sh ] && . /opt/localdesktop-mesa/env.sh
 exec startxfce4 --wayland "$@"
 "#
         ),
@@ -1130,17 +1194,19 @@ apply_output() {{
     return 1
 }}
 
-last_config=""
+last_state=""
 while true; do
     if ! read_output_state; then
         sleep 0.2
         continue
     fi
-    output=$(first_output)
-    if [ -n "$output" ]; then
-        config="$output $target_mode $target_scale"
-        if [ "$config" != "$last_config" ] && apply_output "$output"; then
-            last_config="$config"
+    # Only query labwc when the host wrote a new size or scale; spawning wlr-randr every
+    # second costs a steady few percent of a core under proot.
+    state="$target_mode $target_scale"
+    if [ "$state" != "$last_state" ]; then
+        output=$(first_output)
+        if [ -n "$output" ] && apply_output "$output"; then
+            last_state="$state"
         fi
     fi
     sleep 1
@@ -1259,8 +1325,9 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(setup_fake_bwrap), // Step 7. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
         Box::new(setup_chromium_no_sandbox), // Step 8. Make Chromium/Electron apps launchable without a terminal
         Box::new(setup_onboard_signal_fix), // Step 9. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
-        Box::new(setup_xfce_wayland),       // Step 10. Setup Xfce Wayland launch and HiDPI scaling
-        Box::new(fix_xkb_symlink),          // Step 11. Fix xkb symlink
+        Box::new(setup_guest_mesa), // Step 10. Unpack the Turnip/Zink GPU drivers on Qualcomm devices
+        Box::new(setup_xfce_wayland), // Step 11. Setup Xfce Wayland launch and HiDPI scaling
+        Box::new(fix_xkb_symlink),  // Step 12. Fix xkb symlink
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
@@ -1336,6 +1403,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             clock: Clock::new(),
             key_counter: 0,
             guest_scale_factor: scale_factor(&android_app),
+            refresh_millihz: refresh_rate_millihz(&android_app),
             touch_points: std::collections::HashMap::new(),
             scroll_centroid: None,
             touch_mode: TouchMode::Undecided,
@@ -1344,6 +1412,9 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             touch_slop_px: touch_slop_px(&android_app),
             long_press_timeout_ms: long_press_timeout_ms(&android_app),
             pointer_pressed: false,
+            watcher: None,
+            frame_clock: None,
+            rendered_since_vsync: false,
             android_app,
         })
     } else {

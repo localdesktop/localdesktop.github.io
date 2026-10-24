@@ -238,8 +238,6 @@ pub fn bind(event_loop: &ActiveEventLoop) -> Result<WinitGraphicsBackend<GlesRen
         .map_err(|error| format!("Failed to create GLES Renderer: {error}"))?;
     let damage_tracking = display.supports_damage();
 
-    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-
     Ok(WinitGraphicsBackend {
         window: window.clone(),
         _display: display,
@@ -303,6 +301,11 @@ where
     /// Access the underlying renderer
     pub fn renderer(&mut self) -> &mut R {
         &mut self.renderer
+    }
+
+    /// Raw handle of the EGL display the renderer runs on.
+    pub fn egl_display(&self) -> smithay::backend::egl::ffi::egl::types::EGLDisplay {
+        self._display.get_display_handle().handle
     }
 
     /// Bind the underlying window to the underlying renderer.

@@ -1,0 +1,82 @@
+egl: let LIBGL_KOPPER_DRI2 force Zink on Wayland compositors without a render node
+
+On X11, MESA_LOADER_DRIVER_OVERRIDE=zink with LIBGL_KOPPER_DRI2=1 skips the DRI3
+render node checks and presents through kopper (Vulkan WSI). Wayland had no
+equivalent: without zwp_linux_dmabuf_v1 or wl_drm from the compositor, EGL fell
+back to llvmpipe even when a Vulkan GPU was available.
+
+Local Desktop runs labwc with the pixman renderer inside proot, where the GPU is
+reachable only through KGSL (Turnip), so take the same kopper + wl_shm path
+there, and on the surfaceless platform. Forced Zink has no DRM node to
+describe, and advertising the software EGLDevice instead makes clients such as
+Firefox treat it as unaccelerated, so leave Wayland and X11 displays without a
+device.
+
+--- a/src/egl/drivers/dri2/platform_wayland.c
++++ b/src/egl/drivers/dri2/platform_wayland.c
+@@ -43,6 +43,7 @@
+ 
+ #include "util/anon_file.h"
+ #include "util/perf/cpu_trace.h"
++#include "util/u_debug.h"
+ #include "util/u_vector.h"
+ #include "util/format/u_formats.h"
+ #include "main/glconfig.h"
+@@ -3262,7 +3263,9 @@
+    if (!dri2_create_screen(disp))
+       goto cleanup;
+ 
+-   if (!dri2_setup_device(disp, disp->Options.ForceSoftware)) {
++   /* Forced Zink: see platform_x11_finalize(). */
++   if (disp->Options.ForceSoftware &&
++       !dri2_setup_device(disp, disp->Options.ForceSoftware)) {
+       _eglError(EGL_NOT_INITIALIZED, "DRI2: failed to setup EGLDevice");
+       goto cleanup;
+    }
+@@ -3297,7 +3300,8 @@
+ EGLBoolean
+ dri2_initialize_wayland(_EGLDisplay *disp)
+ {
+-   if (disp->Options.ForceSoftware)
++   if (disp->Options.ForceSoftware ||
++       (disp->Options.Zink && debug_get_bool_option("LIBGL_KOPPER_DRI2", false)))
+       return dri2_initialize_wayland_swrast(disp);
+    else
+       return dri2_initialize_wayland_drm(disp);
+--- a/src/egl/drivers/dri2/platform_x11.c
++++ b/src/egl/drivers/dri2/platform_x11.c
+@@ -1120,7 +1120,11 @@
+    if (!dri2_create_screen(disp))
+       return false;
+ 
+-   if (!dri2_setup_device(disp, disp->Options.ForceSoftware || force_zink)) {
++   /* Forced Zink renders on a Vulkan device without a DRM node. No EGLDevice
++    * describes that, and the software one would mark it unaccelerated.
++    */
++   if ((disp->Options.ForceSoftware || !force_zink) &&
++       !dri2_setup_device(disp, disp->Options.ForceSoftware)) {
+       _eglError(EGL_NOT_INITIALIZED, "DRI2: failed to setup EGLDevice");
+       return false;
+    }
+--- a/src/egl/drivers/dri2/platform_surfaceless.c
++++ b/src/egl/drivers/dri2/platform_surfaceless.c
+@@ -31,6 +31,7 @@
+ #include <unistd.h>
+ #include "pipe/p_screen.h"
+ #include "util/libdrm.h"
++#include "util/u_debug.h"
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ 
+@@ -389,7 +390,10 @@
+     */
+    driver_loaded = surfaceless_probe_device(disp, disp->Options.ForceSoftware,
+                                             disp->Options.Zink);
+-   if (!driver_loaded && disp->Options.ForceSoftware) {
++   /* Forced Zink without a render node: see dri2_initialize_wayland(). */
++   if (!driver_loaded &&
++       (disp->Options.ForceSoftware ||
++        (disp->Options.Zink && debug_get_bool_option("LIBGL_KOPPER_DRI2", false)))) {
+       _eglLog(_EGL_DEBUG, "Falling back to surfaceless swrast without DRM.");
+       driver_loaded = surfaceless_probe_device_sw(disp);
+    }

@@ -13,8 +13,8 @@ use smithay::{
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            with_surface_tree_downward, CompositorClientState, CompositorHandler, CompositorState,
-            SurfaceAttributes, TraversalAction,
+            with_states, with_surface_tree_downward, CompositorClientState, CompositorHandler,
+            CompositorState, SurfaceAttributes, TraversalAction,
         },
         output::OutputHandler,
         selection::{
@@ -60,6 +60,10 @@ pub struct State {
     pub data_device_state: DataDeviceState,
     pub seat_state: SeatState<Self>,
     pub size: Size<i32, Logical>,
+    /// A client attached a new buffer since the last render.
+    pub render_pending: bool,
+    /// A client committed since frame callbacks were last released.
+    pub frame_pending: bool,
 }
 
 impl BufferHandler for State {
@@ -122,7 +126,18 @@ impl CompositorHandler for State {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
+        // Frame-callback-only commits (no attach) change nothing on screen.
+        let attached = with_states(surface, |states| {
+            states
+                .cached_state
+                .get::<SurfaceAttributes>()
+                .current()
+                .buffer
+                .is_some()
+        });
         on_commit_buffer_handler::<Self>(surface);
+        self.render_pending |= attached;
+        self.frame_pending = true;
     }
 }
 
@@ -215,6 +230,8 @@ impl Compositor {
             data_device_state: DataDeviceState::new::<State>(&dh),
             seat_state,
             size: (1920, 1080).into(),
+            render_pending: false,
+            frame_pending: false,
         };
 
         Ok(Compositor {
