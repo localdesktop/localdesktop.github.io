@@ -291,7 +291,7 @@ impl CargoBuild {
         })
     }
 
-    pub fn use_android_ndk(&mut self, path: &Path, target_sdk_version: u32) -> Result<()> {
+    pub fn use_android_ndk(&mut self, path: &Path, sdk_version: u32) -> Result<()> {
         let path = dunce::canonicalize(path)?;
         let ndk_triple = self.target.ndk_triple();
         self.cfg_tool(Tool::Cc, "clang");
@@ -301,11 +301,11 @@ impl CargoBuild {
         self.set_sysroot(&path);
         self.add_cxxflag("-stdlib=libc++");
         let lib_dir = path.join("usr").join("lib").join(ndk_triple);
-        let sdk_lib_dir = lib_dir.join(target_sdk_version.to_string());
+        let sdk_lib_dir = lib_dir.join(sdk_version.to_string());
         anyhow::ensure!(
             sdk_lib_dir.exists(),
             "ndk doesn't support sdk version {}",
-            target_sdk_version
+            sdk_version
         );
         self.use_ld("lld");
         if let Some(triple) = self.triple {

@@ -55,3 +55,4 @@ jobs:
           packageName: io.github.localdesktop
           releaseFiles: target/*.aab
           track: alpha
+          status: draft
