@@ -7,11 +7,12 @@ slug: /privacy
 
 # Privacy Policy
 
-_Last updated: May 9, 2026_
+_Last updated: October 25, 2026_
 
 Thank you for using **Local Desktop** ("we", "our", "us"). This privacy policy explains how we handle information related to:
 
 - the **Local Desktop app**
+- the **Local Desktop: Pantheon app**
 - the **Local Desktop website** at `https://localdesktop.github.io`
 
 We are committed to being transparent about what we collect and why.
@@ -30,6 +31,10 @@ However, we use **Sentry** for crash reporting and diagnostics. When the app enc
 - Debugging context (such as username, if your system environment provides one)
 
 We use this information **only to investigate crashes, diagnose bugs, and improve app stability and performance**.
+
+### Local Desktop: Pantheon
+
+The Local Desktop: Pantheon app **does not collect or send any personal or technical information**. It has no crash reporting or analytics, and the desktop it runs works offline. When you buy it on Google Play, Google handles the payment under its own privacy policy, and we only receive the order details Google shares with developers.
 
 ---
 
