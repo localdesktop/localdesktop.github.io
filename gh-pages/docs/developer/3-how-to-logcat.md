@@ -41,12 +41,12 @@ Common issues:
 Local Desktop logs from several processes (the app itself, proot, PipeWire), so the most reliable filter is the app's user ID. Run the following commands to capture its logcat output:
 
 ```sh
-APP_UID=$(adb shell pm list packages -U app.polarbear | sed 's/.*uid://' | tr -d '\r')
+APP_UID=$(adb shell pm list packages -U io.github.localdesktop | sed 's/.*uid://' | tr -d '\r')
 adb logcat --uid=$APP_UID
 ```
 
 :::tip
-Newer builds use the package name `io.github.localdesktop`. If the first command prints nothing, replace `app.polarbear` with `io.github.localdesktop`.
+Builds before v3.0.0 use the package name `app.polarbear`. If the first command prints nothing, replace `io.github.localdesktop` with `app.polarbear`.
 :::
 
 - The command above will keep waiting for new logcat entries in real-time. You can stop watching by pressing `Ctrl + C`.
@@ -69,7 +69,7 @@ Logcat Reader is an Android app that can capture logcat directly from your phone
 You still need to connect your phone to your PC **one time** initially to enable the app to capture logcat output. The app will show you instructions on how to do this on first launch.
 :::
 
-Click on the **3 dots menu** > **"Filters"** > **"+"** > and set `app.polarbear` as the **"Package name"**.
+Click on the **3 dots menu** > **"Filters"** > **"+"** > and set `io.github.localdesktop` as the **"Package name"**.
 
 ![Filter logcat](/img/logcat-filter.webp#boxed)
 

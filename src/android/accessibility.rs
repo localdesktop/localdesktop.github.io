@@ -127,7 +127,7 @@ fn enqueue_key_event(action: jint, key_code: jint, scan_code: jint, event_time_m
 }
 
 #[no_mangle]
-pub extern "system" fn Java_app_polarbear_KeyboardAccessibilityService_nativeSetServiceConnected(
+pub extern "system" fn Java_io_github_localdesktop_KeyboardAccessibilityService_nativeSetServiceConnected(
     _env: JNIEnv,
     _service: JObject,
     connected: jboolean,
@@ -136,7 +136,7 @@ pub extern "system" fn Java_app_polarbear_KeyboardAccessibilityService_nativeSet
 }
 
 #[no_mangle]
-pub extern "system" fn Java_app_polarbear_KeyboardAccessibilityService_nativeOnKeyEvent(
+pub extern "system" fn Java_io_github_localdesktop_KeyboardAccessibilityService_nativeOnKeyEvent(
     _env: JNIEnv,
     _service: JObject,
     action: jint,

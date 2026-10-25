@@ -35,7 +35,7 @@ COPY ndk-crossfile.txt /ndk-crossfile.txt
 RUN mkdir /output
 
 # Clone libraries
-RUN git clone https://github.com/xkbcommon/libxkbcommon.git
+RUN git clone --depth 1 --branch xkbcommon-1.9.2 https://github.com/xkbcommon/libxkbcommon.git
 
 # Build libxkbcommon with 16 KB page size
 RUN cd /libxkbcommon && \
@@ -45,8 +45,8 @@ RUN cd /libxkbcommon && \
     -Denable-x11=false \
     -Denable-xkbregistry=false \
     -Denable-bash-completion=false \
-    -Dxkb-config-root=/data/data/app.polarbear/files/arch/usr/share/X11/xkb \
-    -Dx-locale-root=/data/data/app.polarbear/files/arch/usr/share/X11/locale \
+    -Dxkb-config-root=/data/data/io.github.localdesktop/files/arch/usr/share/X11/xkb \
+    -Dx-locale-root=/data/data/io.github.localdesktop/files/arch/usr/share/X11/locale \
     -Dprefix=/output && \
     meson compile -C build/ && \
     meson install -C build/

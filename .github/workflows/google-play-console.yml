@@ -52,6 +52,6 @@ jobs:
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
-          packageName: app.polarbear
+          packageName: io.github.localdesktop
           releaseFiles: target/*.aab
           track: alpha
