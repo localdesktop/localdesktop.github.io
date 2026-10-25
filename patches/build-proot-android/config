@@ -33,7 +33,7 @@ set-arch() {
 	else SUBARCH=''
 	fi
 
-	API=21
+	API=23
 
 	INSTALL_ROOT="$BUILD_DIR/root-$ARCH/root"
 	STATIC_ROOT="$BUILD_DIR/static-$ARCH/root"
