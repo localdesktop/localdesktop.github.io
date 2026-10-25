@@ -13,7 +13,7 @@ android:
     package: io.github.localdesktop
     sdk:
       min_sdk_version: 24
-      target_sdk_version: 35
+      target_sdk_version: 36
     application:
       label: "Local Desktop"
       extract_native_libs: true # Required for proot invocations
