@@ -12,7 +12,7 @@ use crate::{
         },
     },
     core::config::{
-        self, CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT, DOCS_HOME_URL,
+        self, arch_fs_root, CommandConfig, ARCH_FS_ARCHIVE, DOCS_HOME_URL,
         PIPEWIRE_GUEST_RUNTIME_DIR, PULSE_GUEST_SERVER,
     },
 };
@@ -79,7 +79,7 @@ const PIPEWIRE_GUEST_LOCK_PACKAGES: &[&str] = &[
 fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     let context = get_application_context();
     let temp_file = context.data_dir.join("archlinux-fs.tar.xz");
-    let fs_root = Path::new(ARCH_FS_ROOT);
+    let fs_root = Path::new(arch_fs_root());
     let extracted_dir = context.data_dir.join("archlinux-aarch64");
     let mpsc_sender = options.mpsc_sender.clone();
 
@@ -184,7 +184,7 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
 }
 
 fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
+    let fs_root = Path::new(arch_fs_root());
     let mpsc_sender = options.mpsc_sender.clone();
 
     // Android denies reading /proc/bus/pci/devices, and libpci exits on that inside Firefox's
@@ -242,7 +242,7 @@ fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
 }
 
 fn setup_machine_id(_: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
+    let fs_root = Path::new(arch_fs_root());
     let machine_id = fs_root.join("etc/machine-id");
 
     let existing = fs::read_to_string(&machine_id).unwrap_or_default();
@@ -386,7 +386,7 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
 /// manual on disk can be out of date — and best-effort: a failed download is not worth a retry.
 fn download_user_manual() {
     let username = get_application_context().local_config.user.username;
-    let desktop_dir = chroot_home_dir(Path::new(ARCH_FS_ROOT), &username).join("Desktop");
+    let desktop_dir = chroot_home_dir(Path::new(arch_fs_root()), &username).join("Desktop");
     if fs::create_dir_all(&desktop_dir).is_err() {
         return;
     }
@@ -399,7 +399,7 @@ fn download_user_manual() {
 }
 
 fn clear_pipewire_package_lock_for_install() {
-    let pacman_conf = Path::new(ARCH_FS_ROOT).join("etc/pacman.conf");
+    let pacman_conf = Path::new(arch_fs_root()).join("etc/pacman.conf");
     let content = match fs::read_to_string(&pacman_conf) {
         Ok(content) => content,
         Err(error) => {
@@ -436,7 +436,7 @@ fn setup_guest_mesa(options: &SetupOptions) -> StageOutput {
     let Some(mut asset) = options.android_app.asset_manager().open(&asset_name) else {
         return None;
     };
-    let fs_root = Path::new(ARCH_FS_ROOT);
+    let fs_root = Path::new(arch_fs_root());
     let prefix = fs_root.join("opt/localdesktop-mesa");
     let stamp_path = prefix.join(".asset");
     // Unpack again only when the APK carries a different build.
@@ -469,7 +469,7 @@ fn setup_guest_mesa(options: &SetupOptions) -> StageOutput {
 }
 
 fn setup_pipewire_package_lock(_: &SetupOptions) -> StageOutput {
-    let pacman_conf = Path::new(ARCH_FS_ROOT).join("etc/pacman.conf");
+    let pacman_conf = Path::new(arch_fs_root()).join("etc/pacman.conf");
     let content = match fs::read_to_string(&pacman_conf) {
         Ok(content) => content,
         Err(error) => {
@@ -496,7 +496,7 @@ fn setup_pipewire_package_lock(_: &SetupOptions) -> StageOutput {
 
 fn setup_firefox_config(_: &SetupOptions) -> StageOutput {
     // Create the Firefox root directory if it doesn't exist
-    let firefox_root = format!("{}/usr/lib/firefox", ARCH_FS_ROOT);
+    let firefox_root = format!("{}/usr/lib/firefox", arch_fs_root());
     let _ = fs::create_dir_all(&firefox_root).expect("Failed to create Firefox root directory");
 
     // Create the defaults/pref directory
@@ -750,7 +750,7 @@ fn remove_pacman_ignore_pkg(content: &str, packages: &[&str]) -> String {
 }
 
 fn setup_fake_bwrap(_: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
+    let fs_root = Path::new(arch_fs_root());
     let wrapper_path = fs_root.join("usr/local/bin/bwrap");
 
     // bwrap (Bubblewrap) requires Linux user namespaces (CLONE_NEWUSER) which are
@@ -797,7 +797,7 @@ exec "$@"
 }
 
 fn setup_chromium_no_sandbox(_: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
+    let fs_root = Path::new(arch_fs_root());
 
     // Chromium's sandbox needs CLONE_NEWUSER, which Android SELinux blocks, so every
     // Chromium/Electron app has to be started with --no-sandbox. Electron apps pick that up
@@ -856,7 +856,7 @@ exec /usr/bin/chromium --no-sandbox "$@"
 }
 
 fn setup_onboard_signal_fix(_: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
+    let fs_root = Path::new(arch_fs_root());
     let wrapper_path = fs_root.join("usr/local/bin/onboard");
 
     // proot intercepts fstat() on socket fds and follows /proc/self/fd/N which points
@@ -920,7 +920,7 @@ fn android_ui_scale(density_dpi: i32) -> i32 {
 const GSCHEMA_OVERRIDE: &str = "90_localdesktop.gschema.override";
 
 fn setup_xfce_wayland(options: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
+    let fs_root = Path::new(arch_fs_root());
     let username = get_application_context().local_config.user.username;
     let home_dir = chroot_home_dir(fs_root, &username);
     let labwc_dir = home_dir.join(".config/xfce4/labwc");
@@ -1249,7 +1249,7 @@ done
     None
 }
 fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
+    let fs_root = Path::new(arch_fs_root());
     let xkb_path = fs_root.join("usr/share/X11/xkb");
     let mpsc_sender = options.mpsc_sender.clone();
 

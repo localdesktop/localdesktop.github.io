@@ -2,14 +2,51 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
+    path::Path,
+    sync::OnceLock,
 };
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+static ARCH_FS_ROOT: OnceLock<String> = OnceLock::new();
+
+/// Decide where the Arch Linux FS lives, from the app's files dir (`Context.getFilesDir()`).
+///
+/// `/data/data/<package>` only points at the owner's (user 0) storage, so in a secondary user
+/// or Private Space the FS must live under the files dir Android gives that user instead.
+/// When `/data/data/<package>/files` is this user's files dir, keep that historical path as is,
+/// because PRoot bakes absolute host paths into the FS (e.g. link2symlink).
+pub fn init_arch_fs_root(files_dir: &Path) {
+    let root = files_dir
+        .parent()
+        .and_then(|app_dir| app_dir.file_name())
+        .map(|package| Path::new("/data/data").join(package).join("files"))
+        .filter(|legacy_files_dir| {
+            match (
+                fs::canonicalize(legacy_files_dir),
+                fs::canonicalize(files_dir),
+            ) {
+                (Ok(legacy), Ok(current)) => legacy == current,
+                _ => false,
+            }
+        })
+        .unwrap_or_else(|| files_dir.to_path_buf())
+        .join("arch");
+    // Only the first call wins, the FS must not move while the app is running
+    let _ = ARCH_FS_ROOT.set(root.to_string_lossy().into_owned());
+}
+
+/// Absolute host path of the Arch Linux FS, set once at startup by [`init_arch_fs_root`].
 #[cfg(not(test))]
-pub const ARCH_FS_ROOT: &str = "/data/data/app.polarbear/files/arch";
+pub fn arch_fs_root() -> &'static str {
+    ARCH_FS_ROOT
+        .get()
+        .expect("Arch FS root is not initialized. Please make sure `ApplicationContext::build(&android_app);` is called in `android_main`.")
+}
 #[cfg(test)]
-pub const ARCH_FS_ROOT: &str = "/data/local/tmp/arch";
+pub fn arch_fs_root() -> &'static str {
+    ARCH_FS_ROOT.get_or_init(|| "/data/local/tmp/arch".to_string())
+}
 
 pub const ARCH_FS_ARCHIVE: &str = "https://github.com/termux/proot-distro/releases/download/v4.29.0/archlinux-aarch64-pd-v4.29.0.tar.xz";
 
