@@ -290,6 +290,13 @@ jobs:
           if-no-files-found: error
           archive: false
 
+      - name: Leave the keyboard accessibility service out of the Play build
+        if: github.ref_type == 'tag' || inputs.include_aab
+        run: |
+          awk '/^      services:$/ {skip=1; next} skip { match($0, /^ */); if (RLENGTH > 6) next; skip=0 } 1' manifest.yaml > manifest.play.yaml
+          mv manifest.play.yaml manifest.yaml
+          rm -r src/android/java
+
       - name: Build AAB
         if: github.ref_type == 'tag' || inputs.include_aab
         run: x build --release --platform=android --arch=arm64 --format=aab
