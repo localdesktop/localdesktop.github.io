@@ -257,6 +257,15 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
     }
 
     std::fs::write(app.join("build.gradle"), app_build_gradle)?;
+    let proguard_rules = env
+        .cargo()
+        .package_root()
+        .join("src")
+        .join("android")
+        .join("proguard-rules.pro");
+    if proguard_rules.exists() {
+        std::fs::copy(&proguard_rules, app.join("proguard-rules.pro"))?;
+    }
     std::fs::write(
         main.join("AndroidManifest.xml"),
         quick_xml::se::to_string(&manifest)?,
