@@ -1,14 +1,16 @@
 use std::{
     collections::VecDeque,
-    sync::{Mutex, OnceLock},
+    sync::{Mutex, Once, OnceLock},
 };
 
 use jni::{
-    objects::JObject,
-    sys::{jboolean, jint, jlong, JNI_FALSE, JNI_TRUE},
+    objects::{JClass, JObject},
+    sys::{jboolean, jint, jlong, jobject, JNI_FALSE, JNI_TRUE},
     JNIEnv,
 };
-use winit::{event::ElementState, event_loop::EventLoopProxy};
+use winit::{
+    event::ElementState, event_loop::EventLoopProxy, platform::android::activity::AndroidApp,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub enum AppUserEvent {
@@ -52,6 +54,39 @@ pub fn register_event_loop_proxy(proxy: EventLoopProxy<AppUserEvent>) {
         .lock()
         .expect("Failed to lock accessibility bridge");
     bridge.proxy = Some(proxy);
+}
+
+/// Asks once, with a physical keyboard attached, whether to turn on the keyboard service.
+pub fn show_keyboard_shortcuts_prompt(env: &mut JNIEnv, android_app: &AndroidApp) {
+    static PROMPT: Once = Once::new();
+    PROMPT.call_once(|| {
+        let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as jobject) };
+        let result = (|| -> jni::errors::Result<()> {
+            let loader = env
+                .call_method(&activity, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])?
+                .l()?;
+            let name = env.new_string("io.github.localdesktop.KeyboardShortcutsPrompt")?;
+            let class = env
+                .call_method(
+                    &loader,
+                    "loadClass",
+                    "(Ljava/lang/String;)Ljava/lang/Class;",
+                    &[(&name).into()],
+                )?
+                .l()?;
+            env.call_static_method(
+                JClass::from(class),
+                "showIfNeeded",
+                "(Landroid/app/Activity;)V",
+                &[(&activity).into()],
+            )?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            log::warn!("Failed to show the keyboard shortcuts prompt: {error}");
+            let _ = env.exception_clear();
+        }
+    });
 }
 
 pub fn set_runtime_active(active: bool) {
