@@ -27,7 +27,7 @@ use crate::window::{
     WindowButtons, WindowLevel,
 };
 
-mod keycodes;
+pub(crate) mod keycodes;
 
 pub(crate) use crate::cursor::{
     NoCustomCursor as PlatformCustomCursor, NoCustomCursor as PlatformCustomCursorSource,

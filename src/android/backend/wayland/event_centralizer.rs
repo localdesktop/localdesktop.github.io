@@ -7,7 +7,7 @@ use crate::android::backend::wayland::{
     keymap::physicalkey_to_scancode,
     TouchMode, WaylandBackend,
 };
-use crate::android::utils::ndk;
+use crate::android::{external_display, utils::ndk};
 use smithay::backend::input::InputEvent;
 use smithay::utils::{Physical, Size};
 use winit::dpi::PhysicalPosition;
@@ -34,6 +34,18 @@ pub enum CentralizedEvent {
 
     /// A redraw was requested
     Redraw,
+
+    /// The trackpad moved the cursor by this many phone pixels.
+    TrackpadMotion { dx: f64, dy: f64, time: u64 },
+
+    /// The last finger left the trackpad.
+    TrackpadUp {
+        /// What the gesture had been resolved to.
+        mode: TouchMode,
+        /// Most fingers down at once during the gesture.
+        fingers: usize,
+        time: u64,
+    },
 
     /// TODO: Support these events
     Unsupported,
@@ -136,6 +148,9 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
             };
             CentralizedEvent::Input(event)
         }
+        WindowEvent::Touch(touch) if backend.is_trackpad() => {
+            centralize_trackpad(touch, time, backend)
+        }
         WindowEvent::Touch(Touch {
             phase: TouchPhase::Started,
             location,
@@ -186,29 +201,10 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
             match backend.touch_mode {
                 // Still deciding between a tap, a scroll and a long press: don't move the
                 // cursor yet, or a scroll would drag it along.
-                TouchMode::Undecided | TouchMode::LongPress => CentralizedEvent::Unsupported,
-                TouchMode::Scroll => {
-                    // Scroll by the centroid delta, which is the finger itself when only one
-                    // is down. Positive axis values scroll the view down, so the raw delta
-                    // (negated once more in `WinitMouseWheelEvent::amount`) makes the content
-                    // follow the finger the way Android does.
-                    let new_centroid = centroid(&backend.touch_points);
-                    let last = backend.scroll_centroid.replace(new_centroid);
-                    let Some(last) = last else {
-                        return CentralizedEvent::Unsupported;
-                    };
-                    let dx = new_centroid.x - last.x;
-                    let dy = new_centroid.y - last.y;
-                    if dx == 0.0 && dy == 0.0 {
-                        return CentralizedEvent::Unsupported;
-                    }
-                    CentralizedEvent::Input(InputEvent::PointerAxis {
-                        event: WinitMouseWheelEvent {
-                            time,
-                            delta: MouseScrollDelta::PixelDelta(PhysicalPosition { x: dx, y: dy }),
-                        },
-                    })
+                TouchMode::Undecided | TouchMode::LongPress | TouchMode::Move => {
+                    CentralizedEvent::Unsupported
                 }
+                TouchMode::Scroll => scroll(backend, time),
                 TouchMode::Drag => CentralizedEvent::Input(InputEvent::TouchMotion {
                     event: WinitTouchMovedEvent {
                         time,
@@ -268,6 +264,120 @@ pub fn centralize(event: WindowEvent, backend: &mut WaylandBackend) -> Centraliz
             CentralizedEvent::Unsupported
         }
     };
+}
+
+/// Scroll by the centroid delta, which is the finger itself when only one is down. Positive
+/// axis values scroll the view down, so the raw delta (negated once more in
+/// `WinitMouseWheelEvent::amount`) makes the content follow the finger the way Android does.
+fn scroll(backend: &mut WaylandBackend, time: u64) -> CentralizedEvent {
+    let new_centroid = centroid(&backend.touch_points);
+    let last = backend.scroll_centroid.replace(new_centroid);
+    let Some(last) = last else {
+        return CentralizedEvent::Unsupported;
+    };
+    let dx = new_centroid.x - last.x;
+    let dy = new_centroid.y - last.y;
+    if dx == 0.0 && dy == 0.0 {
+        return CentralizedEvent::Unsupported;
+    }
+    CentralizedEvent::Input(InputEvent::PointerAxis {
+        event: WinitMouseWheelEvent {
+            time,
+            delta: MouseScrollDelta::PixelDelta(PhysicalPosition { x: dx, y: dy }),
+        },
+    })
+}
+
+/// The phone as a trackpad for the external monitor: one finger moves the cursor, taps click
+/// (two fingers for a right click), two fingers scroll, and a long press starts a drag.
+fn centralize_trackpad(touch: Touch, time: u64, backend: &mut WaylandBackend) -> CentralizedEvent {
+    let Touch {
+        phase,
+        location,
+        id,
+        ..
+    } = touch;
+    // Only distances and deltas matter from here on, so turning about the origin is enough.
+    let location = match external_display::trackpad_quarter_turns() {
+        1 => PhysicalPosition::new(-location.y, location.x),
+        2 => PhysicalPosition::new(-location.x, -location.y),
+        3 => PhysicalPosition::new(location.y, -location.x),
+        _ => location,
+    };
+    match phase {
+        TouchPhase::Started => {
+            backend.touch_points.insert(id, location);
+            backend.touch_fingers = backend.touch_fingers.max(backend.touch_points.len());
+            backend.scroll_centroid = Some(centroid(&backend.touch_points));
+            if backend.touch_points.len() == 1 {
+                backend.touch_mode = TouchMode::Undecided;
+                backend.touch_down_position = Some(location);
+                backend.touch_down_time = Some(time);
+            } else if backend.touch_mode == TouchMode::LongPress {
+                // Could still be a two-finger tap, until the fingers move together.
+                backend.touch_mode = TouchMode::Undecided;
+            }
+            CentralizedEvent::Unsupported
+        }
+        TouchPhase::Moved => {
+            let last = backend.touch_points.insert(id, location);
+
+            if backend.touch_points.len() >= 2 {
+                if backend.touch_mode != TouchMode::Scroll {
+                    let Some(anchor) = backend.scroll_centroid else {
+                        return CentralizedEvent::Unsupported;
+                    };
+                    let now = centroid(&backend.touch_points);
+                    let (dx, dy) = (now.x - anchor.x, now.y - anchor.y);
+                    if dx * dx + dy * dy <= backend.touch_slop_px * backend.touch_slop_px {
+                        return CentralizedEvent::Unsupported;
+                    }
+                    backend.touch_mode = TouchMode::Scroll;
+                    backend.scroll_centroid = Some(centroid(&backend.touch_points));
+                }
+                return scroll(backend, time);
+            }
+
+            let past_slop = travelled_past_slop(backend, location);
+            match backend.touch_mode {
+                TouchMode::Undecided if past_slop => backend.touch_mode = TouchMode::Move,
+                TouchMode::LongPress if past_slop => backend.touch_mode = TouchMode::Drag,
+                TouchMode::Scroll => return scroll(backend, time),
+                _ => {}
+            }
+            match (backend.touch_mode, last) {
+                (TouchMode::Move | TouchMode::Drag, Some(last)) => {
+                    CentralizedEvent::TrackpadMotion {
+                        dx: location.x - last.x,
+                        dy: location.y - last.y,
+                        time,
+                    }
+                }
+                _ => CentralizedEvent::Unsupported,
+            }
+        }
+        TouchPhase::Ended | TouchPhase::Cancelled => {
+            backend.touch_points.remove(&id);
+            if !backend.touch_points.is_empty() {
+                backend.scroll_centroid = Some(centroid(&backend.touch_points));
+                return CentralizedEvent::Unsupported;
+            }
+
+            let mode = backend.touch_mode;
+            let fingers = backend.touch_fingers;
+            backend.reset_touch_state();
+            if phase == TouchPhase::Cancelled {
+                return CentralizedEvent::Input(InputEvent::TouchCancel {
+                    event: WinitTouchCancelledEvent { time, id },
+                });
+            }
+            CentralizedEvent::TrackpadUp {
+                mode,
+                fingers,
+                time,
+            }
+        }
+    }
 }
 
 /// Normalize a window-relative pixel position into the 0..1 range the input backend expects.

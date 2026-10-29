@@ -186,3 +186,9 @@ pub mod activity {
     #[doc(hidden)]
     pub struct AndroidApp;
 }
+
+/// The physical key winit reports for an Android `KeyEvent` key code.
+#[cfg(android_platform)]
+pub fn physical_key(keycode: u32) -> crate::keyboard::PhysicalKey {
+    crate::platform_impl::keycodes::to_physical_key(keycode.into())
+}

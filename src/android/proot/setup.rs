@@ -1171,10 +1171,12 @@ first_output() {{
 read_output_state() {{
     target_mode=""
     target_scale="$fallback_scale"
+    touch_keyboard=1
     if [ -r "$state_file" ]; then
         . "$state_file"
         target_mode="${{LOCALDESKTOP_OUTPUT_MODE:-}}"
         target_scale="${{LOCALDESKTOP_OUTPUT_SCALE:-$target_scale}}"
+        touch_keyboard="${{LOCALDESKTOP_TOUCH_KEYBOARD:-1}}"
     fi
     case "$target_mode" in
         *x*) ;;
@@ -1194,11 +1196,24 @@ apply_output() {{
     return 1
 }}
 
+# Squeekboard follows this setting; the phone types instead while it is a trackpad.
+apply_touch_keyboard() {{
+    if [ "$1" = 0 ]; then
+        gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled false
+    else
+        gsettings reset org.gnome.desktop.a11y.applications screen-keyboard-enabled
+    fi
+}}
+
 last_state=""
+last_touch_keyboard=""
 while true; do
     if ! read_output_state; then
         sleep 0.2
         continue
+    fi
+    if [ "$touch_keyboard" != "$last_touch_keyboard" ] && apply_touch_keyboard "$touch_keyboard"; then
+        last_touch_keyboard="$touch_keyboard"
     fi
     # Only query labwc when the host wrote a new size or scale; spawning wlr-randr every
     # second costs a steady few percent of a core under proot.
@@ -1415,6 +1430,9 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             watcher: None,
             frame_clock: None,
             rendered_since_vsync: false,
+            touch_fingers: 0,
+            cursor_position: (0.0, 0.0).into(),
+            external_buttons: 0,
             android_app,
         })
     } else {
