@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import { full as emoji } from "markdown-it-emoji";
 
 /**
  * Host-side Markdown for decrypted messages. Never send private text to GitHub's /markdown API.
@@ -6,6 +7,7 @@ import MarkdownIt from "markdown-it";
  * (no tracking pixels); the webview sanitizes the result again.
  */
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true, typographer: false });
+md.use(emoji as unknown as Parameters<typeof md.use>[0]);
 
 md.renderer.rules.image = (tokens, idx) => {
   const token = tokens[idx]!;
