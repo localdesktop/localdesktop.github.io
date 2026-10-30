@@ -2,7 +2,6 @@
 
 ## 0.2.1
 
-- Show your avatar on messages while they are sending.
 - Support :emoji: shortcodes in chat messages, with suggestions as you type.
 
 ## 0.2.0
