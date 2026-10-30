@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   upload:
@@ -48,10 +49,18 @@ jobs:
       - name: Remove debug AABs
         run: rm -f target/*-debug.aab
 
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/516615700957/locations/global/workloadIdentityPools/github/providers/github
+          service_account: local-desktop-ci-cd@local-desktop.iam.gserviceaccount.com
+
       - name: Upload to Google Play (closed track)
         uses: r0adkll/upload-google-play@v1
         with:
-          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
-          packageName: app.polarbear
+          serviceAccountJson: ${{ steps.auth.outputs.credentials_file_path }}
+          packageName: io.github.localdesktop
           releaseFiles: target/*.aab
           track: alpha
+          status: draft

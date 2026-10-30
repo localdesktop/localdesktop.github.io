@@ -26,7 +26,7 @@ The socket path is intentionally under the proot-visible `/tmp`, matching the
 Wayland strategy:
 
 ```text
-host path:  /data/data/app.polarbear/files/arch/tmp/pipewire-0
+host path:  /data/data/io.github.localdesktop/files/arch/tmp/pipewire-0
 guest path: /tmp/pipewire-0
 ```
 

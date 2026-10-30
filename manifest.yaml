@@ -10,16 +10,16 @@ android:
     - assets/libs
   gradle: true
   manifest:
-    package: app.polarbear
+    package: io.github.localdesktop
     sdk:
-      min_sdk_version: 21
-      target_sdk_version: 33
+      min_sdk_version: 24
+      target_sdk_version: 36
     application:
       label: "Local Desktop"
       extract_native_libs: true # Required for proot invocations
       use_cleartext_traffic: true # Required for connecting to ws://127.0.0.1, see assets/setup-progress.html
       services:
-        - name: app.polarbear.KeyboardAccessibilityService
+        - name: io.github.localdesktop.KeyboardAccessibilityService
           permission: android.permission.BIND_ACCESSIBILITY_SERVICE
           label: "@string/keyboard_service_label"
           enabled: true
