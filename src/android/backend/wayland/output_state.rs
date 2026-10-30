@@ -10,7 +10,7 @@ pub fn write_guest_output_state(width: i32, height: i32, scale: i32) {
         return;
     }
 
-    let path = PathBuf::from(config::ARCH_FS_ROOT).join("tmp/localdesktop-output");
+    let path = PathBuf::from(config::arch_fs_root()).join("tmp/localdesktop-output");
     let content =
         format!("LOCALDESKTOP_OUTPUT_MODE={width}x{height}\nLOCALDESKTOP_OUTPUT_SCALE={scale}\n");
     if let Err(error) = std::fs::write(&path, content) {
