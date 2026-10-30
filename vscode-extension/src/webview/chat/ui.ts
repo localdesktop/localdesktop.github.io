@@ -1,4 +1,5 @@
 import type { DOMPurify } from "dompurify";
+import EMOJI from "markdown-it-emoji/lib/data/full.mjs";
 import { REACTIONS, type ChatState, type HostToWebview, type MessageView, type WebviewCommand, type WebviewToHost } from "../../shared/messages";
 
 /**
@@ -20,7 +21,13 @@ export interface ChatUiOptions {
   save?(state: LocalState): void;
 }
 
-const IMG_HOSTS = /^https:\/\/(avatars\.githubusercontent\.com|camo\.githubusercontent\.com|github\.com|[a-z0-9-]+\.githubusercontent\.com)\//i;
+/** Shortcodes starting with `code` first, then ones containing it. */
+function suggestEmoji(code: string, limit = 8): [string, string][] {
+  const all = Object.entries(EMOJI);
+  return [...all.filter(([n]) => n.startsWith(code)), ...all.filter(([n]) => !n.startsWith(code) && n.includes(code))].slice(0, limit);
+}
+
+const IMG_HOSTS =/^https:\/\/(avatars\.githubusercontent\.com|camo\.githubusercontent\.com|github\.com|[a-z0-9-]+\.githubusercontent\.com)\//i;
 const LINK_SCHEMES = /^(https?:|mailto:)/i;
 let hooked = new WeakSet<DOMPurify>();
 
@@ -140,7 +147,55 @@ export function createChatUi(root: HTMLElement, opts: ChatUiOptions): ChatUi {
     save();
     render();
   };
+  const suggest = h(doc, "ul", { class: "emoji-suggest", role: "listbox", hidden: true });
+  composer.append(suggest);
+  let matches: [string, string][] = [];
+  let active = 0;
+  const shortcodeBeforeCaret = () => /(?:^|\s):([a-z0-9_+-]{2,})$/i.exec(input.value.slice(0, input.selectionStart))?.[1];
+  const showSuggest = () => {
+    suggest.textContent = "";
+    suggest.hidden = matches.length === 0;
+    matches.forEach(([name, char], i) => {
+      const item = h(doc, "li", { class: i === active ? "active" : "", role: "option" }, `${char} :${name}:`);
+      item.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        insertEmoji(i);
+      });
+      suggest.append(item);
+    });
+  };
+  const replaceBeforeCaret = (length: number, text: string) => {
+    const at = input.selectionStart;
+    input.setRangeText(text, at - length, at, "end");
+    local.draft = input.value;
+    save();
+  };
+  const insertEmoji = (i: number) => {
+    const code = shortcodeBeforeCaret();
+    const match = matches[i];
+    matches = [];
+    showSuggest();
+    if (code !== undefined && match) replaceBeforeCaret(code.length + 1, match[1]);
+  };
   input.addEventListener("keydown", (e) => {
+    if (matches.length && !e.isComposing) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        active = (active + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length;
+        showSuggest();
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        insertEmoji(active);
+        return;
+      }
+      if (e.key === "Escape") {
+        matches = [];
+        showSuggest();
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       send();
@@ -149,6 +204,16 @@ export function createChatUi(root: HTMLElement, opts: ChatUiOptions): ChatUi {
   input.addEventListener("input", () => {
     local.draft = input.value;
     save();
+    const typed = /(?:^|\s):([a-z0-9_+-]+):$/i.exec(input.value.slice(0, input.selectionStart))?.[1];
+    if (typed && EMOJI[typed]) replaceBeforeCaret(typed.length + 2, EMOJI[typed]);
+    const code = shortcodeBeforeCaret()?.toLowerCase();
+    matches = code ? suggestEmoji(code) : [];
+    active = 0;
+    showSuggest();
+  });
+  input.addEventListener("blur", () => {
+    matches = [];
+    showSuggest();
   });
   sendButton.addEventListener("click", send);
   notifyBox.addEventListener("change", () => {
