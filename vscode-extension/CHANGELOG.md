@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- Support :emoji: shortcodes in chat messages.
+
 ## 0.2.1
 
 - Show your avatar on messages while they are sending.
