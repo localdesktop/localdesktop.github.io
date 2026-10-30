@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Show your avatar on messages while they are sending.
+
 ## 0.2.0
 
 - Anyone with the extension can read and post in the chat; no more chat keys.
