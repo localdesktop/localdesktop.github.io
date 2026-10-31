@@ -79,13 +79,24 @@ fn emit_pointer_motion(
     let state = &mut compositor.state;
     if let Some(focus) = pointer_focus(state) {
         let serial = SERIAL_COUNTER.next_serial();
+        let delta = Point::from((x, y)) - pointer.current_location();
         pointer.motion(
             state,
-            Some(focus),
+            Some(focus.clone()),
             &pointer::MotionEvent {
                 location: (x, y).into(),
                 serial,
                 time,
+            },
+        );
+        // In the same frame, so Xwayland moves its relative pointer device (see `State`).
+        pointer.relative_motion(
+            state,
+            Some(focus),
+            &pointer::RelativeMotionEvent {
+                delta,
+                delta_unaccel: delta,
+                utime: time as u64 * 1000,
             },
         );
         pointer.frame(state);
@@ -285,22 +296,12 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                 }
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
-                let compositor = &mut backend.compositor;
-                let pointer = compositor.pointer.clone();
-                let serial = SERIAL_COUNTER.next_serial();
-
-                if let Some(surface) = get_surface(&compositor.state) {
-                    pointer.motion(
-                        &mut compositor.state,
-                        Some((surface.wl_surface().clone(), (0f64, 0f64).into())),
-                        &pointer::MotionEvent {
-                            location: (event.x(), event.y()).into(),
-                            serial,
-                            time: event.time_msec(),
-                        },
-                    );
-                }
-                pointer.frame(&mut compositor.state);
+                emit_pointer_motion(
+                    &mut backend.compositor,
+                    event.x(),
+                    event.y(),
+                    event.time_msec(),
+                );
             }
             InputEvent::PointerButton { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
@@ -464,14 +465,22 @@ pub fn paint_trackpad(backend: &mut WaylandBackend) {
     }
 }
 
-/// A mouse on the external display: it points where it is, and its buttons and wheel go
-/// straight to the desktop.
+/// A mouse on the external display, or one plugged into the phone: it moves the cursor, and its
+/// buttons and wheel go straight to the desktop.
 pub fn on_external_pointer(backend: &mut WaylandBackend, event: PointerEvent) {
     let time = event.time_ms as u32;
     let size = backend.compositor.state.size;
+    let (x, y) = if event.relative {
+        // Mouse counts, scaled up on monitors larger than 1080p so crossing them is no chore.
+        let speed = (size.w as f64 / 1920.0).max(1.0);
+        let cursor = backend.cursor_position;
+        (cursor.x + event.x * speed, cursor.y + event.y * speed)
+    } else {
+        (event.x, event.y)
+    };
     backend.cursor_position = (
-        event.x.clamp(0.0, (size.w - 1).max(0) as f64),
-        event.y.clamp(0.0, (size.h - 1).max(0) as f64),
+        x.clamp(0.0, (size.w - 1).max(0) as f64),
+        y.clamp(0.0, (size.h - 1).max(0) as f64),
     )
         .into();
     let cursor = backend.cursor_position;
@@ -733,7 +742,7 @@ fn render(backend: &mut WaylandBackend) -> Result<(), String> {
             .render(&mut framebuffer, size, Transform::Flipped180)
             .map_err(|error| format!("Failed to render frame: {error:?}"))?;
         frame
-            .clear(Color32F::new(0.1, 0.0, 0.0, 1.0), &[damage])
+            .clear(Color32F::new(0.0, 0.0, 0.0, 1.0), &[damage])
             .map_err(|error| format!("Failed to clear frame: {error:?}"))?;
         draw_render_elements(&mut frame, 1.0, &elements, &[damage])
             .map_err(|error| format!("Failed to draw render elements: {error:?}"))?;
