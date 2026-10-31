@@ -79,13 +79,24 @@ fn emit_pointer_motion(
     let state = &mut compositor.state;
     if let Some(focus) = pointer_focus(state) {
         let serial = SERIAL_COUNTER.next_serial();
+        let delta = Point::from((x, y)) - pointer.current_location();
         pointer.motion(
             state,
-            Some(focus),
+            Some(focus.clone()),
             &pointer::MotionEvent {
                 location: (x, y).into(),
                 serial,
                 time,
+            },
+        );
+        // In the same frame, so Xwayland moves its relative pointer device (see `State`).
+        pointer.relative_motion(
+            state,
+            Some(focus),
+            &pointer::RelativeMotionEvent {
+                delta,
+                delta_unaccel: delta,
+                utime: time as u64 * 1000,
             },
         );
         pointer.frame(state);
@@ -285,22 +296,12 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                 }
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
-                let compositor = &mut backend.compositor;
-                let pointer = compositor.pointer.clone();
-                let serial = SERIAL_COUNTER.next_serial();
-
-                if let Some(surface) = get_surface(&compositor.state) {
-                    pointer.motion(
-                        &mut compositor.state,
-                        Some((surface.wl_surface().clone(), (0f64, 0f64).into())),
-                        &pointer::MotionEvent {
-                            location: (event.x(), event.y()).into(),
-                            serial,
-                            time: event.time_msec(),
-                        },
-                    );
-                }
-                pointer.frame(&mut compositor.state);
+                emit_pointer_motion(
+                    &mut backend.compositor,
+                    event.x(),
+                    event.y(),
+                    event.time_msec(),
+                );
             }
             InputEvent::PointerButton { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
