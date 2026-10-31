@@ -1228,10 +1228,35 @@ done
 "#,
     )
     .expect("Failed to write labwc rc.xml defaults");
+    // While the desktop is on an external display the phone is its keyboard: when a text field
+    // brings up Squeekboard, put it away and have the app open the Android keyboard instead.
+    write_executable(
+        &fs_root.join("usr/local/bin/localdesktop-keyboard-relay"),
+        r#"#!/bin/sh
+state_file=/tmp/localdesktop-output
+request_file=/tmp/localdesktop-keyboard
+osk() { gdbus call --session --dest sm.puri.OSK0 --object-path /sm/puri/OSK0 "$@"; }
+while true; do
+    gdbus monitor --session --dest sm.puri.OSK0 --object-path /sm/puri/OSK0 | while read -r line; do
+        case "$line" in
+            *"'Visible': <true>"*) ;;
+            *) continue ;;
+        esac
+        LOCALDESKTOP_TOUCH_KEYBOARD=1
+        . "$state_file" 2>/dev/null
+        [ "$LOCALDESKTOP_TOUCH_KEYBOARD" = 0 ] || continue
+        osk --method sm.puri.OSK0.SetVisible false >/dev/null
+        touch "$request_file"
+    done
+    sleep 1
+done
+"#,
+    );
     write_executable(
         &labwc_dir.join("autostart"),
         r#"#!/bin/sh
 /usr/local/bin/localdesktop-wlroots-output >/tmp/localdesktop-wlroots-output.log 2>&1 &
+/usr/local/bin/localdesktop-keyboard-relay >/tmp/localdesktop-keyboard-relay.log 2>&1 &
 "#,
     );
 
@@ -1415,6 +1440,9 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
             watcher: None,
             frame_clock: None,
             rendered_since_vsync: false,
+            touch_fingers: 0,
+            cursor_position: (0.0, 0.0).into(),
+            external_buttons: 0,
             android_app,
         })
     } else {

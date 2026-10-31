@@ -5,6 +5,7 @@ pub mod core {
 #[cfg(target_os = "android")]
 pub mod android {
     pub mod accessibility;
+    pub mod external_display;
 
     pub mod main;
     pub mod app {

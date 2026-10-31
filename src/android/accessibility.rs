@@ -19,6 +19,12 @@ pub enum AppUserEvent {
     WaylandReady,
     /// The display is about to refresh.
     Vsync,
+    /// An external monitor's surface appeared, changed or went away.
+    ExternalDisplayChanged,
+    /// A mouse (or touch) on the external monitor moved, clicked or scrolled.
+    ExternalPointer,
+    /// A text field on the desktop took focus while the phone is a trackpad.
+    KeyboardRequested,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -132,21 +138,23 @@ fn enqueue_key_event(action: jint, key_code: jint, scan_code: jint, event_time_m
         _ => return false,
     };
 
-    if scan_code <= 0 {
+    if scan_code <= 0 || !bridge().lock().unwrap().runtime_active {
         return false;
     }
 
+    inject_key(scan_code as u32, state, event_time_ms.max(0) as u64)
+}
+
+/// Type a key into the desktop.
+pub fn inject_key(scancode: u32, state: ElementState, event_time_ms: u64) -> bool {
     let mut bridge = bridge()
         .lock()
         .expect("Failed to lock accessibility bridge");
-    if !bridge.runtime_active {
-        return false;
-    }
 
     bridge.pending_events.push_back(AccessibilityKeyEvent {
-        scancode: scan_code as u32,
+        scancode,
         state,
-        event_time_ms: event_time_ms.max(0) as u64,
+        event_time_ms,
     });
 
     let proxy = bridge.proxy.clone();

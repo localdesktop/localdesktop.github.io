@@ -75,6 +75,27 @@ impl Scaler {
         Ok(())
     }
 
+    /// Whether the icon has no transparent pixels (after `optimize`).
+    pub fn is_opaque(&self) -> bool {
+        !self.img.color().has_alpha()
+    }
+
+    /// An adaptive icon layer, `size` px for its 108 dp, with the whole icon in the 72 dp that
+    /// launchers show. The icon's edge pixels continue to the layer's edges, so a full-bleed
+    /// icon shows no other color around it and a transparent one stays transparent.
+    pub fn write_adaptive_layer<W: Write + Seek>(&self, w: &mut W, size: u32) -> Result<()> {
+        let inner = size * 2 / 3;
+        let offset = (size - inner) / 2;
+        let resized = self
+            .img
+            .resize_exact(inner, inner, FilterType::Lanczos3)
+            .to_rgba8();
+        let edge = |v: u32| v.saturating_sub(offset).min(inner - 1);
+        let layer = RgbaImage::from_fn(size, size, |x, y| *resized.get_pixel(edge(x), edge(y)));
+        layer.write_to(w, ImageOutputFormat::Png)?;
+        Ok(())
+    }
+
     pub fn to_vec(&self, opts: ScalerOpts) -> Vec<u8> {
         let mut buf = vec![];
         let mut cursor = Cursor::new(&mut buf);

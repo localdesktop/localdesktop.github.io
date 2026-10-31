@@ -1,6 +1,6 @@
 This directory stores JVM bytecode artifacts that the on-device `cargo run` APK builder can embed without requiring a Java or Kotlin toolchain in Termux.
 
-`classes.dex` currently contains the Java classes in [`../java/io/github/localdesktop/`](../java/io/github/localdesktop/): the keyboard accessibility service and the prompt that asks before turning it on.
+`classes.dex` currently contains the Java classes in [`../java/io/github/localdesktop/`](../java/io/github/localdesktop/): the keyboard accessibility service, the prompt that asks before turning it on, and the external display presentation with its trackpad controls.
 
 To regenerate it on a machine with `javac`, `d8`, and Android platform `android.jar` available:
 
