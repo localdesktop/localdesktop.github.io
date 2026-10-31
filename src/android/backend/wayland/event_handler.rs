@@ -464,14 +464,22 @@ pub fn paint_trackpad(backend: &mut WaylandBackend) {
     }
 }
 
-/// A mouse on the external display: it points where it is, and its buttons and wheel go
-/// straight to the desktop.
+/// A mouse on the external display, or one plugged into the phone: it moves the cursor, and its
+/// buttons and wheel go straight to the desktop.
 pub fn on_external_pointer(backend: &mut WaylandBackend, event: PointerEvent) {
     let time = event.time_ms as u32;
     let size = backend.compositor.state.size;
+    let (x, y) = if event.relative {
+        // Mouse counts, scaled up on monitors larger than 1080p so crossing them is no chore.
+        let speed = (size.w as f64 / 1920.0).max(1.0);
+        let cursor = backend.cursor_position;
+        (cursor.x + event.x * speed, cursor.y + event.y * speed)
+    } else {
+        (event.x, event.y)
+    };
     backend.cursor_position = (
-        event.x.clamp(0.0, (size.w - 1).max(0) as f64),
-        event.y.clamp(0.0, (size.h - 1).max(0) as f64),
+        x.clamp(0.0, (size.w - 1).max(0) as f64),
+        y.clamp(0.0, (size.h - 1).max(0) as f64),
     )
         .into();
     let cursor = backend.cursor_position;

@@ -12,11 +12,14 @@ import android.graphics.RectF;
 import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
+import android.hardware.input.InputManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.View;
 import android.view.Window;
@@ -28,11 +31,18 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.LinearLayout;
 
-/** Buttons on the phone while it is a trackpad: turn the screen, and type with the Android keyboard. */
-final class TrackpadControls extends Dialog {
+/**
+ * Buttons on the phone while it is a trackpad: turn the screen, and type with the Android
+ * keyboard. A mouse plugged into the phone moves the cursor on the external display.
+ */
+final class TrackpadControls extends Dialog implements InputManager.InputDeviceListener {
     private final Activity activity;
     private final Pad pad;
+    private final Badge badge;
+    private LinearLayout bar;
     private KeyboardButton keyboard;
+    /** A mouse is plugged in, so this window keeps focus to capture it. */
+    private boolean mouseAttached;
     private boolean keyboardShown;
     /** Waiting for the window to take focus before the keyboard can come up. */
     private boolean keyboardPending;
@@ -43,12 +53,14 @@ final class TrackpadControls extends Dialog {
         super(activity);
         this.activity = activity;
         pad = new Pad(activity);
+        badge = new Badge(activity);
     }
 
     @Override
     public void show() {
         // Under the buttons.
         pad.show();
+        badge.show();
         super.show();
     }
 
@@ -64,13 +76,9 @@ final class TrackpadControls extends Dialog {
         // Touches elsewhere reach the trackpad, and keys the activity, until the keyboard is up.
         window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                 | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
-        window.setGravity(Gravity.TOP | Gravity.RIGHT);
-        WindowManager.LayoutParams attributes = window.getAttributes();
-        attributes.x = dp(Pad.INSET + 8);
-        attributes.y = dp(Pad.INSET + 8);
-        window.setAttributes(attributes);
+        placeInCorner(window, Gravity.RIGHT);
 
-        LinearLayout bar = new LinearLayout(getContext());
+        bar = new LinearLayout(getContext());
         bar.setOrientation(LinearLayout.HORIZONTAL);
         IconButton rotate = new IconButton(getContext(), IconButton.ROTATE);
         style(rotate, "Rotate screen");
@@ -92,6 +100,21 @@ final class TrackpadControls extends Dialog {
         bar.addView(keyboard);
         setContentView(bar);
 
+        if (Build.VERSION.SDK_INT >= 26) {
+            View.OnCapturedPointerListener mouse = new View.OnCapturedPointerListener() {
+                @Override
+                public boolean onCapturedPointer(View view, MotionEvent event) {
+                    return onMouse(event);
+                }
+            };
+            // Captured events go to whichever of these has focus.
+            bar.setOnCapturedPointerListener(mouse);
+            keyboard.setOnCapturedPointerListener(mouse);
+            InputManager inputManager = (InputManager) getContext().getSystemService(Context.INPUT_SERVICE);
+            inputManager.registerInputDeviceListener(this, null);
+            updateMouse();
+        }
+
         if (Build.VERSION.SDK_INT >= 30) {
             // The keyboard can also go away with the back gesture.
             bar.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
@@ -112,6 +135,11 @@ final class TrackpadControls extends Dialog {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
+        // Capture ends whenever the window loses focus, e.g. to the notification shade.
+        if (hasFocus && mouseAttached && Build.VERSION.SDK_INT >= 26) {
+            View focused = getWindow().getDecorView().findFocus();
+            (focused != null ? focused : bar).requestPointerCapture();
+        }
         if (hasFocus && keyboardPending) {
             keyboardPending = false;
             // After the input method has connected to the newly focused button.
@@ -131,9 +159,87 @@ final class TrackpadControls extends Dialog {
 
     @Override
     public void dismiss() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            ((InputManager) getContext().getSystemService(Context.INPUT_SERVICE)).unregisterInputDeviceListener(this);
+        }
         setKeyboardShown(false);
         pad.dismiss();
+        badge.dismiss();
         super.dismiss();
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        // Keys from the Android keyboard, and from a physical one while this window has focus.
+        if (event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+            return super.dispatchKeyEvent(event);
+        }
+        forwardKey(event);
+        return true;
+    }
+
+    @Override
+    public void onInputDeviceAdded(int deviceId) {
+        updateMouse();
+    }
+
+    @Override
+    public void onInputDeviceRemoved(int deviceId) {
+        updateMouse();
+    }
+
+    @Override
+    public void onInputDeviceChanged(int deviceId) {
+        updateMouse();
+    }
+
+    /**
+     * With a mouse plugged in, take focus and capture it: Android hides its pointer on the phone,
+     * and the mouse moves the cursor on the external display instead.
+     */
+    private void updateMouse() {
+        boolean attached = false;
+        for (int id : InputDevice.getDeviceIds()) {
+            InputDevice device = InputDevice.getDevice(id);
+            // A captured mouse reports itself as relative only, so both count.
+            if (device != null && !device.isVirtual()
+                    && (device.supportsSource(InputDevice.SOURCE_MOUSE)
+                        || device.supportsSource(InputDevice.SOURCE_MOUSE_RELATIVE))) {
+                attached = true;
+            }
+        }
+        if (attached == mouseAttached) {
+            return;
+        }
+        mouseAttached = attached;
+        if (attached) {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+            bar.setFocusableInTouchMode(true);
+            bar.requestFocus();
+        } else if (!keyboardShown) {
+            bar.setFocusableInTouchMode(false);
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+        }
+    }
+
+    private boolean onMouse(MotionEvent event) {
+        // A captured mouse reports how far it moved, batched since the last event.
+        float dx = event.getX();
+        float dy = event.getY();
+        for (int i = 0; i < event.getHistorySize(); i++) {
+            dx += event.getHistoricalX(i);
+            dy += event.getHistoricalY(i);
+        }
+        float scrollX = 0;
+        float scrollY = 0;
+        if (event.getActionMasked() == MotionEvent.ACTION_SCROLL) {
+            dx = 0;
+            dy = 0;
+            scrollX = event.getAxisValue(MotionEvent.AXIS_HSCROLL);
+            scrollY = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+        }
+        nativeOnMouse(dx, dy, event.getButtonState(), scrollX, scrollY, event.getEventTime());
+        return true;
     }
 
     /** A text field on the desktop took focus. */
@@ -185,10 +291,24 @@ final class TrackpadControls extends Dialog {
             keyboardPending = false;
             imm.hideSoftInputFromWindow(keyboard.getWindowToken(), 0);
             keyboard.setFocusableInTouchMode(false);
-            window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+            if (mouseAttached) {
+                bar.requestFocus();
+            } else {
+                window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+            }
         }
         keyboard.setSelected(shown);
         keyboard.invalidate();
+    }
+
+    /** The buttons' corner of the trackpad, mirrored by the badge's. */
+    private static void placeInCorner(Window window, int side) {
+        window.setGravity(Gravity.TOP | side);
+        WindowManager.LayoutParams attributes = window.getAttributes();
+        float density = window.getContext().getResources().getDisplayMetrics().density;
+        attributes.x = Math.round((Pad.INSET + 8) * density);
+        attributes.y = Math.round((Pad.INSET + 8) * density);
+        window.setAttributes(attributes);
     }
 
     private void style(View view, String label) {
@@ -203,8 +323,8 @@ final class TrackpadControls extends Dialog {
     }
 
     /**
-     * The trackpad itself, drawn like Samsung DeX: a border, a cross through the middle, and the
-     * app's logo on top so the right way up is clear. Touches go through it to the activity.
+     * The trackpad itself, drawn like Samsung DeX: a border and a cross through the middle.
+     * Touches go through it to the activity.
      */
     private static final class Pad extends Dialog {
         static final int INSET = 12;
@@ -238,25 +358,10 @@ final class TrackpadControls extends Dialog {
 
     private static final class PadView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Drawable logo;
-        /** `logo` is an adaptive icon layer, with the art in its middle two thirds. */
-        private final boolean logoIsLayer;
 
         PadView(Context context) {
             super(context);
             paint.setStyle(Paint.Style.STROKE);
-            Drawable icon = context.getApplicationInfo().loadIcon(context.getPackageManager());
-            if (Build.VERSION.SDK_INT >= 33 && icon instanceof AdaptiveIconDrawable
-                    && ((AdaptiveIconDrawable) icon).getMonochrome() != null) {
-                // The silhouette, in the pad's grey.
-                logo = ((AdaptiveIconDrawable) icon).getMonochrome().mutate();
-                logo.setColorFilter(0xFF8A8A8A, PorterDuff.Mode.SRC_IN);
-                logoIsLayer = true;
-            } else {
-                // An icon without one (a full-bleed picture) as the launcher shows it.
-                logo = icon;
-                logoIsLayer = false;
-            }
         }
 
         @Override
@@ -274,15 +379,63 @@ final class TrackpadControls extends Dialog {
             paint.setStrokeWidth(1.5f * density);
             paint.setColor(0xFF4A4A4A);
             canvas.drawRoundRect(border, 16 * density, 16 * density, paint);
+        }
+    }
 
-            // Over the top of the cross, on a patch of the pad's black.
-            int size = Math.round(48 * density);
-            int left = Math.round(centerX - size / 2f);
-            int top = Math.round(border.top + 12 * density);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.BLACK);
-            canvas.drawRect(left, top, left + size, top + size, paint);
-            paint.setStyle(Paint.Style.STROKE);
+    /**
+     * The app's logo in the top left corner, across from the buttons, so the right way up is
+     * clear. Touches go through it to the activity.
+     */
+    private final class Badge extends Dialog {
+        Badge(Activity activity) {
+            super(activity);
+        }
+
+        @Override
+        protected void onCreate(Bundle savedInstanceState) {
+            requestWindowFeature(Window.FEATURE_NO_TITLE);
+            super.onCreate(savedInstanceState);
+            setCancelable(false);
+            Window window = getWindow();
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+            placeInCorner(window, Gravity.LEFT);
+            LinearLayout frame = new LinearLayout(getContext());
+            View logo = new LogoView(getContext());
+            style(logo, null);
+            frame.addView(logo);
+            setContentView(frame);
+        }
+    }
+
+    private static final class LogoView extends View {
+        private final Drawable logo;
+        /** `logo` is an adaptive icon layer, with the art in its middle two thirds. */
+        private final boolean logoIsLayer;
+
+        LogoView(Context context) {
+            super(context);
+            Drawable icon = context.getApplicationInfo().loadIcon(context.getPackageManager());
+            if (Build.VERSION.SDK_INT >= 33 && icon instanceof AdaptiveIconDrawable
+                    && ((AdaptiveIconDrawable) icon).getMonochrome() != null) {
+                // The silhouette, in the pad's grey.
+                logo = ((AdaptiveIconDrawable) icon).getMonochrome().mutate();
+                logo.setColorFilter(0xFF8A8A8A, PorterDuff.Mode.SRC_IN);
+                logoIsLayer = true;
+            } else {
+                // An icon without one (a full-bleed picture) as the launcher shows it.
+                logo = icon;
+                logoIsLayer = false;
+            }
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            int size = Math.min(getWidth(), getHeight());
+            int left = (getWidth() - size) / 2;
+            int top = (getHeight() - size) / 2;
             int bleed = logoIsLayer ? size / 4 : 0;
             logo.setBounds(left - bleed, top - bleed, left + size + bleed, top + size + bleed);
             logo.draw(canvas);
@@ -365,23 +518,21 @@ final class TrackpadControls extends Dialog {
                     | EditorInfo.IME_ACTION_NONE;
             return new BaseInputConnection(this, false);
         }
-
-        @Override
-        public boolean dispatchKeyEvent(KeyEvent event) {
-            if (event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-                return super.dispatchKeyEvent(event);
-            }
-            forwardKey(event);
-            return true;
-        }
     }
 
     /** Passes a key on to the desktop, from the Android keyboard or one typing on the monitor. */
     static void forwardKey(KeyEvent event) {
+        // Apps on the desktop repeat held keys themselves.
+        if (event.getRepeatCount() > 0) {
+            return;
+        }
         if (event.getAction() == KeyEvent.ACTION_DOWN || event.getAction() == KeyEvent.ACTION_UP) {
             nativeOnKey(event.getAction() == KeyEvent.ACTION_DOWN, event.getKeyCode(), event.getEventTime());
         }
     }
 
     private static native void nativeOnKey(boolean down, int keyCode, long eventTimeMs);
+
+    private static native void nativeOnMouse(
+        float dx, float dy, int buttons, float scrollX, float scrollY, long eventTimeMs);
 }
