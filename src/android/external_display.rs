@@ -67,11 +67,13 @@ impl Drop for ExternalSurface {
     }
 }
 
-/// A mouse (or touch) on the external monitor, in its pixels.
+/// A mouse (or touch) on the external monitor, or a mouse plugged into the phone.
 #[derive(Debug, Clone, Copy)]
 pub struct PointerEvent {
+    /// Where on the monitor, in its pixels, or how far a phone's mouse moved when `relative`.
     pub x: f64,
     pub y: f64,
+    pub relative: bool,
     /// `MotionEvent.getButtonState()`.
     pub buttons: i32,
     /// `AXIS_HSCROLL` and `AXIS_VSCROLL`, in wheel notches.
@@ -265,16 +267,44 @@ pub extern "system" fn Java_io_github_localdesktop_ExternalDisplay_nativeOnPoint
     scroll_y: jfloat,
     event_time_ms: jlong,
 ) {
-    let mut bridge = bridge().0.lock().unwrap();
-    let wake = bridge.pointer_events.is_empty();
-    bridge.pointer_events.push_back(PointerEvent {
+    push_pointer_event(PointerEvent {
         x: x as f64,
         y: y as f64,
+        relative: false,
         buttons,
         scroll_x: scroll_x as f64,
         scroll_y: scroll_y as f64,
         time_ms: event_time_ms.max(0) as u64,
     });
+}
+
+/// A mouse plugged into the phone, captured while it is a trackpad.
+#[no_mangle]
+pub extern "system" fn Java_io_github_localdesktop_TrackpadControls_nativeOnMouse(
+    _env: JNIEnv,
+    _class: JClass,
+    dx: jfloat,
+    dy: jfloat,
+    buttons: jint,
+    scroll_x: jfloat,
+    scroll_y: jfloat,
+    event_time_ms: jlong,
+) {
+    push_pointer_event(PointerEvent {
+        x: dx as f64,
+        y: dy as f64,
+        relative: true,
+        buttons,
+        scroll_x: scroll_x as f64,
+        scroll_y: scroll_y as f64,
+        time_ms: event_time_ms.max(0) as u64,
+    });
+}
+
+fn push_pointer_event(event: PointerEvent) {
+    let mut bridge = bridge().0.lock().unwrap();
+    let wake = bridge.pointer_events.is_empty();
+    bridge.pointer_events.push_back(event);
     if wake {
         notify(&bridge, AppUserEvent::ExternalPointer);
     }
