@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.pm.ActivityInfo;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -97,6 +98,7 @@ final class TrackpadControls extends Dialog implements InputManager.InputDeviceL
                 setKeyboardShown(!keyboardShown);
             }
         });
+        ((LinearLayout.LayoutParams) keyboard.getLayoutParams()).leftMargin = dp(8);
         bar.addView(rotate);
         bar.addView(keyboard);
         setContentView(bar);
@@ -332,21 +334,32 @@ final class TrackpadControls extends Dialog implements InputManager.InputDeviceL
         keyboard.invalidate();
     }
 
-    /** The buttons' corner of the trackpad, mirrored by the badge's. */
+    /**
+     * The buttons' corner of the trackpad, mirrored by the badge's: `Pad.GAP` inside the border
+     * from the top and the side. Measured from the screen's edges, like the pad, rather than from
+     * below the status bar and camera cutout.
+     */
     private static void placeInCorner(Window window, int side) {
         window.setGravity(Gravity.TOP | side);
+        window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
         WindowManager.LayoutParams attributes = window.getAttributes();
         float density = window.getContext().getResources().getDisplayMetrics().density;
-        attributes.x = Math.round((Pad.INSET + 8) * density);
-        attributes.y = Math.round((Pad.INSET + 8) * density);
+        attributes.x = Math.round((Pad.INSET + Pad.GAP) * density);
+        attributes.y = Math.round((Pad.INSET + Pad.GAP) * density);
+        if (Build.VERSION.SDK_INT >= 28) {
+            attributes.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            attributes.setFitInsetsTypes(0);
+        }
         window.setAttributes(attributes);
     }
 
     private void style(View view, String label) {
         view.setContentDescription(label);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(44), dp(44));
-        params.setMargins(dp(4), 0, dp(4), 0);
-        view.setLayoutParams(params);
+        view.setLayoutParams(new LinearLayout.LayoutParams(dp(44), dp(44)));
     }
 
     private int dp(int value) {
@@ -359,6 +372,8 @@ final class TrackpadControls extends Dialog implements InputManager.InputDeviceL
      */
     private static final class Pad extends Dialog {
         static final int INSET = 12;
+        /** Between the border and the logo or buttons in its corners. */
+        static final int GAP = 12;
 
         Pad(Activity activity) {
             // Not a floating dialog, which would keep margins around it.
@@ -445,6 +460,7 @@ final class TrackpadControls extends Dialog implements InputManager.InputDeviceL
         private final Drawable logo;
         /** `logo` is an adaptive icon layer, with the art in its middle two thirds. */
         private final boolean logoIsLayer;
+        private Bitmap art;
 
         LogoView(Context context) {
             super(context);
@@ -465,11 +481,36 @@ final class TrackpadControls extends Dialog implements InputManager.InputDeviceL
         @Override
         protected void onDraw(Canvas canvas) {
             int size = Math.min(getWidth(), getHeight());
-            int left = (getWidth() - size) / 2;
-            int top = (getHeight() - size) / 2;
+            if (size <= 0) {
+                return;
+            }
+            if (art == null || art.getWidth() > size || art.getHeight() > size) {
+                art = render(size);
+            }
+            // The art itself in the corner, so its gaps to the border match the buttons'.
+            canvas.drawBitmap(art, 0, 0, null);
+        }
+
+        /** The logo at `size`, trimmed to what it actually draws. */
+        private Bitmap render(int size) {
+            Bitmap full = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
             int bleed = logoIsLayer ? size / 4 : 0;
-            logo.setBounds(left - bleed, top - bleed, left + size + bleed, top + size + bleed);
-            logo.draw(canvas);
+            logo.setBounds(-bleed, -bleed, size + bleed, size + bleed);
+            logo.draw(new Canvas(full));
+            int left = size;
+            int top = size;
+            for (int y = 0; y < size; y++) {
+                for (int x = 0; x < size; x++) {
+                    if (Color.alpha(full.getPixel(x, y)) > 0) {
+                        left = Math.min(left, x);
+                        top = Math.min(top, y);
+                    }
+                }
+            }
+            if (left == size) {
+                return full;
+            }
+            return Bitmap.createBitmap(full, left, top, size - left, size - top);
         }
     }
 
