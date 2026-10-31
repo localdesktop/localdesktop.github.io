@@ -1,11 +1,11 @@
 use std::{
     collections::VecDeque,
     ffi::c_void,
+    fs,
+    path::PathBuf,
     ptr::NonNull,
-    sync::{
-        atomic::{AtomicU8, Ordering},
-        Arc, Condvar, Mutex, OnceLock,
-    },
+    sync::{Arc, Condvar, Mutex, OnceLock},
+    thread,
     time::Duration,
 };
 
@@ -20,9 +20,12 @@ use winit::{
     platform::android::{self, activity::AndroidApp},
 };
 
-use crate::android::{
-    accessibility::{self, AppUserEvent},
-    backend::wayland::physicalkey_to_scancode,
+use crate::{
+    android::{
+        accessibility::{self, AppUserEvent},
+        backend::wayland::physicalkey_to_scancode,
+    },
+    core::config,
 };
 
 #[repr(C)]
@@ -88,19 +91,35 @@ struct Bridge {
 
 static BRIDGE: OnceLock<(Mutex<Bridge>, Condvar)> = OnceLock::new();
 
-/// How many quarter turns clockwise the phone lies from how Android draws it.
-static TRACKPAD_QUARTER_TURNS: AtomicU8 = AtomicU8::new(0);
-
-pub fn trackpad_quarter_turns() -> u8 {
-    TRACKPAD_QUARTER_TURNS.load(Ordering::Relaxed)
-}
+/// The guest touches this when a text field takes focus while the phone is a trackpad (see
+/// `localdesktop-keyboard-relay`).
+const KEYBOARD_REQUEST: &str = "tmp/localdesktop-keyboard";
 
 fn bridge() -> &'static (Mutex<Bridge>, Condvar) {
     BRIDGE.get_or_init(Default::default)
 }
 
 pub fn register_event_loop_proxy(proxy: EventLoopProxy<AppUserEvent>) {
-    bridge().0.lock().unwrap().proxy = Some(proxy);
+    bridge().0.lock().unwrap().proxy = Some(proxy.clone());
+    watch_keyboard_requests(proxy);
+}
+
+fn watch_keyboard_requests(proxy: EventLoopProxy<AppUserEvent>) {
+    thread::spawn(move || {
+        let path = PathBuf::from(config::ARCH_FS_ROOT).join(KEYBOARD_REQUEST);
+        let modified = || fs::metadata(&path).and_then(|it| it.modified()).ok();
+        let mut last = modified();
+        loop {
+            thread::sleep(Duration::from_millis(200));
+            let now = modified();
+            if now != last {
+                last = now;
+                if now.is_some() && proxy.send_event(AppUserEvent::KeyboardRequested).is_err() {
+                    return;
+                }
+            }
+        }
+    });
 }
 
 /// The external monitor's surface, if one is connected.
@@ -174,6 +193,11 @@ pub fn start(env: &mut JNIEnv, android_app: &AndroidApp) {
     call_java(env, android_app, "start");
 }
 
+/// Open the Android keyboard over the trackpad.
+pub fn show_keyboard(env: &mut JNIEnv, android_app: &AndroidApp) {
+    call_java(env, android_app, "showKeyboard");
+}
+
 /// Keep the desktop on the monitor while the app is in the background.
 pub fn background(env: &mut JNIEnv, android_app: &AndroidApp) {
     call_java(env, android_app, "background");
@@ -228,16 +252,6 @@ pub extern "system" fn Java_io_github_localdesktop_ExternalDisplay_nativeSurface
     if timeout.timed_out() {
         log::warn!("Timed out waiting for the renderer to release the external display");
     }
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_github_localdesktop_TrackpadControls_nativeSetQuarterTurns(
-    _env: JNIEnv,
-    _class: JClass,
-    quarter_turns: jint,
-) {
-    TRACKPAD_QUARTER_TURNS.store(quarter_turns.rem_euclid(4) as u8, Ordering::Relaxed);
-    notify(&bridge().0.lock().unwrap(), AppUserEvent::TrackpadRotated);
 }
 
 #[no_mangle]

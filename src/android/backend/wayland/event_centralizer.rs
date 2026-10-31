@@ -7,7 +7,7 @@ use crate::android::backend::wayland::{
     keymap::physicalkey_to_scancode,
     TouchMode, WaylandBackend,
 };
-use crate::android::{external_display, utils::ndk};
+use crate::android::utils::ndk;
 use smithay::backend::input::InputEvent;
 use smithay::utils::{Physical, Size};
 use winit::dpi::PhysicalPosition;
@@ -297,13 +297,6 @@ fn centralize_trackpad(touch: Touch, time: u64, backend: &mut WaylandBackend) ->
         id,
         ..
     } = touch;
-    // Only distances and deltas matter from here on, so turning about the origin is enough.
-    let location = match external_display::trackpad_quarter_turns() {
-        1 => PhysicalPosition::new(-location.y, location.x),
-        2 => PhysicalPosition::new(-location.x, -location.y),
-        3 => PhysicalPosition::new(location.y, -location.x),
-        _ => location,
-    };
     match phase {
         TouchPhase::Started => {
             backend.touch_points.insert(id, location);

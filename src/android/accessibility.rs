@@ -23,8 +23,8 @@ pub enum AppUserEvent {
     ExternalDisplayChanged,
     /// A mouse (or touch) on the external monitor moved, clicked or scrolled.
     ExternalPointer,
-    /// The trackpad was turned a quarter.
-    TrackpadRotated,
+    /// A text field on the desktop took focus while the phone is a trackpad.
+    KeyboardRequested,
 }
 
 #[derive(Clone, Copy, Debug)]

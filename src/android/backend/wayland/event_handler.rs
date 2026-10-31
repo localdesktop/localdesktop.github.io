@@ -5,7 +5,7 @@ use crate::android::{
         hardware_buffer, write_guest_output_state, CentralizedEvent, FrameClock, TouchMode,
         WaylandBackend, WaylandWatcher,
     },
-    external_display::{self, PointerEvent},
+    external_display::PointerEvent,
 };
 use smithay::backend::input::{AxisSource, ButtonState};
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
@@ -44,10 +44,7 @@ const BTN_MIDDLE: u32 = 0x112;
 /// External display pixels the cursor moves per phone pixel the finger moves.
 const TRACKPAD_SPEED: f64 = 1.5;
 /// What the phone shows while it is a trackpad.
-const TRACKPAD_COLOR: Color32F = Color32F::new(0.08, 0.08, 0.08, 1.0);
-const TRACKPAD_GRID_COLOR: Color32F = Color32F::new(0.16, 0.16, 0.16, 1.0);
-/// Marks the trackpad's top edge, which follows the rotate button.
-const TRACKPAD_UP_COLOR: Color32F = Color32F::new(0.24, 0.52, 0.94, 1.0);
+const TRACKPAD_COLOR: Color32F = Color32F::new(0.0, 0.0, 0.0, 1.0);
 /// Pixels a wheel notch scrolls, as libinput reports for a mouse wheel.
 const WHEEL_STEP: f64 = 15.0;
 
@@ -458,42 +455,12 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
     }
 }
 
-/// Show the phone's screen as a trackpad: a grid, with its top edge marked.
+/// Show the phone's screen as a blank trackpad; `TrackpadControls` draws its outline on top.
 pub fn paint_trackpad(backend: &mut WaylandBackend) {
-    let Some(winit) = backend.graphic_renderer.as_mut() else {
-        return;
-    };
-    let size = winit.window_size();
-    if size.w <= 0 || size.h <= 0 {
-        return;
-    }
-    let spacing = (size.w.min(size.h) / 8).max(1);
-    let line = (spacing / 48).max(2);
-    let grid = (1..)
-        .map(|i| i * spacing)
-        .take_while(|x| *x < size.w)
-        .map(|x| Rectangle::new((x, 0).into(), (line, size.h).into()))
-        .chain(
-            (1..)
-                .map(|i| i * spacing)
-                .take_while(|y| *y < size.h)
-                .map(|y| Rectangle::new((0, y).into(), (size.w, line).into())),
-        )
-        .collect();
-    let bar = line * 4;
-    let up = match external_display::trackpad_quarter_turns() {
-        1 => Rectangle::new((0, 0).into(), (bar, size.h).into()),
-        2 => Rectangle::new((0, size.h - bar).into(), (size.w, bar).into()),
-        3 => Rectangle::new((size.w - bar, 0).into(), (bar, size.h).into()),
-        _ => Rectangle::new((0, 0).into(), (size.w, bar).into()),
-    };
-    let layers = [
-        (TRACKPAD_COLOR, vec![Rectangle::from_size(size)]),
-        (TRACKPAD_GRID_COLOR, grid),
-        (TRACKPAD_UP_COLOR, vec![up]),
-    ];
-    if let Err(error) = winit.paint_window(&layers) {
-        log::warn!("Failed to paint the trackpad: {error}");
+    if let Some(winit) = backend.graphic_renderer.as_mut() {
+        if let Err(error) = winit.paint_window(TRACKPAD_COLOR) {
+            log::warn!("Failed to paint the trackpad: {error}");
+        }
     }
 }
 

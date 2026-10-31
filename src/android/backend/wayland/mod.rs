@@ -95,6 +95,13 @@ impl WaylandBackend {
         self.touch_fingers = 0;
     }
 
+    /// Whether the phone's own window is there to draw to (not while the app is in the background).
+    pub fn window_visible(&self) -> bool {
+        self.graphic_renderer
+            .as_ref()
+            .is_some_and(|winit| winit.window_visible())
+    }
+
     /// Whether the desktop is on an external monitor, with the phone as its trackpad.
     pub fn is_trackpad(&self) -> bool {
         self.graphic_renderer

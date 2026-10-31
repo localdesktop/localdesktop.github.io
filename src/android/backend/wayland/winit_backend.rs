@@ -338,6 +338,10 @@ impl WinitGraphicsBackend<GlesRenderer> {
         self.bind_size = None;
     }
 
+    pub fn window_visible(&self) -> bool {
+        self.egl_surface.is_some()
+    }
+
     /// Draw to the phone's window again once the app is back, if it had been let go.
     pub fn resume_window(&mut self) -> Result<(), String> {
         if self.egl_surface.is_some() {
@@ -358,12 +362,8 @@ impl WinitGraphicsBackend<GlesRenderer> {
         Ok(())
     }
 
-    /// Fill the phone's own window with colored rectangles, painted in order, for when it serves
-    /// as a trackpad.
-    pub fn paint_window(
-        &mut self,
-        layers: &[(Color32F, Vec<Rectangle<i32, Physical>>)],
-    ) -> Result<(), String> {
+    /// Fill the phone's own window with one color, for when it serves as a trackpad.
+    pub fn paint_window(&mut self, color: Color32F) -> Result<(), String> {
         let size = self.window_size();
         let Some(egl_surface) = self.egl_surface.as_mut() else {
             return Ok(());
@@ -379,13 +379,11 @@ impl WinitGraphicsBackend<GlesRenderer> {
                 .map_err(|error| format!("Failed to bind the window: {error}"))?;
             let mut frame = self
                 .renderer
-                .render(&mut framebuffer, size, Transform::Flipped180)
+                .render(&mut framebuffer, size, Transform::Normal)
                 .map_err(|error| format!("Failed to render the window: {error:?}"))?;
-            for (color, rectangles) in layers {
-                frame
-                    .clear(*color, rectangles)
-                    .map_err(|error| format!("Failed to clear the window: {error:?}"))?;
-            }
+            frame
+                .clear(color, &[Rectangle::from_size(size)])
+                .map_err(|error| format!("Failed to clear the window: {error:?}"))?;
             let _ = frame
                 .finish()
                 .map_err(|error| format!("Failed to finish the window: {error:?}"))?;

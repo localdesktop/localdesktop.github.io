@@ -5,6 +5,7 @@
 -keep class io.github.localdesktop.ExternalDisplay {
     public static void start(android.app.Activity);
     public static void background(android.app.Activity);
+    public static void showKeyboard(android.app.Activity);
     public static void stop(android.app.Activity);
     native <methods>;
 }

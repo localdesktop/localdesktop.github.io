@@ -3,17 +3,21 @@ package io.github.localdesktop;
 import android.app.Activity;
 import android.app.Dialog;
 import android.content.Context;
-import android.content.SharedPreferences;
+import android.content.pm.ActivityInfo;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.PorterDuff;
 import android.graphics.RectF;
+import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.Surface;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
@@ -24,13 +28,10 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.LinearLayout;
 
-/** Buttons on the phone while it is a trackpad: turn the trackpad, and type with the Android keyboard. */
+/** Buttons on the phone while it is a trackpad: turn the screen, and type with the Android keyboard. */
 final class TrackpadControls extends Dialog {
-    private static final String PREFS = "trackpad";
-    private static final String QUARTER_TURNS = "quarter_turns";
-
     private final Activity activity;
-    private IconButton rotate;
+    private final Pad pad;
     private KeyboardButton keyboard;
     private boolean keyboardShown;
     /** Waiting for the window to take focus before the keyboard can come up. */
@@ -41,6 +42,14 @@ final class TrackpadControls extends Dialog {
     TrackpadControls(Activity activity) {
         super(activity);
         this.activity = activity;
+        pad = new Pad(activity);
+    }
+
+    @Override
+    public void show() {
+        // Under the buttons.
+        pad.show();
+        super.show();
     }
 
     @Override
@@ -55,19 +64,20 @@ final class TrackpadControls extends Dialog {
         // Touches elsewhere reach the trackpad, and keys the activity, until the keyboard is up.
         window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                 | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
-        window.setGravity(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        window.setGravity(Gravity.TOP | Gravity.RIGHT);
         WindowManager.LayoutParams attributes = window.getAttributes();
-        attributes.y = dp(48);
+        attributes.x = dp(Pad.INSET + 8);
+        attributes.y = dp(Pad.INSET + 8);
         window.setAttributes(attributes);
 
         LinearLayout bar = new LinearLayout(getContext());
         bar.setOrientation(LinearLayout.HORIZONTAL);
-        rotate = new IconButton(getContext(), IconButton.ROTATE);
-        style(rotate, "Rotate trackpad");
+        IconButton rotate = new IconButton(getContext(), IconButton.ROTATE);
+        style(rotate, "Rotate screen");
         rotate.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                setQuarterTurns(quarterTurns() + 1);
+                rotateScreen();
             }
         });
         keyboard = new KeyboardButton(getContext());
@@ -97,7 +107,6 @@ final class TrackpadControls extends Dialog {
                 }
             });
         }
-        setQuarterTurns(quarterTurns());
     }
 
     @Override
@@ -123,21 +132,38 @@ final class TrackpadControls extends Dialog {
     @Override
     public void dismiss() {
         setKeyboardShown(false);
+        pad.dismiss();
         super.dismiss();
     }
 
-    private int quarterTurns() {
-        return activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(QUARTER_TURNS, 0);
+    /** A text field on the desktop took focus. */
+    void showKeyboard() {
+        setKeyboardShown(true);
     }
 
-    private void setQuarterTurns(int quarterTurns) {
-        quarterTurns %= 4;
-        SharedPreferences prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        prefs.edit().putInt(QUARTER_TURNS, quarterTurns).apply();
-        nativeSetQuarterTurns(quarterTurns);
-        // Keep the icons upright for someone holding the phone that way.
-        rotate.setRotation(-quarterTurns * 90);
-        keyboard.setRotation(-quarterTurns * 90);
+    /**
+     * Turns the whole screen a quarter clockwise, Android keyboard included, for a phone lying
+     * sideways while auto-rotate keeps it upright.
+     */
+    private void rotateScreen() {
+        int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
+        boolean portrait = getContext().getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_PORTRAIT;
+        boolean naturallyPortrait = portrait == (rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_180);
+        // Orientations for ROTATION_0, 90, 180 and 270 of the display.
+        int[] orientations = naturallyPortrait
+                ? new int[] {
+                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
+                    ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT,
+                    ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE}
+                : new int[] {
+                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
+                    ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT,
+                    ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE,
+                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT};
+        // The display turns the other way from the content: a quarter clockwise is ROTATION_270.
+        activity.setRequestedOrientation(orientations[(rotation + 3) % 4]);
     }
 
     private void setKeyboardShown(boolean shown) {
@@ -167,13 +193,97 @@ final class TrackpadControls extends Dialog {
 
     private void style(View view, String label) {
         view.setContentDescription(label);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(56), dp(56));
-        params.setMargins(dp(8), 0, dp(8), 0);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(44), dp(44));
+        params.setMargins(dp(4), 0, dp(4), 0);
         view.setLayoutParams(params);
     }
 
     private int dp(int value) {
         return Math.round(value * getContext().getResources().getDisplayMetrics().density);
+    }
+
+    /**
+     * The trackpad itself, drawn like Samsung DeX: a border, a cross through the middle, and the
+     * app's logo on top so the right way up is clear. Touches go through it to the activity.
+     */
+    private static final class Pad extends Dialog {
+        static final int INSET = 12;
+
+        Pad(Activity activity) {
+            // Not a floating dialog, which would keep margins around it.
+            super(activity, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen);
+        }
+
+        @Override
+        protected void onCreate(Bundle savedInstanceState) {
+            requestWindowFeature(Window.FEATURE_NO_TITLE);
+            super.onCreate(savedInstanceState);
+            setCancelable(false);
+            Window window = getWindow();
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN);
+            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
+            if (Build.VERSION.SDK_INT >= 28) {
+                WindowManager.LayoutParams attributes = window.getAttributes();
+                attributes.layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                window.setAttributes(attributes);
+            }
+            setContentView(new PadView(getContext()));
+        }
+    }
+
+    private static final class PadView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Drawable logo;
+
+        PadView(Context context) {
+            super(context);
+            paint.setStyle(Paint.Style.STROKE);
+            Drawable icon = context.getApplicationInfo().loadIcon(context.getPackageManager());
+            // Just the bear, without the launcher icon's background.
+            if (Build.VERSION.SDK_INT >= 33 && icon instanceof AdaptiveIconDrawable
+                    && ((AdaptiveIconDrawable) icon).getMonochrome() != null) {
+                icon = ((AdaptiveIconDrawable) icon).getMonochrome();
+            } else if (Build.VERSION.SDK_INT >= 26 && icon instanceof AdaptiveIconDrawable) {
+                icon = ((AdaptiveIconDrawable) icon).getForeground();
+            }
+            logo = icon.mutate();
+            logo.setColorFilter(0xFF8A8A8A, PorterDuff.Mode.SRC_IN);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            float density = getResources().getDisplayMetrics().density;
+            float inset = Pad.INSET * density;
+            RectF border = new RectF(inset, inset, getWidth() - inset, getHeight() - inset);
+            float centerX = getWidth() / 2f;
+            float centerY = getHeight() / 2f;
+
+            paint.setStrokeWidth(density);
+            paint.setColor(0xFF2E2E2E);
+            canvas.drawLine(centerX, border.top, centerX, border.bottom, paint);
+            canvas.drawLine(border.left, centerY, border.right, centerY, paint);
+            paint.setStrokeWidth(1.5f * density);
+            paint.setColor(0xFF4A4A4A);
+            canvas.drawRoundRect(border, 16 * density, 16 * density, paint);
+
+            // Over the top of the cross, on a patch of the pad's black.
+            int size = Math.round(48 * density);
+            int left = Math.round(centerX - size / 2f);
+            int top = Math.round(border.top + 12 * density);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.BLACK);
+            canvas.drawRect(left, top, left + size, top + size, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            // Adaptive icon layers keep their art in the middle two thirds.
+            int bleed = logo instanceof AdaptiveIconDrawable ? 0 : size / 4;
+            logo.setBounds(left - bleed, top - bleed, left + size + bleed, top + size + bleed);
+            logo.draw(canvas);
+        }
     }
 
     /** A round button with a line icon drawn on a 24-unit grid, like Material icons. */
@@ -195,7 +305,7 @@ final class TrackpadControls extends Dialog {
         protected void onDraw(Canvas canvas) {
             float size = Math.min(getWidth(), getHeight());
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(isSelected() ? 0x77FFFFFF : 0x33FFFFFF);
+            paint.setColor(isSelected() ? 0x77FFFFFF : 0x26FFFFFF);
             canvas.drawCircle(getWidth() / 2f, getHeight() / 2f, size / 2f, paint);
 
             // The icon takes the middle half of the button.
@@ -269,8 +379,6 @@ final class TrackpadControls extends Dialog {
             nativeOnKey(event.getAction() == KeyEvent.ACTION_DOWN, event.getKeyCode(), event.getEventTime());
         }
     }
-
-    private static native void nativeSetQuarterTurns(int quarterTurns);
 
     private static native void nativeOnKey(boolean down, int keyCode, long eventTimeMs);
 }

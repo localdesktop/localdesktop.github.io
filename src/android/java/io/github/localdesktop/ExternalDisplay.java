@@ -3,6 +3,7 @@ package io.github.localdesktop;
 import android.app.Activity;
 import android.app.Presentation;
 import android.content.Context;
+import android.content.pm.ActivityInfo;
 import android.hardware.display.DisplayManager;
 import android.os.Bundle;
 import android.os.Handler;
@@ -79,6 +80,18 @@ public final class ExternalDisplay {
         });
     }
 
+    /** A text field on the desktop took focus: type into it with the Android keyboard. */
+    public static void showKeyboard(Activity activity) {
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (controls != null) {
+                    controls.showKeyboard();
+                }
+            }
+        });
+    }
+
     public static void stop(Activity activity) {
         activity.runOnUiThread(new Runnable() {
             @Override
@@ -122,6 +135,10 @@ public final class ExternalDisplay {
         if (controls != null) {
             controls.dismiss();
             controls = null;
+        }
+        if (activity != null) {
+            // The rotate button may have turned the screen; follow the phone again.
+            activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
         }
         if (presentation != null) {
             presentation.dismiss();

@@ -20,12 +20,12 @@ Connect your phone to a monitor or TV (USB-C to HDMI, a USB-C dock, or a wireles
 | Touch and hold, then slide | Drag (hold the left button) |
 | Touch and hold, then lift | Right click |
 
-The blue bar marks the top of the trackpad.
+The bear at the top of the trackpad shows which way is up.
 
 ## Buttons
 
-- **Rotate** turns the trackpad a quarter clockwise, for when you lay the phone sideways while Android stays in portrait. The blue bar moves to the new top edge.
-- **Keyboard** opens the Android keyboard on the phone and types into the desktop. The desktop's own touch keyboard stays hidden while it is on the monitor.
+- **Rotate** turns the phone's screen a quarter clockwise, trackpad and Android keyboard included, for when you lay the phone sideways while auto-rotate keeps it upright.
+- **Keyboard** opens the Android keyboard on the phone and types into the desktop. It also opens by itself when a text field on the desktop takes focus, instead of the desktop's own touch keyboard.
 
 ![The Android keyboard typing into the desktop](/img/external-display-keyboard.png#boxed)
 

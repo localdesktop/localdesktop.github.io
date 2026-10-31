@@ -1171,12 +1171,10 @@ first_output() {{
 read_output_state() {{
     target_mode=""
     target_scale="$fallback_scale"
-    touch_keyboard=1
     if [ -r "$state_file" ]; then
         . "$state_file"
         target_mode="${{LOCALDESKTOP_OUTPUT_MODE:-}}"
         target_scale="${{LOCALDESKTOP_OUTPUT_SCALE:-$target_scale}}"
-        touch_keyboard="${{LOCALDESKTOP_TOUCH_KEYBOARD:-1}}"
     fi
     case "$target_mode" in
         *x*) ;;
@@ -1196,24 +1194,11 @@ apply_output() {{
     return 1
 }}
 
-# Squeekboard follows this setting; the phone types instead while it is a trackpad.
-apply_touch_keyboard() {{
-    if [ "$1" = 0 ]; then
-        gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled false
-    else
-        gsettings reset org.gnome.desktop.a11y.applications screen-keyboard-enabled
-    fi
-}}
-
 last_state=""
-last_touch_keyboard=""
 while true; do
     if ! read_output_state; then
         sleep 0.2
         continue
-    fi
-    if [ "$touch_keyboard" != "$last_touch_keyboard" ] && apply_touch_keyboard "$touch_keyboard"; then
-        last_touch_keyboard="$touch_keyboard"
     fi
     # Only query labwc when the host wrote a new size or scale; spawning wlr-randr every
     # second costs a steady few percent of a core under proot.
@@ -1243,10 +1228,35 @@ done
 "#,
     )
     .expect("Failed to write labwc rc.xml defaults");
+    // While the desktop is on an external display the phone is its keyboard: when a text field
+    // brings up Squeekboard, put it away and have the app open the Android keyboard instead.
+    write_executable(
+        &fs_root.join("usr/local/bin/localdesktop-keyboard-relay"),
+        r#"#!/bin/sh
+state_file=/tmp/localdesktop-output
+request_file=/tmp/localdesktop-keyboard
+osk() { gdbus call --session --dest sm.puri.OSK0 --object-path /sm/puri/OSK0 "$@"; }
+while true; do
+    gdbus monitor --session --dest sm.puri.OSK0 --object-path /sm/puri/OSK0 | while read -r line; do
+        case "$line" in
+            *"'Visible': <true>"*) ;;
+            *) continue ;;
+        esac
+        LOCALDESKTOP_TOUCH_KEYBOARD=1
+        . "$state_file" 2>/dev/null
+        [ "$LOCALDESKTOP_TOUCH_KEYBOARD" = 0 ] || continue
+        osk --method sm.puri.OSK0.SetVisible false >/dev/null
+        touch "$request_file"
+    done
+    sleep 1
+done
+"#,
+    );
     write_executable(
         &labwc_dir.join("autostart"),
         r#"#!/bin/sh
 /usr/local/bin/localdesktop-wlroots-output >/tmp/localdesktop-wlroots-output.log 2>&1 &
+/usr/local/bin/localdesktop-keyboard-relay >/tmp/localdesktop-keyboard-relay.log 2>&1 &
 "#,
     );
 

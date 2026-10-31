@@ -228,9 +228,12 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
                     on_external_pointer(backend, event);
                 }
             }
-            AppUserEvent::TrackpadRotated => {
-                if backend.is_trackpad() {
-                    paint_trackpad(backend);
+            AppUserEvent::KeyboardRequested => {
+                if backend.is_trackpad() && backend.window_visible() {
+                    run_in_jvm(
+                        external_display::show_keyboard,
+                        self.frontend.android_app.clone(),
+                    );
                 }
             }
         }
