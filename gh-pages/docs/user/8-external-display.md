@@ -20,7 +20,7 @@ Connect your phone to a monitor or TV (USB-C to HDMI, a USB-C dock, or a wireles
 | Touch and hold, then slide | Drag (hold the left button) |
 | Touch and hold, then lift | Right click |
 
-The bear at the top of the trackpad shows which way is up.
+The bear in the top left corner of the trackpad shows which way is up.
 
 ## Buttons
 
@@ -28,6 +28,8 @@ The bear at the top of the trackpad shows which way is up.
 - **Keyboard** opens the Android keyboard on the phone and types into the desktop. It also opens by itself when a text field on the desktop takes focus, instead of the desktop's own touch keyboard.
 
 ![The Android keyboard typing into the desktop](/img/external-display-keyboard.png#boxed)
+
+A mouse plugged into the phone moves the cursor on the monitor instead of the phone's, and clicks and scrolls there.
 
 ## In the background
 
