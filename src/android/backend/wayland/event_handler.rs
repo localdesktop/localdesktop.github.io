@@ -741,7 +741,7 @@ fn render(backend: &mut WaylandBackend) -> Result<(), String> {
             .render(&mut framebuffer, size, Transform::Flipped180)
             .map_err(|error| format!("Failed to render frame: {error:?}"))?;
         frame
-            .clear(Color32F::new(0.1, 0.0, 0.0, 1.0), &[damage])
+            .clear(Color32F::new(0.0, 0.0, 0.0, 1.0), &[damage])
             .map_err(|error| format!("Failed to clear frame: {error:?}"))?;
         draw_render_elements(&mut frame, 1.0, &elements, &[damage])
             .map_err(|error| format!("Failed to draw render elements: {error:?}"))?;
