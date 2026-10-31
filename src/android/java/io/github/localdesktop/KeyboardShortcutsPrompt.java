@@ -6,8 +6,8 @@ import android.content.ComponentName;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.res.Configuration;
 import android.provider.Settings;
+import android.view.InputDevice;
 
 public final class KeyboardShortcutsPrompt {
     private static final String PREFS = "keyboard_shortcuts";
@@ -27,7 +27,7 @@ public final class KeyboardShortcutsPrompt {
     private static void show(final Activity activity) {
         final SharedPreferences prefs = activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE);
         if (prefs.getBoolean(ANSWERED, false)
-                || activity.getResources().getConfiguration().keyboard != Configuration.KEYBOARD_QWERTY
+                || !hasPhysicalKeyboard()
                 || isServiceEnabled(activity)) {
             return;
         }
@@ -57,6 +57,18 @@ public final class KeyboardShortcutsPrompt {
                 }
             })
             .show();
+    }
+
+    /** Unlike the configuration, this already knows about a keyboard that just connected. */
+    private static boolean hasPhysicalKeyboard() {
+        for (int id : InputDevice.getDeviceIds()) {
+            InputDevice device = InputDevice.getDevice(id);
+            if (device != null && !device.isVirtual()
+                    && device.getKeyboardType() == InputDevice.KEYBOARD_TYPE_ALPHABETIC) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isServiceEnabled(Activity activity) {

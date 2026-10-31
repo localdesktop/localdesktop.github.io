@@ -43,6 +43,7 @@ final class TrackpadControls extends Dialog implements InputManager.InputDeviceL
     private KeyboardButton keyboard;
     /** A mouse is plugged in, so this window keeps focus to capture it. */
     private boolean mouseAttached;
+    private boolean keyboardAttached;
     private boolean keyboardShown;
     /** Waiting for the window to take focus before the keyboard can come up. */
     private boolean keyboardPending;
@@ -113,6 +114,7 @@ final class TrackpadControls extends Dialog implements InputManager.InputDeviceL
             InputManager inputManager = (InputManager) getContext().getSystemService(Context.INPUT_SERVICE);
             inputManager.registerInputDeviceListener(this, null);
             updateMouse();
+            updateKeyboard();
         }
 
         if (Build.VERSION.SDK_INT >= 30) {
@@ -181,16 +183,45 @@ final class TrackpadControls extends Dialog implements InputManager.InputDeviceL
     @Override
     public void onInputDeviceAdded(int deviceId) {
         updateMouse();
+        updateKeyboard();
     }
 
     @Override
     public void onInputDeviceRemoved(int deviceId) {
         updateMouse();
+        updateKeyboard();
     }
 
     @Override
     public void onInputDeviceChanged(int deviceId) {
         updateMouse();
+        updateKeyboard();
+    }
+
+    /**
+     * Android keeps shortcuts such as Alt+Tab for itself; only the keyboard accessibility service
+     * passes them on. Offer it as soon as a keyboard connects, not just when the app opens.
+     */
+    private void updateKeyboard() {
+        boolean attached = false;
+        for (int id : InputDevice.getDeviceIds()) {
+            InputDevice device = InputDevice.getDevice(id);
+            if (device != null && !device.isVirtual()
+                    && device.getKeyboardType() == InputDevice.KEYBOARD_TYPE_ALPHABETIC) {
+                attached = true;
+            }
+        }
+        if (attached && !keyboardAttached) {
+            // By name: Google Play builds leave the service and its prompt out.
+            try {
+                Class.forName(getClass().getPackage().getName() + ".KeyboardShortcutsPrompt")
+                        .getMethod("showIfNeeded", Activity.class)
+                        .invoke(null, activity);
+            } catch (ReflectiveOperationException e) {
+                // Not in this build.
+            }
+        }
+        keyboardAttached = attached;
     }
 
     /**
