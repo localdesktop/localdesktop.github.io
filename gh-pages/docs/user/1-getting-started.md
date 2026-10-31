@@ -51,9 +51,9 @@ The hardest part is installing `yay` or `paru`. You have to follow the `README.m
 
 ## I don't have a physical keyboard.
 
-An on-screen keyboard slides up when you tap a text field, and hides again when you tap elsewhere. For apps where it doesn't appear on its own, open _"Applications"_ > _"Accessories"_ > _"On-screen keyboard"_ to show or hide it. A physical keyboard is still more comfortable for long sessions.
+Your phone's own keyboard comes up when you tap a text field, and the desktop fits above it. Swipe back to put it away. For apps where it doesn't come up on its own, open _"Applications"_ > _"Accessories"_ > _"On-screen keyboard"_. A physical keyboard is still more comfortable for long sessions.
 
-![On-screen keyboard](/img/squeekboard.webp#boxed)
+![The Android keyboard typing into the desktop](/img/android-keyboard.webp#boxed)
 
 ## Text is too small
 

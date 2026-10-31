@@ -16,7 +16,8 @@ pub use output_state::write_guest_output_state;
 pub use compositor::{Compositor, State};
 pub use event_centralizer::{centralize, centralize_injected_keyboard, CentralizedEvent};
 pub use event_handler::{
-    dispatch_clients, handle, idle, on_external_pointer, on_vsync, paint_trackpad, start_frame_loop,
+    dispatch_clients, handle, idle, on_external_pointer, on_vsync, paint_trackpad,
+    set_keyboard_inset, start_frame_loop,
 };
 pub use frame_clock::FrameClock;
 pub use watcher::WaylandWatcher;
@@ -82,6 +83,8 @@ pub struct WaylandBackend {
     pub frame_clock: Option<FrameClock>,
     /// A frame was already submitted for the upcoming refresh, so the next one waits for vsync.
     pub rendered_since_vsync: bool,
+    /// How much of the bottom of the phone's screen the Android keyboard covers, in pixels.
+    pub keyboard_inset: i32,
 }
 
 impl WaylandBackend {

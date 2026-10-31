@@ -25,7 +25,7 @@ The bear in the top left corner of the trackpad shows which way is up.
 ## Buttons
 
 - **Rotate** turns the phone's screen a quarter clockwise, trackpad and Android keyboard included, for when you lay the phone sideways while auto-rotate keeps it upright.
-- **Keyboard** opens the Android keyboard on the phone and types into the desktop. It also opens by itself when a text field on the desktop takes focus, instead of the desktop's own touch keyboard.
+- **Keyboard** opens the Android keyboard on the phone and types into the desktop. It also opens by itself when a text field on the desktop takes focus.
 
 ![The Android keyboard typing into the desktop](/img/external-display-keyboard.png#boxed)
 

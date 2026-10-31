@@ -80,13 +80,18 @@ public final class ExternalDisplay {
         });
     }
 
-    /** A text field on the desktop took focus: type into it with the Android keyboard. */
-    public static void showKeyboard(Activity activity) {
+    /**
+     * A text field on the desktop took focus: type into it with the Android keyboard, over the
+     * trackpad or on the phone's own screen.
+     */
+    public static void showKeyboard(final Activity activity) {
         activity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 if (controls != null) {
                     controls.showKeyboard();
+                } else {
+                    PhoneKeyboard.show(activity);
                 }
             }
         });
@@ -125,6 +130,7 @@ public final class ExternalDisplay {
             presentation = null;
             return;
         }
+        PhoneKeyboard.hide();
         controls = new TrackpadControls(activity);
         controls.show();
         Toast.makeText(activity, "The desktop is on the external display. Use this screen as a trackpad.",
