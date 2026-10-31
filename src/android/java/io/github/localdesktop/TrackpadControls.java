@@ -239,20 +239,24 @@ final class TrackpadControls extends Dialog {
     private static final class PadView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Drawable logo;
+        /** `logo` is an adaptive icon layer, with the art in its middle two thirds. */
+        private final boolean logoIsLayer;
 
         PadView(Context context) {
             super(context);
             paint.setStyle(Paint.Style.STROKE);
             Drawable icon = context.getApplicationInfo().loadIcon(context.getPackageManager());
-            // Just the bear, without the launcher icon's background.
             if (Build.VERSION.SDK_INT >= 33 && icon instanceof AdaptiveIconDrawable
                     && ((AdaptiveIconDrawable) icon).getMonochrome() != null) {
-                icon = ((AdaptiveIconDrawable) icon).getMonochrome();
-            } else if (Build.VERSION.SDK_INT >= 26 && icon instanceof AdaptiveIconDrawable) {
-                icon = ((AdaptiveIconDrawable) icon).getForeground();
+                // The silhouette, in the pad's grey.
+                logo = ((AdaptiveIconDrawable) icon).getMonochrome().mutate();
+                logo.setColorFilter(0xFF8A8A8A, PorterDuff.Mode.SRC_IN);
+                logoIsLayer = true;
+            } else {
+                // An icon without one (a full-bleed picture) as the launcher shows it.
+                logo = icon;
+                logoIsLayer = false;
             }
-            logo = icon.mutate();
-            logo.setColorFilter(0xFF8A8A8A, PorterDuff.Mode.SRC_IN);
         }
 
         @Override
@@ -279,8 +283,7 @@ final class TrackpadControls extends Dialog {
             paint.setColor(Color.BLACK);
             canvas.drawRect(left, top, left + size, top + size, paint);
             paint.setStyle(Paint.Style.STROKE);
-            // Adaptive icon layers keep their art in the middle two thirds.
-            int bleed = logo instanceof AdaptiveIconDrawable ? 0 : size / 4;
+            int bleed = logoIsLayer ? size / 4 : 0;
             logo.setBounds(left - bleed, top - bleed, left + size + bleed, top + size + bleed);
             logo.draw(canvas);
         }
