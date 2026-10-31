@@ -163,13 +163,13 @@ public final class ExternalDisplay {
             view.setOnGenericMotionListener(new View.OnGenericMotionListener() {
                 @Override
                 public boolean onGenericMotion(View view, MotionEvent event) {
-                    return onPointer(event);
+                    return onPointer(event, false);
                 }
             });
             view.setOnTouchListener(new View.OnTouchListener() {
                 @Override
                 public boolean onTouch(View view, MotionEvent event) {
-                    return onPointer(event);
+                    return onPointer(event, true);
                 }
             });
             setContentView(view);
@@ -182,10 +182,12 @@ public final class ExternalDisplay {
             return true;
         }
 
-        private boolean onPointer(MotionEvent event) {
+        /** `pressing`: a touch event, which Android only sends while something is pressed. */
+        private boolean onPointer(MotionEvent event, boolean pressing) {
             int buttons = event.getButtonState();
-            // A touch screen or pen on the monitor clicks like a mouse.
-            if (!event.isFromSource(InputDevice.SOURCE_MOUSE)) {
+            // A touch screen or pen on the monitor clicks like a mouse, and so does a mouse that
+            // reports no button (a touchpad tapping, an injected click).
+            if (!event.isFromSource(InputDevice.SOURCE_MOUSE) || (pressing && buttons == 0)) {
                 int action = event.getActionMasked();
                 buttons = action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL
                         ? 0 : MotionEvent.BUTTON_PRIMARY;
