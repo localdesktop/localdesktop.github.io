@@ -18,9 +18,9 @@ Connect a USB-C to HDMI cable, a USB-C dock, or a wireless display while Local D
 
 ## A trackpad in your hand
 
-![The phone as a trackpad, with the Local Desktop bear at the top](/img/blog/external-display-trackpad.webp#boxed)
+![The phone as a trackpad, with the Local Desktop bear in the top left corner](/img/blog/external-display-trackpad.webp#boxed)
 
-The phone screen turns into a trackpad, with a cross in the middle and the Local Desktop bear at the top, so you always know which way is up.
+The phone screen turns into a trackpad, with a cross in the middle and the Local Desktop bear in the top left corner, so you always know which way is up.
 
 | Gesture | Does |
 |---|---|
@@ -42,7 +42,7 @@ Click into a text field on the desktop, and the Android keyboard opens on your p
 
 ![The Android keyboard in landscape, typing into the desktop](/img/blog/external-display-keyboard.webp#boxed)
 
-A Bluetooth or USB keyboard works too, of course.
+A Bluetooth or USB keyboard works too, of course. And plug a mouse into your phone: it moves the cursor on the monitor, not on the phone.
 
 ## Keep using your phone
 
