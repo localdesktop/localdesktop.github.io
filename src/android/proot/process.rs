@@ -113,7 +113,7 @@ impl ArchProcess {
 
         process
             .arg("-r")
-            .arg(config::ARCH_FS_ROOT)
+            .arg(config::arch_fs_root())
             .arg("-L")
             .arg("--link2symlink")
             .arg("--sysvipc")
@@ -122,7 +122,7 @@ impl ArchProcess {
             .arg("--bind=/dev")
             .arg("--bind=/proc")
             .arg("--bind=/sys")
-            .arg(format!("--bind={}/tmp:/dev/shm", config::ARCH_FS_ROOT))
+            .arg(format!("--bind={}/tmp:/dev/shm", config::arch_fs_root()))
             // /dev/pts and /dev/ptmx are already covered by --bind=/dev above.
             // The explicit sub-binds added in commit 61d9079 were redundant and caused
             // proot to double-translate PTY ioctls (TIOCGPTN/TIOCSPTLCK/TIOCSWINSZ),
@@ -142,15 +142,15 @@ impl ArchProcess {
             .arg("--bind=/proc/self/fd/0:/dev/stdin")
             .arg("--bind=/proc/self/fd/1:/dev/stdout")
             .arg("--bind=/proc/self/fd/2:/dev/stderr")
-            .arg(format!("--bind={}/proc/.loadavg:/proc/loadavg", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.stat:/proc/stat", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.uptime:/proc/uptime", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.version:/proc/version", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.vmstat:/proc/vmstat", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.pci_devices:/proc/bus/pci/devices", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/sys/.empty:/sys/fs/selinux", config::ARCH_FS_ROOT));
+            .arg(format!("--bind={}/proc/.loadavg:/proc/loadavg", config::arch_fs_root()))
+            .arg(format!("--bind={}/proc/.stat:/proc/stat", config::arch_fs_root()))
+            .arg(format!("--bind={}/proc/.uptime:/proc/uptime", config::arch_fs_root()))
+            .arg(format!("--bind={}/proc/.version:/proc/version", config::arch_fs_root()))
+            .arg(format!("--bind={}/proc/.vmstat:/proc/vmstat", config::arch_fs_root()))
+            .arg(format!("--bind={}/proc/.pci_devices:/proc/bus/pci/devices", config::arch_fs_root()))
+            .arg(format!("--bind={}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap", config::arch_fs_root()))
+            .arg(format!("--bind={}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches", config::arch_fs_root()))
+            .arg(format!("--bind={}/sys/.empty:/sys/fs/selinux", config::arch_fs_root()));
 
         // env vars
         process.arg("/usr/bin/env").arg("-i");

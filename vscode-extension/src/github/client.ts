@@ -24,6 +24,7 @@ export interface RepoInfo {
   hasDiscussions: boolean;
   viewerPermission: RepoPermission;
   viewerLogin: string;
+  viewerAvatarUrl: string;
 }
 
 export interface GitHubClient {
@@ -147,8 +148,8 @@ export class GitHub implements vscode.Disposable {
     if (!owner || !name) throw new LdError("INVALID_ARGUMENT", `localdesktop.repository must be owner/name, got "${slug}"`);
     // REST follows renames (localdesktop/localdesktop → localdesktop.github.io); use the canonical name afterwards.
     const { data } = await rest.repos.get({ owner, repo: name });
-    const viewer = await graphql<{ viewer: { login: string }; repository: { viewerPermission: RepoPermission | null } }>(
-      `query($owner: String!, $name: String!) { viewer { login } repository(owner: $owner, name: $name) { viewerPermission } }`,
+    const viewer = await graphql<{ viewer: { login: string; avatarUrl: string }; repository: { viewerPermission: RepoPermission | null } }>(
+      `query($owner: String!, $name: String!) { viewer { login avatarUrl } repository(owner: $owner, name: $name) { viewerPermission } }`,
       { owner: data.owner.login, name: data.name },
     );
     const repo: RepoInfo = {
@@ -160,6 +161,7 @@ export class GitHub implements vscode.Disposable {
       hasDiscussions: Boolean(data.has_discussions),
       viewerPermission: viewer.repository.viewerPermission ?? "READ",
       viewerLogin: viewer.viewer.login,
+      viewerAvatarUrl: viewer.viewer.avatarUrl,
     };
     await this.setContextKeys(repo);
     this.output.info(`GitHub: signed in as ${repo.viewerLogin} (${repo.viewerPermission} on ${repo.fullName})`);

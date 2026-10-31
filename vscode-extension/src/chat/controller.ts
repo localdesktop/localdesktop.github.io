@@ -229,7 +229,7 @@ export class ChatController implements vscode.Disposable {
       const view: MessageView = {
         id: p.localId,
         localId: p.localId,
-        author: { login: session.client.repo.viewerLogin },
+        author: { login: session.client.repo.viewerLogin, avatarUrl: session.client.repo.viewerAvatarUrl },
         createdAt: p.createdAt,
         html: renderMarkdown(p.text),
         status: p.status,

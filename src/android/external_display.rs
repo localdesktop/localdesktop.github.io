@@ -106,7 +106,7 @@ pub fn register_event_loop_proxy(proxy: EventLoopProxy<AppUserEvent>) {
 
 fn watch_keyboard_requests(proxy: EventLoopProxy<AppUserEvent>) {
     thread::spawn(move || {
-        let path = PathBuf::from(config::ARCH_FS_ROOT).join(KEYBOARD_REQUEST);
+        let path = PathBuf::from(config::arch_fs_root()).join(KEYBOARD_REQUEST);
         let modified = || fs::metadata(&path).and_then(|it| it.modified()).ok();
         let mut last = modified();
         loop {

@@ -364,6 +364,7 @@ a {
 
 /* ----- composer ----- */
 .composer {
+  position: relative;
   padding: var(--gap);
   border-top: 1px solid var(--vscode-panel-border, transparent);
 }
@@ -391,6 +392,32 @@ textarea {
   border: 1px solid var(--vscode-input-border, transparent);
   border-radius: var(--radius);
   padding: 4px 6px;
+}
+.emoji-suggest {
+  position: absolute;
+  bottom: 100%;
+  left: var(--gap);
+  right: var(--gap);
+  z-index: 2;
+  margin: 0;
+  padding: 2px;
+  list-style: none;
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-widget-border, #8884));
+  border-radius: var(--radius);
+  box-shadow: 0 1px 4px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.2));
+}
+.emoji-suggest[hidden] {
+  display: none;
+}
+.emoji-suggest li {
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.emoji-suggest li.active {
+  color: var(--vscode-list-activeSelectionForeground);
+  background: var(--vscode-list-activeSelectionBackground);
 }
 .meta {
   display: flex;
