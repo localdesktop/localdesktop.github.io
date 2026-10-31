@@ -8,7 +8,7 @@ use crate::android::{
         pipewire_standalone_aaudio,
         wayland::{
             bind, centralize, centralize_injected_keyboard, dispatch_clients, handle, idle,
-            on_external_pointer, on_vsync, paint_trackpad, start_frame_loop,
+            on_external_pointer, on_vsync, paint_trackpad, set_keyboard_inset, start_frame_loop,
             write_guest_output_state, CentralizedEvent, State, WaylandBackend,
         },
         webview::ErrorVariant,
@@ -85,8 +85,7 @@ fn configure_output(backend: &mut WaylandBackend) {
     );
 
     let guest_scale = guest_scale_factor.round().max(1.0) as i32;
-    let touch_keyboard = winit.external_surface().is_none();
-    write_guest_output_state(window_size.w, window_size.h, guest_scale, touch_keyboard);
+    write_guest_output_state(window_size.w, window_size.h, guest_scale);
 
     for surface in backend.compositor.state.xdg_shell_state.toplevel_surfaces() {
         configure_toplevel(surface, window_size.w, window_size.h);
@@ -229,12 +228,15 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
                 }
             }
             AppUserEvent::KeyboardRequested => {
-                if backend.is_trackpad() && backend.window_visible() {
+                if backend.window_visible() {
                     run_in_jvm(
                         external_display::show_keyboard,
                         self.frontend.android_app.clone(),
                     );
                 }
+            }
+            AppUserEvent::KeyboardInset => {
+                set_keyboard_inset(backend, external_display::keyboard_inset());
             }
         }
     }

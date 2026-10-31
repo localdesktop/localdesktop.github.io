@@ -20,7 +20,7 @@ use smithay::backend::renderer::{Color32F, Frame, Renderer};
 use smithay::input::keyboard::FilterResult;
 use smithay::input::pointer::{self, CursorImageStatus, CursorImageSurfaceData};
 use smithay::reexports::wayland_server::protocol::wl_pointer::ButtonState as WlButtonState;
-use smithay::utils::{Point, Rectangle, Transform, SERIAL_COUNTER};
+use smithay::utils::{Physical, Point, Rectangle, Size, Transform, SERIAL_COUNTER};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::ToplevelSurface;
 use smithay::{
@@ -424,36 +424,37 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
         }
         // The desktop is on the external display, so the phone's own window doesn't size it.
         CentralizedEvent::Resized { .. } if backend.is_trackpad() => paint_trackpad(backend),
-        CentralizedEvent::Resized {
-            size,
-            guest_scale_factor,
-        } => {
-            backend.compositor.state.size = (size.w, size.h).into();
-
-            if let Some(output) = &backend.compositor.output {
-                output.change_current_state(
-                    Some(Mode {
-                        size: size.into(),
-                        refresh: backend.refresh_millihz,
-                    }),
-                    Some(Transform::Normal),
-                    Some(Scale::Integer(1)),
-                    Some((0, 0).into()),
-                );
-            }
-
-            let guest_scale = guest_scale_factor.round().max(1.0) as i32;
-            write_guest_output_state(size.w, size.h, guest_scale, true);
-
-            if let Some(surface) = get_surface(&backend.compositor.state) {
-                surface.xdg_toplevel().configure(size.w, size.h, vec![]);
-            }
-
-            backend.compositor.state.render_pending = true;
-            schedule_frame(backend);
-        }
+        CentralizedEvent::Resized { size, .. } => resize_desktop(backend, size),
         _ => (),
     }
+}
+
+/// Size the desktop to the phone's window, less what the Android keyboard covers of it.
+fn resize_desktop(backend: &mut WaylandBackend, window: Size<i32, Physical>) {
+    let size: Size<i32, Physical> = (window.w, (window.h - backend.keyboard_inset).max(1)).into();
+    backend.compositor.state.size = (size.w, size.h).into();
+
+    if let Some(output) = &backend.compositor.output {
+        output.change_current_state(
+            Some(Mode {
+                size: size.into(),
+                refresh: backend.refresh_millihz,
+            }),
+            Some(Transform::Normal),
+            Some(Scale::Integer(1)),
+            Some((0, 0).into()),
+        );
+    }
+
+    let guest_scale = backend.guest_scale_factor.round().max(1.0) as i32;
+    write_guest_output_state(size.w, size.h, guest_scale);
+
+    if let Some(surface) = get_surface(&backend.compositor.state) {
+        surface.xdg_toplevel().configure(size.w, size.h, vec![]);
+    }
+
+    backend.compositor.state.render_pending = true;
+    schedule_frame(backend);
 }
 
 /// Show the phone's screen as a blank trackpad; `TrackpadControls` draws its outline on top.
@@ -463,6 +464,23 @@ pub fn paint_trackpad(backend: &mut WaylandBackend) {
             log::warn!("Failed to paint the trackpad: {error}");
         }
     }
+}
+
+/// The Android keyboard on the phone's screen now covers its bottom `inset` pixels: fit the
+/// desktop above it, as Android apps do, so the text field being typed into stays in sight.
+pub fn set_keyboard_inset(backend: &mut WaylandBackend, inset: i32) {
+    if inset == backend.keyboard_inset {
+        return;
+    }
+    backend.keyboard_inset = inset;
+    if backend.is_trackpad() {
+        return;
+    }
+    let window = match &backend.graphic_renderer {
+        Some(winit) => winit.window_size(),
+        None => return,
+    };
+    resize_desktop(backend, window);
 }
 
 /// A mouse on the external display, or one plugged into the phone: it moves the cursor, and its
