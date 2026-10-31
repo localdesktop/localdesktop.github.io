@@ -1,4 +1,6 @@
 #include <errno.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <linux/limits.h>
 
 #include "syscall/sysnum.h"
@@ -28,8 +30,13 @@ int handle_chmod_enter_end(Tracee *tracee, Reg path_sysarg, Reg mode_sysarg,
 		status = read_sysarg_path(tracee, path, path_sysarg, CURRENT);
 	if(status < 0)
 		return status;
-	// If the file exists outside the guestfs, drop the syscall.
+	// If the file exists outside the guestfs, drop the syscall, unless it is
+	// the app's own (a directory bound into the guest, such as /home): then
+	// let the real chmod through, or an executable written there never runs.
 	else if(status == 1) {
+		struct stat host;
+		if(stat(path, &host) == 0 && host.st_uid == getuid())
+			return 0;
 		set_sysnum(tracee, PR_getuid);
 		return 0;
 	}

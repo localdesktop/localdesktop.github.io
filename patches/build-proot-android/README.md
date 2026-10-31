@@ -25,4 +25,12 @@ One of them is in `src/syscall/seccomp.c`: the seccomp filter traps only the
 instead of every `ioctl`, so GPU drivers in the guest (Turnip on KGSL) don't
 stop at the tracer on each command submission.
 
+Another is in `src/extension/fake_id0/chmod.c`: `chmod` on a file outside the
+guest rootfs is still dropped, except on the app's own files (a directory bound
+into the guest, such as `/home`), so a script or binary written there can be
+made executable.
+
+The shipped `libproot.so` is built with `./build.sh` (NDK r26d). On macOS, put a
+GNU `install` (or a wrapper that handles `install -D`) first in `PATH`.
+
 See https://github.com/green-green-avk/proot for more info.
