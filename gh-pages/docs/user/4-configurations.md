@@ -6,12 +6,12 @@ title: Settings
 
 Local Desktop's settings are in Android, so you can change them even when the desktop doesn't start:
 
-1. Open Android's **Settings** > **Apps** > **Local Desktop**. Or touch and hold the Local Desktop icon, then tap **App info**.
+1. Touch and hold the Local Desktop icon, then tap **App info**. Or open Android's **Settings** > **Apps** > **Local Desktop**.
 2. Tap **Additional settings in the app** (on some phones, a gear icon).
 
-Changes apply the next time Local Desktop starts. **Restart Local Desktop** at the bottom applies them right away.
+<img src="/img/settings-step-1.webp" width="32%" alt="Touch and hold the Local Desktop icon, then tap App info" /> <img src="/img/settings-step-2.webp" width="32%" alt="Tap Additional settings in the app" /> <img src="/img/settings.webp" width="32%" alt="Local Desktop settings" />
 
-![Local Desktop settings](/img/settings.webp#boxed)
+Changes apply the next time Local Desktop starts. **Restart Local Desktop** at the bottom applies them right away.
 
 ## What you can change
 
