@@ -6,21 +6,14 @@ title: Using other Desktop Environments
 This is an advanced topic. Proceed with your own risk.
 :::
 
-## The `[command]` configs
+## The 3 commands
 
-Local Desktop uses 3 commands to set up your desktop environment:
-
-```toml title="/etc/localdesktop/localdesktop.toml"
-[command]
-check="pacman -Q noto-fonts && pacman -Q xfce4-session && pacman -Q xfce4-panel && pacman -Q xfce4-settings && pacman -Q xfce4-terminal && pacman -Q thunar && pacman -Q xfdesktop && pacman -Q xfconf && pacman -Q labwc && pacman -Q wlr-randr && pacman -Q xorg-xwayland && pacman -Q xdg-desktop-portal && pacman -Q xdg-desktop-portal-gtk && pacman -Q squeekboard"
-install="stdbuf -oL pacman -Syu --needed --noconfirm --noprogressbar noto-fonts xfce4 labwc wlr-randr xorg-xwayland xdg-desktop-portal xdg-desktop-portal-gtk squeekboard"
-launch="XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=XFCE /usr/local/bin/startxfce4-localdesktop 2>&1"
-```
+Local Desktop uses 3 commands to set up your desktop environment: **Check**, **Install** and **Launch**. Change them in [Local Desktop settings](/docs/user/configurations), under **Additional settings in the app** in Android's App info for Local Desktop, which shows the current ones.
 
 You can change these 3 commands to install and launch your custom desktop environment. Please share your successful setups with us and we can put them here to help others.
 
 :::success Tips
-The `try_check`, `try_install`, `try_launch` configs are very handy to try different config values **without breaking anything**. Check out the [Configurations](/docs/user/configurations#special-try_-configs) documentation for more details about `try_*`.
+The settings open from Android even when the desktop doesn't start, so a command that doesn't work is easy to undo: change it back, or tap **Restore defaults**.
 :::
 
 ### check
@@ -65,14 +58,28 @@ For a legacy **X11 session via Xwayland**, start Xwayland first and point the de
 
 ### KDE Plasma
 
-```toml title="/etc/localdesktop/localdesktop.toml"
-[command]
-try_check = "pacman -Qg plasma"
-try_install = "stdbuf -oL pacman -Syu plasma --noconfirm --noprogressbar"
-# X11 session via Xwayland
-try_launch = "XDG_RUNTIME_DIR=/tmp Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-launch startplasma-x11 2>&1"
-# Wayland session
-try_launch = "XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 /usr/lib/plasma-dbus-run-session-if-needed startplasma-wayland 2>&1"
+**Check:**
+
+```bash
+pacman -Qg plasma
+```
+
+**Install:**
+
+```bash
+stdbuf -oL pacman -Syu plasma --noconfirm --noprogressbar
+```
+
+**Launch**, a Wayland session:
+
+```bash
+XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 /usr/lib/plasma-dbus-run-session-if-needed startplasma-wayland 2>&1
+```
+
+Or an X11 session via Xwayland:
+
+```bash
+XDG_RUNTIME_DIR=/tmp Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-launch startplasma-x11 2>&1
 ```
 
 ![KDE Plasma on Local Desktop](/img/kde.webp)
@@ -85,6 +92,4 @@ Feedback:
 
 ### Others
 
-```toml title="/etc/localdesktop/localdesktop.toml"
-Feel free to contribute your configs by using the "Edit this page" link below
-```
+Feel free to contribute your commands by using the "Edit this page" link below.

@@ -229,7 +229,19 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
         scaler.optimize();
         let anydpi = res.join("mipmap-anydpi-v26");
         std::fs::create_dir_all(&anydpi)?;
-        std::fs::write(anydpi.join("ic_launcher.xml"), IC_LAUNCHER)?;
+        // A monochrome layer is the icon's silhouette, which for an opaque icon is a square:
+        // themed icons then show the icon in its own colors instead.
+        let variants: &[&str] = if scaler.is_opaque() {
+            let xml = String::from_utf8_lossy(IC_LAUNCHER).replace(
+                "  <monochrome android:drawable=\"@mipmap/ic_launcher_monochrome\" />\n",
+                "",
+            );
+            std::fs::write(anydpi.join("ic_launcher.xml"), xml)?;
+            &["foreground"]
+        } else {
+            std::fs::write(anydpi.join("ic_launcher.xml"), IC_LAUNCHER)?;
+            &["foreground", "monochrome"]
+        };
         let dpis = [
             ("m", 48),
             ("h", 72),
@@ -247,10 +259,11 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
                 let mut icon = std::fs::File::create(dir.join("ic_launcher.png"))?;
                 scaler.write(&mut icon, opts)?;
             }
-            for variant in ["foreground", "monochrome"] {
+            // Adaptive icon layers are 108 dp where the legacy icon is 48 dp.
+            for variant in variants {
                 let mut icon =
                     std::fs::File::create(dir.join(format!("ic_launcher_{}.png", variant)))?;
-                scaler.write(&mut icon, opts)?;
+                scaler.write_adaptive_layer(&mut icon, size * 108 / 48)?;
             }
         }
         manifest.application.icon = Some("@mipmap/ic_launcher".into());

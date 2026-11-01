@@ -1,9 +1,9 @@
 use super::bind::bind_socket;
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
-    delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm,
-    delegate_xdg_shell,
-    input::{self, keyboard::KeyboardHandle, touch::TouchHandle, Seat, SeatHandler, SeatState},
+    delegate_compositor, delegate_data_device, delegate_output, delegate_relative_pointer,
+    delegate_seat, delegate_shm, delegate_xdg_shell,
+    input::{keyboard::KeyboardHandle, touch::TouchHandle, Seat, SeatHandler, SeatState},
     output::Output,
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
@@ -17,6 +17,7 @@ use smithay::{
             CompositorState, SurfaceAttributes, TraversalAction,
         },
         output::OutputHandler,
+        relative_pointer::RelativePointerManagerState,
         selection::{
             data_device::{
                 ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
@@ -30,7 +31,7 @@ use smithay::{
     },
 };
 use smithay::{
-    input::pointer::PointerHandle,
+    input::pointer::{CursorImageStatus, PointerHandle},
     reexports::wayland_server::{
         backend::{ClientData, ClientId, DisconnectReason, GlobalId},
         protocol::{wl_buffer, wl_surface::WlSurface},
@@ -59,11 +60,17 @@ pub struct State {
     pub shm_state: ShmState,
     pub data_device_state: DataDeviceState,
     pub seat_state: SeatState<Self>,
+    /// Xwayland sends scrolling through its relative pointer device, and pointer motion through
+    /// it too only when the compositor reports relative motion. Without this, X apps see the
+    /// pointer switch devices around every scroll and GTK drops the scroll.
+    pub relative_pointer_state: RelativePointerManagerState,
     pub size: Size<i32, Logical>,
     /// A client attached a new buffer since the last render.
     pub render_pending: bool,
     /// A client committed since frame callbacks were last released.
     pub frame_pending: bool,
+    /// What the client wants the cursor to look like.
+    pub cursor_image: CursorImageStatus,
 }
 
 impl BufferHandler for State {
@@ -157,7 +164,10 @@ impl SeatHandler for State {
     }
 
     fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {}
-    fn cursor_image(&mut self, _seat: &Seat<Self>, _image: input::pointer::CursorImageStatus) {}
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        self.cursor_image = image;
+        self.render_pending = true;
+    }
 }
 
 pub fn send_frames_surface_tree(surface: &WlSurface, time: u32) {
@@ -202,6 +212,7 @@ delegate_shm!(State);
 delegate_seat!(State);
 delegate_data_device!(State);
 delegate_output!(State);
+delegate_relative_pointer!(State);
 
 impl Compositor {
     pub fn build() -> Result<Compositor, Box<dyn Error>> {
@@ -229,9 +240,11 @@ impl Compositor {
             shm_state: ShmState::new::<State>(&dh, vec![]),
             data_device_state: DataDeviceState::new::<State>(&dh),
             seat_state,
+            relative_pointer_state: RelativePointerManagerState::new::<State>(&dh),
             size: (1920, 1080).into(),
             render_pending: false,
             frame_pending: false,
+            cursor_image: CursorImageStatus::default_named(),
         };
 
         Ok(Compositor {

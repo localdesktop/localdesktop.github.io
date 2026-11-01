@@ -1,6 +1,6 @@
 use crate::{
-    android::utils::ndk::run_in_jvm,
-    core::config::{arch_fs_root, init_arch_fs_root, parse_config, LocalConfig, CONFIG_FILE},
+    android::utils::{ndk::run_in_jvm, settings},
+    core::config::{arch_fs_root, init_arch_fs_root, LocalConfig},
 };
 use jni::{
     objects::{JObject, JString},
@@ -42,8 +42,7 @@ impl ApplicationContext {
             "XLOCALEDIR",
             format!("{}/usr/share/X11/locale", arch_fs_root()),
         );
-        let full_config_path = format!("{}{}", arch_fs_root(), CONFIG_FILE);
-        let local_config = parse_config(full_config_path);
+        let local_config = settings::load(&mut env, &activity);
         let permission_all_files_access = Self::is_all_files_access_granted(android_app);
 
         {

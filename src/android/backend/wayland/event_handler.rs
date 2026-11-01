@@ -5,20 +5,24 @@ use crate::android::{
         hardware_buffer, write_guest_output_state, CentralizedEvent, FrameClock, TouchMode,
         WaylandBackend, WaylandWatcher,
     },
+    external_display::PointerEvent,
+    utils::application_context::get_application_context,
 };
-use smithay::backend::input::ButtonState;
+use smithay::backend::input::{AxisSource, ButtonState};
+use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
 use smithay::backend::renderer::element::texture::TextureRenderElement;
-use smithay::backend::renderer::element::{render_elements, Kind};
+use smithay::backend::renderer::element::{render_elements, Id, Kind};
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
-use smithay::backend::renderer::utils::draw_render_elements;
+use smithay::backend::renderer::utils::{draw_render_elements, CommitCounter};
 use smithay::backend::renderer::{Color32F, Frame, Renderer};
 use smithay::input::keyboard::FilterResult;
-use smithay::input::pointer;
+use smithay::input::pointer::{self, CursorImageStatus, CursorImageSurfaceData};
 use smithay::reexports::wayland_server::protocol::wl_pointer::ButtonState as WlButtonState;
-use smithay::utils::{Point, Rectangle, Transform, SERIAL_COUNTER};
+use smithay::utils::{Physical, Point, Rectangle, Size, Transform, SERIAL_COUNTER};
+use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::ToplevelSurface;
 use smithay::{
     backend::input::{
@@ -36,6 +40,14 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 const BTN_LEFT: u32 = 0x110;
 /// Linux input event code for the right mouse button (`BTN_RIGHT`).
 const BTN_RIGHT: u32 = 0x111;
+/// Linux input event code for the middle mouse button (`BTN_MIDDLE`).
+const BTN_MIDDLE: u32 = 0x112;
+/// External display pixels the cursor moves per phone pixel the finger moves.
+const TRACKPAD_SPEED: f64 = 1.5;
+/// What the phone shows while it is a trackpad.
+const TRACKPAD_COLOR: Color32F = Color32F::new(0.0, 0.0, 0.0, 1.0);
+/// Pixels a wheel notch scrolls, as libinput reports for a mouse wheel.
+const WHEEL_STEP: f64 = 15.0;
 
 /**
  * As we currently use Xwayland, there is only 1 surface
@@ -68,13 +80,24 @@ fn emit_pointer_motion(
     let state = &mut compositor.state;
     if let Some(focus) = pointer_focus(state) {
         let serial = SERIAL_COUNTER.next_serial();
+        let delta = Point::from((x, y)) - pointer.current_location();
         pointer.motion(
             state,
-            Some(focus),
+            Some(focus.clone()),
             &pointer::MotionEvent {
                 location: (x, y).into(),
                 serial,
                 time,
+            },
+        );
+        // In the same frame, so Xwayland moves its relative pointer device (see `State`).
+        pointer.relative_motion(
+            state,
+            Some(focus),
+            &pointer::RelativeMotionEvent {
+                delta,
+                delta_unaccel: delta,
+                utime: time as u64 * 1000,
             },
         );
         pointer.frame(state);
@@ -170,6 +193,9 @@ fn poll_long_press(backend: &mut WaylandBackend) {
     let now = backend.clock.now().as_millis() as u64;
 
     backend.touch_mode = TouchMode::LongPress;
+    if backend.is_trackpad() {
+        return;
+    }
     // Anchor the pointer where the finger landed, so a drag selects from there.
     emit_pointer_motion(
         &mut backend.compositor,
@@ -185,6 +211,9 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
             event_loop.exit();
         }
         CentralizedEvent::Redraw => {
+            if backend.is_trackpad() {
+                paint_trackpad(backend);
+            }
             // Requested by the OS (e.g. the surface was recreated), so draw even without damage.
             backend.compositor.state.render_pending = true;
             backend.rendered_since_vsync = false;
@@ -257,7 +286,7 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                             time,
                         ),
                         // A scroll consumed the gesture; nothing to click.
-                        TouchMode::Scroll | TouchMode::Drag => {}
+                        TouchMode::Scroll | TouchMode::Drag | TouchMode::Move => {}
                     }
                 }
             }
@@ -268,22 +297,12 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
                 }
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
-                let compositor = &mut backend.compositor;
-                let pointer = compositor.pointer.clone();
-                let serial = SERIAL_COUNTER.next_serial();
-
-                if let Some(surface) = get_surface(&compositor.state) {
-                    pointer.motion(
-                        &mut compositor.state,
-                        Some((surface.wl_surface().clone(), (0f64, 0f64).into())),
-                        &pointer::MotionEvent {
-                            location: (event.x(), event.y()).into(),
-                            serial,
-                            time: event.time_msec(),
-                        },
-                    );
-                }
-                pointer.frame(&mut compositor.state);
+                emit_pointer_motion(
+                    &mut backend.compositor,
+                    event.x(),
+                    event.y(),
+                    event.time_msec(),
+                );
             }
             InputEvent::PointerButton { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
@@ -365,36 +384,161 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
             }
             _ => {}
         },
-        CentralizedEvent::Resized {
-            size,
-            guest_scale_factor,
-        } => {
-            backend.compositor.state.size = (size.w, size.h).into();
-
-            if let Some(output) = &backend.compositor.output {
-                output.change_current_state(
-                    Some(Mode {
-                        size: size.into(),
-                        refresh: backend.refresh_millihz,
-                    }),
-                    Some(Transform::Normal),
-                    Some(Scale::Integer(1)),
-                    Some((0, 0).into()),
-                );
+        CentralizedEvent::TrackpadMotion { dx, dy, time } => {
+            if backend.touch_mode == TouchMode::Drag && !backend.pointer_pressed {
+                emit_pointer_press(&mut backend.compositor, BTN_LEFT, time as u32);
+                backend.pointer_pressed = true;
             }
-
-            let guest_scale = guest_scale_factor.round().max(1.0) as i32;
-            write_guest_output_state(size.w, size.h, guest_scale);
-
-            if let Some(surface) = get_surface(&backend.compositor.state) {
-                surface.xdg_toplevel().configure(size.w, size.h, vec![]);
-            }
-
+            let size = backend.compositor.state.size;
+            let cursor = &mut backend.cursor_position;
+            cursor.x = (cursor.x + dx * TRACKPAD_SPEED).clamp(0.0, (size.w - 1).max(0) as f64);
+            cursor.y = (cursor.y + dy * TRACKPAD_SPEED).clamp(0.0, (size.h - 1).max(0) as f64);
+            let cursor = backend.cursor_position;
+            emit_pointer_motion(&mut backend.compositor, cursor.x, cursor.y, time as u32);
             backend.compositor.state.render_pending = true;
             schedule_frame(backend);
         }
+        CentralizedEvent::TrackpadUp {
+            mode,
+            fingers,
+            time,
+        } => {
+            let cursor = backend.cursor_position;
+            if backend.pointer_pressed {
+                emit_pointer_release(&mut backend.compositor, BTN_LEFT, time as u32);
+                backend.pointer_pressed = false;
+                return;
+            }
+            let button = match (mode, fingers) {
+                (TouchMode::Undecided, 1) => BTN_LEFT,
+                (TouchMode::Undecided, 2) | (TouchMode::LongPress, 1) => BTN_RIGHT,
+                (TouchMode::Undecided, _) => BTN_MIDDLE,
+                _ => return,
+            };
+            emit_pointer_click(
+                &mut backend.compositor,
+                button,
+                cursor.x,
+                cursor.y,
+                time as u32,
+            );
+        }
+        // The desktop is on the external display, so the phone's own window doesn't size it.
+        CentralizedEvent::Resized { .. } if backend.is_trackpad() => paint_trackpad(backend),
+        CentralizedEvent::Resized { size, .. } => resize_desktop(backend, size),
         _ => (),
     }
+}
+
+/// Size the desktop to the phone's window, less what the Android keyboard covers of it.
+fn resize_desktop(backend: &mut WaylandBackend, window: Size<i32, Physical>) {
+    let size: Size<i32, Physical> = (window.w, (window.h - backend.keyboard_inset).max(1)).into();
+    backend.compositor.state.size = (size.w, size.h).into();
+
+    if let Some(output) = &backend.compositor.output {
+        output.change_current_state(
+            Some(Mode {
+                size: size.into(),
+                refresh: backend.refresh_millihz,
+            }),
+            Some(Transform::Normal),
+            Some(Scale::Integer(1)),
+            Some((0, 0).into()),
+        );
+    }
+
+    let guest_scale = backend.guest_scale_factor.round().max(1.0) as i32;
+    let touch_keyboard = !get_application_context().local_config.android_keyboard;
+    write_guest_output_state(size.w, size.h, guest_scale, touch_keyboard);
+
+    if let Some(surface) = get_surface(&backend.compositor.state) {
+        surface.xdg_toplevel().configure(size.w, size.h, vec![]);
+    }
+
+    backend.compositor.state.render_pending = true;
+    schedule_frame(backend);
+}
+
+/// Show the phone's screen as a blank trackpad; `TrackpadControls` draws its outline on top.
+pub fn paint_trackpad(backend: &mut WaylandBackend) {
+    if let Some(winit) = backend.graphic_renderer.as_mut() {
+        if let Err(error) = winit.paint_window(TRACKPAD_COLOR) {
+            log::warn!("Failed to paint the trackpad: {error}");
+        }
+    }
+}
+
+/// The Android keyboard on the phone's screen now covers its bottom `inset` pixels: fit the
+/// desktop above it, as Android apps do, so the text field being typed into stays in sight.
+pub fn set_keyboard_inset(backend: &mut WaylandBackend, inset: i32) {
+    if inset == backend.keyboard_inset {
+        return;
+    }
+    backend.keyboard_inset = inset;
+    if backend.is_trackpad() {
+        return;
+    }
+    let window = match &backend.graphic_renderer {
+        Some(winit) => winit.window_size(),
+        None => return,
+    };
+    resize_desktop(backend, window);
+}
+
+/// A mouse on the external display, or one plugged into the phone: it moves the cursor, and its
+/// buttons and wheel go straight to the desktop.
+pub fn on_external_pointer(backend: &mut WaylandBackend, event: PointerEvent) {
+    let time = event.time_ms as u32;
+    let size = backend.compositor.state.size;
+    let (x, y) = if event.relative {
+        // Mouse counts, scaled up on monitors larger than 1080p so crossing them is no chore.
+        let speed = (size.w as f64 / 1920.0).max(1.0);
+        let cursor = backend.cursor_position;
+        (cursor.x + event.x * speed, cursor.y + event.y * speed)
+    } else {
+        (event.x, event.y)
+    };
+    backend.cursor_position = (
+        x.clamp(0.0, (size.w - 1).max(0) as f64),
+        y.clamp(0.0, (size.h - 1).max(0) as f64),
+    )
+        .into();
+    let cursor = backend.cursor_position;
+    emit_pointer_motion(&mut backend.compositor, cursor.x, cursor.y, time);
+
+    // `MotionEvent.BUTTON_PRIMARY`, `BUTTON_SECONDARY` and `BUTTON_TERTIARY`.
+    for (mask, button) in [(1, BTN_LEFT), (2, BTN_RIGHT), (4, BTN_MIDDLE)] {
+        let was = backend.external_buttons & mask != 0;
+        let is = event.buttons & mask != 0;
+        if is && !was {
+            emit_pointer_press(&mut backend.compositor, button, time);
+        } else if was && !is {
+            emit_pointer_release(&mut backend.compositor, button, time);
+        }
+    }
+    backend.external_buttons = event.buttons;
+
+    if event.scroll_x != 0.0 || event.scroll_y != 0.0 {
+        // Android scrolls up and left with positive values, Wayland down and right.
+        let mut frame = pointer::AxisFrame::new(time).source(AxisSource::Wheel);
+        if event.scroll_x != 0.0 {
+            frame = frame
+                .value(Axis::Horizontal, event.scroll_x * WHEEL_STEP)
+                .v120(Axis::Horizontal, (event.scroll_x * 120.0) as i32);
+        }
+        if event.scroll_y != 0.0 {
+            frame = frame
+                .value(Axis::Vertical, -event.scroll_y * WHEEL_STEP)
+                .v120(Axis::Vertical, (-event.scroll_y * 120.0) as i32);
+        }
+        let compositor = &mut backend.compositor;
+        let pointer = compositor.pointer.clone();
+        pointer.axis(&mut compositor.state, frame);
+        pointer.frame(&mut compositor.state);
+    }
+
+    backend.compositor.state.render_pending = true;
+    schedule_frame(backend);
 }
 
 /// Start waking up for client requests and display refreshes instead of polling every frame.
@@ -468,6 +612,9 @@ pub fn on_vsync(backend: &mut WaylandBackend) {
         for surface in compositor.state.xdg_shell_state.toplevel_surfaces() {
             send_frames_surface_tree(surface.wl_surface(), time);
         }
+        if let CursorImageStatus::Surface(surface) = &compositor.state.cursor_image {
+            send_frames_surface_tree(surface, time);
+        }
     }
 
     schedule_frame(backend);
@@ -533,6 +680,7 @@ render_elements! {
     SurfaceElement<=GlesRenderer>;
     HardwareBuffer=TextureRenderElement<GlesTexture>,
     Surface=WaylandSurfaceRenderElement<GlesRenderer>,
+    Solid=SolidColorRenderElement,
 }
 
 fn render(backend: &mut WaylandBackend) -> Result<(), String> {
@@ -540,15 +688,54 @@ fn render(backend: &mut WaylandBackend) -> Result<(), String> {
         return Ok(());
     };
 
-    let size = winit.window_size();
+    let size = winit.output_size();
     let damage = Rectangle::from_size(size);
     let display = winit.egl_display();
+    let trackpad = winit.external_surface().is_some();
     {
         let (renderer, mut framebuffer) = winit
             .bind()
             .map_err(|error| format!("Failed to bind EGL surface: {error}"))?;
 
+        // Elements are drawn front to back, so the cursor goes first.
         let mut elements = Vec::new();
+        if trackpad {
+            let position = backend.cursor_position.to_physical(1.0).to_i32_round();
+            match &backend.compositor.state.cursor_image {
+                CursorImageStatus::Surface(surface) => {
+                    let hotspot = with_states(surface, |states| {
+                        states
+                            .data_map
+                            .get::<CursorImageSurfaceData>()
+                            .map(|data| data.lock().unwrap().hotspot)
+                    })
+                    .unwrap_or_default();
+                    elements.extend(
+                        render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<_>>(
+                            renderer,
+                            surface,
+                            position - hotspot.to_physical(1),
+                            1.0,
+                            1.0,
+                            Kind::Cursor,
+                        )
+                        .into_iter()
+                        .map(SurfaceElement::Surface),
+                    );
+                }
+                // The client didn't provide an image; a small square at least shows where it is.
+                CursorImageStatus::Named(_) => {
+                    elements.push(SurfaceElement::Solid(SolidColorRenderElement::new(
+                        Id::new(),
+                        Rectangle::new(position, (8, 8).into()),
+                        CommitCounter::default(),
+                        Color32F::new(1.0, 1.0, 1.0, 1.0),
+                        Kind::Cursor,
+                    )));
+                }
+                CursorImageStatus::Hidden => {}
+            }
+        }
         let mut from_hardware_buffers = Vec::new();
         for surface in backend.compositor.state.xdg_shell_state.toplevel_surfaces() {
             let surface = surface.wl_surface();
@@ -575,7 +762,7 @@ fn render(backend: &mut WaylandBackend) -> Result<(), String> {
             .render(&mut framebuffer, size, Transform::Flipped180)
             .map_err(|error| format!("Failed to render frame: {error:?}"))?;
         frame
-            .clear(Color32F::new(0.1, 0.0, 0.0, 1.0), &[damage])
+            .clear(Color32F::new(0.0, 0.0, 0.0, 1.0), &[damage])
             .map_err(|error| format!("Failed to clear frame: {error:?}"))?;
         draw_render_elements(&mut frame, 1.0, &elements, &[damage])
             .map_err(|error| format!("Failed to draw render elements: {error:?}"))?;

@@ -18,7 +18,9 @@
 //! The other types in this module are the instances of the associated types of these
 //! two traits for the winit backend.
 
+use crate::android::external_display::ExternalSurface;
 use khronos_egl::DynamicInstance;
+use smithay::backend::egl::display::PixelFormat;
 use smithay::{
     backend::{
         egl::{
@@ -29,11 +31,11 @@ use smithay::{
         },
         renderer::{
             gles::{GlesError, GlesRenderer},
-            Bind,
+            Bind, Color32F, Frame, Renderer,
         },
         SwapBuffersError,
     },
-    utils::{Physical, Rectangle, Size},
+    utils::{Physical, Rectangle, Size, Transform},
 };
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -208,7 +210,7 @@ pub fn bind(event_loop: &ActiveEventLoop) -> Result<WinitGraphicsBackend<GlesRen
         .window_handle()
         .map(|handle| handle.as_raw())
         .map_err(|error| format!("Failed to get window handle: {error}"))?;
-    let (display, context, surface) = match handle {
+    let (display, context, surface, pixel_format) = match handle {
         RawWindowHandle::AndroidNdk(handle) => {
             let display = create_egl_display(handle)
                 .map_err(|error| format!("Failed to create EGLDisplay: {error:?}"))?;
@@ -218,18 +220,10 @@ pub fn bind(event_loop: &ActiveEventLoop) -> Result<WinitGraphicsBackend<GlesRen
                 .pixel_format()
                 .ok_or_else(|| "EGL context did not expose a pixel format".to_string())?;
 
-            let surface = unsafe {
-                EGLSurface::new(
-                    &display,
-                    pixel_format,
-                    context.config_id(),
-                    AndroidNativeSurface { handle },
-                )
-                .map_err(|error| format!("Failed to create EGLSurface: {error}"))?
-            };
+            let surface = create_window_surface(&display, pixel_format, &context, handle)?;
 
             let _ = context.unbind();
-            (display, context, surface)
+            (display, context, surface, pixel_format)
         }
         platform => return Err(format!("Unsupported platform: {:?}", platform)),
     };
@@ -241,11 +235,30 @@ pub fn bind(event_loop: &ActiveEventLoop) -> Result<WinitGraphicsBackend<GlesRen
     Ok(WinitGraphicsBackend {
         window: window.clone(),
         _display: display,
-        egl_surface: surface,
+        egl_surface: Some(surface),
         damage_tracking,
         bind_size: None,
+        pixel_format,
+        external: None,
         renderer,
     })
+}
+
+fn create_window_surface(
+    display: &EGLDisplay,
+    pixel_format: PixelFormat,
+    context: &EGLContext,
+    handle: AndroidNdkWindowHandle,
+) -> Result<EGLSurface, String> {
+    unsafe {
+        EGLSurface::new(
+            display,
+            pixel_format,
+            context.config_id(),
+            AndroidNativeSurface { handle },
+        )
+    }
+    .map_err(|error| format!("Failed to create EGLSurface: {error}"))
 }
 
 /// Errors thrown by the `winit` backends
@@ -271,10 +284,114 @@ pub struct WinitGraphicsBackend<R> {
     renderer: R,
     // The display isn't used past this point but must be kept alive.
     _display: EGLDisplay,
-    egl_surface: EGLSurface,
+    /// The phone's own window; gone while the app is in the background.
+    egl_surface: Option<EGLSurface>,
     window: Arc<WinitWindow>,
     damage_tracking: bool,
     bind_size: Option<Size<i32, Physical>>,
+    pixel_format: PixelFormat,
+    /// Drawn to instead of `window` while an external monitor is connected.
+    external: Option<ExternalTarget>,
+}
+
+#[derive(Debug)]
+struct ExternalTarget {
+    egl_surface: EGLSurface,
+    bind_size: Option<Size<i32, Physical>>,
+    // Declared last: the EGL surface must go before the native window it was created on.
+    surface: Arc<ExternalSurface>,
+}
+
+impl WinitGraphicsBackend<GlesRenderer> {
+    /// Draw to `surface` from now on, until `detach_external`.
+    pub fn attach_external(&mut self, surface: Arc<ExternalSurface>) -> Result<(), String> {
+        // A native window takes one EGL surface at a time.
+        self.external = None;
+        let handle = AndroidNdkWindowHandle::new(surface.native_window());
+        let egl_surface = unsafe {
+            EGLSurface::new(
+                &self._display,
+                self.pixel_format,
+                self.renderer.egl_context().config_id(),
+                AndroidNativeSurface { handle },
+            )
+        }
+        .map_err(|error| {
+            format!("Failed to create EGLSurface for the external display: {error}")
+        })?;
+        self.external = Some(ExternalTarget {
+            egl_surface,
+            bind_size: None,
+            surface,
+        });
+        Ok(())
+    }
+
+    pub fn detach_external(&mut self) {
+        self.external = None;
+    }
+
+    /// Let go of the phone's window as the app goes to the background, but keep drawing to the
+    /// external monitor.
+    pub fn suspend_window(&mut self) {
+        self.egl_surface = None;
+        self.bind_size = None;
+    }
+
+    pub fn window_visible(&self) -> bool {
+        self.egl_surface.is_some()
+    }
+
+    /// Draw to the phone's window again once the app is back, if it had been let go.
+    pub fn resume_window(&mut self) -> Result<(), String> {
+        if self.egl_surface.is_some() {
+            return Ok(());
+        }
+        let handle = match self.window.window_handle().map(|handle| handle.as_raw()) {
+            Ok(RawWindowHandle::AndroidNdk(handle)) => handle,
+            Ok(platform) => return Err(format!("Unsupported platform: {platform:?}")),
+            Err(error) => return Err(format!("Failed to get window handle: {error}")),
+        };
+        let surface = create_window_surface(
+            &self._display,
+            self.pixel_format,
+            self.renderer.egl_context(),
+            handle,
+        )?;
+        self.egl_surface = Some(surface);
+        Ok(())
+    }
+
+    /// Fill the phone's own window with one color, for when it serves as a trackpad.
+    pub fn paint_window(&mut self, color: Color32F) -> Result<(), String> {
+        let size = self.window_size();
+        let Some(egl_surface) = self.egl_surface.as_mut() else {
+            return Ok(());
+        };
+        if Some(size) != self.bind_size {
+            egl_surface.resize(size.w, size.h, 0, 0);
+            self.bind_size = Some(size);
+        }
+        {
+            let mut framebuffer = self
+                .renderer
+                .bind(egl_surface)
+                .map_err(|error| format!("Failed to bind the window: {error}"))?;
+            let mut frame = self
+                .renderer
+                .render(&mut framebuffer, size, Transform::Normal)
+                .map_err(|error| format!("Failed to render the window: {error:?}"))?;
+            frame
+                .clear(color, &[Rectangle::from_size(size)])
+                .map_err(|error| format!("Failed to clear the window: {error:?}"))?;
+            let _ = frame
+                .finish()
+                .map_err(|error| format!("Failed to finish the window: {error:?}"))?;
+        }
+        egl_surface
+            .swap_buffers(None)
+            .map_err(|error| format!("Failed to submit the window: {error}"))
+    }
 }
 
 impl<R> WinitGraphicsBackend<R>
@@ -286,6 +403,19 @@ where
     pub fn window_size(&self) -> Size<i32, Physical> {
         let (w, h): (i32, i32) = self.window.inner_size().into();
         (w, h).into()
+    }
+
+    /// The external monitor being drawn to, if any.
+    pub fn external_surface(&self) -> Option<&Arc<ExternalSurface>> {
+        self.external.as_ref().map(|target| &target.surface)
+    }
+
+    /// Size of what is drawn to: the external monitor if there is one, otherwise the window.
+    pub fn output_size(&self) -> Size<i32, Physical> {
+        match &self.external {
+            Some(target) => (target.surface.width, target.surface.height).into(),
+            None => self.window_size(),
+        }
     }
 
     /// Scale factor of the underlying window.
@@ -314,23 +444,24 @@ where
         // buffer will be latched. Some nvidia drivers may not like it, but a lot of wayland
         // software does the order that way due to mesa latching back buffer on each
         // `make_current`.
-        let window_size = self.window_size();
-        if Some(window_size) != self.bind_size {
-            self.egl_surface.resize(window_size.w, window_size.h, 0, 0);
+        let output_size = self.output_size();
+        let (egl_surface, bind_size) = match (&mut self.external, &mut self.egl_surface) {
+            (Some(target), _) => (&mut target.egl_surface, &mut target.bind_size),
+            (None, Some(egl_surface)) => (egl_surface, &mut self.bind_size),
+            (None, None) => {
+                return Err(SwapBuffersError::TemporaryFailure(
+                    "the app is in the background".into(),
+                ))
+            }
+        };
+        if Some(output_size) != *bind_size {
+            egl_surface.resize(output_size.w, output_size.h, 0, 0);
         }
-        self.bind_size = Some(window_size);
+        *bind_size = Some(output_size);
 
-        let fb = self.renderer.bind(&mut self.egl_surface)?;
+        let fb = self.renderer.bind(egl_surface)?;
 
         Ok((&mut self.renderer, fb))
-    }
-
-    /// Retrieve the underlying `EGLSurface` for advanced operations
-    ///
-    /// **Note:** Don't carelessly use this to manually bind the renderer to the surface,
-    /// `WinitGraphicsBackend::bind` transparently handles window resizes for you.
-    pub fn egl_surface(&self) -> &EGLSurface {
-        &self.egl_surface
     }
 
     /// Retrieve the buffer age of the current backbuffer of the window.
@@ -343,7 +474,11 @@ where
     /// likely interpret an error just as if "0" was returned.
     pub fn buffer_age(&self) -> Option<usize> {
         if self.damage_tracking {
-            self.egl_surface.buffer_age().map(|x| x as usize)
+            let egl_surface = match &self.external {
+                Some(target) => &target.egl_surface,
+                None => self.egl_surface.as_ref()?,
+            };
+            egl_surface.buffer_age().map(|x| x as usize)
         } else {
             Some(0)
         }
@@ -355,11 +490,18 @@ where
         &mut self,
         damage: Option<&[Rectangle<i32, Physical>]>,
     ) -> Result<(), SwapBuffersError> {
+        let (egl_surface, bind_size) = match (&self.external, &self.egl_surface) {
+            (Some(target), _) => (&target.egl_surface, target.bind_size),
+            (None, Some(egl_surface)) => (egl_surface, self.bind_size),
+            (None, None) => {
+                return Err(SwapBuffersError::TemporaryFailure(
+                    "the app is in the background".into(),
+                ))
+            }
+        };
         let mut damage = match damage {
             Some(damage) if self.damage_tracking && !damage.is_empty() => {
-                let bind_size = self
-                    .bind_size
-                    .expect("submitting without ever binding the renderer.");
+                let bind_size = bind_size.expect("submitting without ever binding the renderer.");
                 let damage = damage
                     .iter()
                     .map(|rect| {
@@ -376,7 +518,7 @@ where
 
         // Request frame callback.
         self.window.pre_present_notify();
-        self.egl_surface.swap_buffers(damage.as_deref_mut())?;
+        egl_surface.swap_buffers(damage.as_deref_mut())?;
         Ok(())
     }
 }

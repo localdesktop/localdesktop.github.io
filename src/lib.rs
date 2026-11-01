@@ -5,6 +5,7 @@ pub mod core {
 #[cfg(target_os = "android")]
 pub mod android {
     pub mod accessibility;
+    pub mod external_display;
 
     pub mod main;
     pub mod app {
@@ -25,6 +26,7 @@ pub mod android {
         pub mod application_context;
         pub mod fullscreen_immersive;
         pub mod ndk;
+        pub mod settings;
         pub mod webview;
     }
 }

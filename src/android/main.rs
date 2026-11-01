@@ -2,6 +2,7 @@ use crate::{
     android::{
         accessibility::{register_event_loop_proxy, AppUserEvent},
         app::build::PolarBearApp,
+        external_display,
         utils::{
             application_context::ApplicationContext,
             fullscreen_immersive::{enable_fullscreen_immersive_mode, keep_screen_on},
@@ -68,6 +69,7 @@ fn android_main(android_app: AndroidApp) {
         .build()
         .expect("Failed to create event loop");
     register_event_loop_proxy(event_loop.create_proxy());
+    external_display::register_event_loop_proxy(event_loop.create_proxy());
 
     // ControlFlow::Poll continuously runs the event loop, even if the OS hasn't
     // dispatched any events. This is ideal for games and similar applications.

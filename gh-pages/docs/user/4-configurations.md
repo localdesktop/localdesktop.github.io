@@ -1,53 +1,28 @@
 ---
-title: Configurations
+title: Settings
 ---
 
-## Config file
+## Open the settings
 
-On launch, Local Desktop reads the config file located at:
+Local Desktop's settings are in Android, so you can change them even when the desktop doesn't start:
 
-```
-/etc/localdesktop/localdesktop.toml
-```
+1. Touch and hold the Local Desktop icon, then tap **App info**. Or open Android's **Settings** > **Apps** > **Local Desktop**.
+2. Tap **Additional settings in the app** (on some phones, a gear icon).
 
-If the content of the config file is invalid (for example, invalid TOML format), it will be **replaced** with the default config. You can still view its original content in:
+<img src="/img/settings-step-1.webp" width="32%" alt="Touch and hold the Local Desktop icon, then tap App info" /> <img src="/img/settings-step-2.webp" width="32%" alt="Tap Additional settings in the app" /> <img src="/img/settings.webp" width="32%" alt="Local Desktop settings" />
 
-```
-/etc/localdesktop/localdesktop.bak
-```
+Changes apply the next time Local Desktop starts. **Restart Local Desktop** at the bottom applies them right away.
 
-Some important notes:
-- Although TOML does support multi-line strings, Local Desktop requires each config to fit in a **single line**. You can use `\n` for multi-line config values if needed.
-- We use **all lowercase** for config **keys**. For config **values**, the content is **case-sensitive**.
+## What you can change
 
-## Config schema
+| Setting | What it does | Default |
+|---|---|---|
+| **Use the Android keyboard** | Your phone's keyboard comes up when a text field takes focus, and the desktop fits above it. Turn it off to use Squeekboard, the desktop's own on-screen keyboard. With an external display, the Android keyboard always types. | On |
+| **User** | The Linux user the desktop runs as. Create the user first, see [Creating a non-root user](/docs/user/creating-a-non-root-user). | `root` |
+| **Check** | A command that succeeds when the desktop environment is installed. | Checks for Xfce |
+| **Install** | Installs the desktop environment when **Check** fails. | Installs Xfce |
+| **Launch** | Starts the desktop environment. | Starts Xfce |
 
-We might draw a table or have a mechanism to generate the config schema automatically here. But for now, please check the code for the schema: [localdesktop/src/core/config.rs#L28-L87](https://github.com/localdesktop/localdesktop.github.io/blob/main/src/core/config.rs#L28-L87).
+See [Using other Desktop Environments](/docs/user/custom-de) for other **Check**, **Install** and **Launch** commands.
 
-## Special `try_*` configs
-
-Some configs are so important that a misconfiguration can leave you stuck on a black screen. So we support a special `try_*` variant of each config. These configs have **higher priority**, but only get applied **once**.
-
-For example, you just have to clone a config and prefix it with `try_`:
-
-```toml
-[user]
-username="root"
-try_username="teddy"
-```
-
-The next time Local Desktop starts, it will log in as `teddy` instead of `root`. But then the `try_` configs will be commented out like this:
-
-```toml
-[user]
-username="root"
-# try_username="teddy"
-```
-
-So if the config didn't work, and you got stuck on a black screen, you can just restart Local Desktop, and things will go back to normal. Then you can uncomment the config and try with another value. If the config does work, you just have to remove the `try_` prefix to persist the config.
-
-Some important notes:
-- This rule applies to **all** configs.
-- It is not required for the `try_` config to be inside the same group as the normal config. But it is strongly recommended to do so, and to put the `try_` variant right under its normal variant.
-- If a normal config appears multiple times, the **first** entry is applied. If a `try_` config appears multiple times, the **last** entry is applied. This behavior is not guaranteed, and is subject to change. But in general, it is **invalid** to have duplicate config keys inside a TOML file.
-- `try_x` and `x` are not duplicate keys. `try_x` always has higher priority than `x`.
+If a setting leaves you with a black screen, change it back here, or tap **Restore defaults**.
