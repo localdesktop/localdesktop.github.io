@@ -73,13 +73,15 @@ pub const PIPEWIRE_GUEST_RUNTIME_DIR: &str = "/tmp";
 /// PipeWire-Pulse socket as seen from inside the proot guest.
 pub const PULSE_GUEST_SERVER: &str = "unix:/tmp/pulse/native";
 
+/// Where settings lived before the settings page in Android's App info. Only read once, to carry
+/// them over (see `ApplicationContext`).
 /// Make sure the config keys are all lowercase, and config values are single-line. Use \n for multi-line config values if needed
 /// If a key exists multiple time, the first entry is applied
 /// If a `try_` config exsists multiple time, the last entry is applied
 /// But in general, it is **invalid** to have duplicated config keys inside a TOML file
 pub const CONFIG_FILE: &str = "/etc/localdesktop/localdesktop.toml";
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LocalConfig {
     #[serde(default)]
     pub user: UserConfig,
@@ -90,6 +92,20 @@ pub struct LocalConfig {
     /// => So make sure that every config group has a `#[serde(default)]` attribute to avoid invalid sections breaking unrelated parts of the config.
     #[serde(default)]
     pub command: CommandConfig,
+
+    /// The Android keyboard types into the desktop, instead of Squeekboard.
+    #[serde(skip)]
+    pub android_keyboard: bool,
+}
+
+impl Default for LocalConfig {
+    fn default() -> Self {
+        Self {
+            user: UserConfig::default(),
+            command: CommandConfig::default(),
+            android_keyboard: true,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

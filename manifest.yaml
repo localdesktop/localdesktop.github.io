@@ -18,6 +18,21 @@ android:
       label: "Local Desktop"
       extract_native_libs: true # Required for proot invocations
       use_cleartext_traffic: true # Required for connecting to ws://127.0.0.1, see assets/setup-progress.html
+      activities:
+        # The desktop: android.app.NativeActivity, filled in by the build.
+        - {}
+        # "Local Desktop settings" in App info. Its own process, so it still opens while the
+        # desktop is stuck, and can restart it.
+        - name: io.github.localdesktop.SettingsActivity
+          label: "Local Desktop settings"
+          process: ":settings"
+          theme: "@android:style/Theme.DeviceDefault.Settings"
+          exported: true
+          intent_filters:
+            - actions:
+                - android.intent.action.APPLICATION_PREFERENCES
+              categories:
+                - android.intent.category.DEFAULT
       services:
         - name: io.github.localdesktop.KeyboardAccessibilityService
           permission: android.permission.BIND_ACCESSIBILITY_SERVICE

@@ -26,6 +26,7 @@ pub mod android {
         pub mod application_context;
         pub mod fullscreen_immersive;
         pub mod ndk;
+        pub mod settings;
         pub mod webview;
     }
 }

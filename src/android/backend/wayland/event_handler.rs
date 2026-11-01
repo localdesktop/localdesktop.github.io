@@ -6,6 +6,7 @@ use crate::android::{
         WaylandBackend, WaylandWatcher,
     },
     external_display::PointerEvent,
+    utils::application_context::get_application_context,
 };
 use smithay::backend::input::{AxisSource, ButtonState};
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
@@ -447,7 +448,8 @@ fn resize_desktop(backend: &mut WaylandBackend, window: Size<i32, Physical>) {
     }
 
     let guest_scale = backend.guest_scale_factor.round().max(1.0) as i32;
-    write_guest_output_state(size.w, size.h, guest_scale);
+    let touch_keyboard = !get_application_context().local_config.android_keyboard;
+    write_guest_output_state(size.w, size.h, guest_scale, touch_keyboard);
 
     if let Some(surface) = get_surface(&backend.compositor.state) {
         surface.xdg_toplevel().configure(size.w, size.h, vec![]);

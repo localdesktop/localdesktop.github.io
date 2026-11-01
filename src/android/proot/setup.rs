@@ -1019,8 +1019,8 @@ xfconf-query -c xfce4-panel -p /panels/panel-2/autohide-behavior -s 0 2>/dev/nul
         ),
     );
 
-    // Squeekboard notices when a text field gets focus, through labwc's input-method protocol; the
-    // Android keyboard then types instead of it (see `localdesktop-keyboard-relay`).
+    // Squeekboard notices when a text field gets focus, through labwc's input-method protocol, and
+    // types itself or has the Android keyboard type instead (see `localdesktop-keyboard-relay`).
     let _ = fs::write(
         fs_root
             .join("usr/share/glib-2.0/schemas")
@@ -1030,7 +1030,19 @@ xfconf-query -c xfce4-panel -p /panels/panel-2/autohide-behavior -s 0 2>/dev/nul
     // For apps that don't report focused text fields (X11 apps, for one).
     write_executable(
         &fs_root.join("usr/local/bin/localdesktop-keyboard"),
-        "#!/bin/sh\ntouch /tmp/localdesktop-keyboard\n",
+        r#"#!/bin/sh
+LOCALDESKTOP_TOUCH_KEYBOARD=1
+. /tmp/localdesktop-output 2>/dev/null
+if [ "$LOCALDESKTOP_TOUCH_KEYBOARD" = 0 ]; then
+    touch /tmp/localdesktop-keyboard
+    exit
+fi
+osk() { gdbus call --session --dest sm.puri.OSK0 --object-path /sm/puri/OSK0 "$@"; }
+case "$(osk --method org.freedesktop.DBus.Properties.Get sm.puri.OSK0 Visible 2>/dev/null)" in
+    *true*) osk --method sm.puri.OSK0.SetVisible false >/dev/null ;;
+    *) osk --method sm.puri.OSK0.SetVisible true >/dev/null ;;
+esac
+"#,
     );
     let applications_dir = fs_root.join("usr/local/share/applications");
     let _ = fs::create_dir_all(&applications_dir);
@@ -1039,7 +1051,7 @@ xfconf-query -c xfce4-panel -p /panels/panel-2/autohide-behavior -s 0 2>/dev/nul
         r#"[Desktop Entry]
 Type=Application
 Name=On-screen keyboard
-Comment=Show the Android keyboard
+Comment=Show the on-screen keyboard
 Exec=/usr/local/bin/localdesktop-keyboard
 Icon=input-keyboard
 Terminal=false
@@ -1221,11 +1233,12 @@ done
 "#,
     )
     .expect("Failed to write labwc rc.xml defaults");
-    // Squeekboard only tells when a text field gets focus: put it away and have the app open the
-    // Android keyboard instead, on the phone's screen or over the trackpad.
+    // Unless it is to type (see `write_guest_output_state`), Squeekboard only tells when a text
+    // field gets focus: put it away and have the app open the Android keyboard instead.
     write_executable(
         &fs_root.join("usr/local/bin/localdesktop-keyboard-relay"),
         r#"#!/bin/sh
+state_file=/tmp/localdesktop-output
 request_file=/tmp/localdesktop-keyboard
 osk() { gdbus call --session --dest sm.puri.OSK0 --object-path /sm/puri/OSK0 "$@"; }
 while true; do
@@ -1234,6 +1247,9 @@ while true; do
             *"'Visible': <true>"*) ;;
             *) continue ;;
         esac
+        LOCALDESKTOP_TOUCH_KEYBOARD=1
+        . "$state_file" 2>/dev/null
+        [ "$LOCALDESKTOP_TOUCH_KEYBOARD" = 0 ] || continue
         osk --method sm.puri.OSK0.SetVisible false >/dev/null
         touch "$request_file"
     done

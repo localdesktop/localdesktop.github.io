@@ -51,7 +51,7 @@ The hardest part is installing `yay` or `paru`. You have to follow the `README.m
 
 ## I don't have a physical keyboard.
 
-Your phone's own keyboard comes up when you tap a text field, and the desktop fits above it. Swipe back to put it away. For apps where it doesn't come up on its own, open _"Applications"_ > _"Accessories"_ > _"On-screen keyboard"_. A physical keyboard is still more comfortable for long sessions.
+Your phone's own keyboard comes up when you tap a text field, and the desktop fits above it. Swipe back to put it away. To use Squeekboard, the desktop's own on-screen keyboard, instead, turn off **Use the Android keyboard** in [Local Desktop settings](/docs/user/configurations). For apps where it doesn't come up on its own, open _"Applications"_ > _"Accessories"_ > _"On-screen keyboard"_. A physical keyboard is still more comfortable for long sessions.
 
 ![The Android keyboard typing into the desktop](/img/android-keyboard.webp#boxed)
 

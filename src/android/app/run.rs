@@ -16,6 +16,7 @@ use crate::android::{
     external_display,
     proot::launch::launch,
     utils::{
+        application_context::get_application_context,
         ndk::{self, run_in_jvm},
         webview::show_webview_popup,
     },
@@ -85,7 +86,9 @@ fn configure_output(backend: &mut WaylandBackend) {
     );
 
     let guest_scale = guest_scale_factor.round().max(1.0) as i32;
-    write_guest_output_state(window_size.w, window_size.h, guest_scale);
+    let touch_keyboard = winit.external_surface().is_none()
+        && !get_application_context().local_config.android_keyboard;
+    write_guest_output_state(window_size.w, window_size.h, guest_scale, touch_keyboard);
 
     for surface in backend.compositor.state.xdg_shell_state.toplevel_surfaces() {
         configure_toplevel(surface, window_size.w, window_size.h);
