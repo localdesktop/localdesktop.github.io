@@ -807,7 +807,9 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 
 		path[result] = '\0';
 
-		if ((strcmp(path + strlen(path) - strlen(" (deleted)"), " (deleted)") == 0) || (strncmp(path, "pipe", 4) == 0)) {
+		/* Not a file to stat by its path: deleted, or a pipe, socket, eventfd and the like, whose
+		 * link reads "pipe:[N]", "socket:[N]", "anon_inode:[eventfd]".  */
+		if ((strcmp(path + strlen(path) - strlen(" (deleted)"), " (deleted)") == 0) || (path[0] != '/')) {
 			register_chained_syscall(tracee, sysnum, peek_reg(tracee, ORIGINAL, SYSARG_1), peek_reg(tracee, ORIGINAL, SYSARG_2), 0, 0, 0, 0);
 		} else {
 			write_data(tracee, peek_reg(tracee, MODIFIED, SYSARG_3), path, sizeof(path));
