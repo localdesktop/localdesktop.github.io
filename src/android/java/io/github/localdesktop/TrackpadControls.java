@@ -145,20 +145,24 @@ final class TrackpadControls extends Dialog implements InputManager.InputDeviceL
             (focused != null ? focused : bar).requestPointerCapture();
         }
         if (hasFocus && keyboardPending) {
-            keyboardPending = false;
-            // After the input method has connected to the newly focused button.
-            keyboard.post(new Runnable() {
-                @Override
-                public void run() {
-                    if (Build.VERSION.SDK_INT >= 30) {
-                        getWindow().getInsetsController().show(WindowInsets.Type.ime());
-                    }
-                    InputMethodManager imm = (InputMethodManager)
-                            getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-                    imm.showSoftInput(keyboard, 0);
-                }
-            });
+            showInputMethod();
         }
+    }
+
+    private void showInputMethod() {
+        keyboardPending = false;
+        // After the input method has connected to the newly focused button.
+        keyboard.post(new Runnable() {
+            @Override
+            public void run() {
+                if (Build.VERSION.SDK_INT >= 30) {
+                    getWindow().getInsetsController().show(WindowInsets.Type.ime());
+                }
+                InputMethodManager imm = (InputMethodManager)
+                        getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+                imm.showSoftInput(keyboard, 0);
+            }
+        });
     }
 
     @Override
@@ -320,6 +324,10 @@ final class TrackpadControls extends Dialog implements InputManager.InputDeviceL
             // Only now: a view focusable in touch mode takes the first tap as focus, not a click.
             keyboard.setFocusableInTouchMode(true);
             keyboard.requestFocus();
+            // With a mouse captured the window has focus already, so no focus change will come.
+            if (window.getDecorView().hasWindowFocus()) {
+                showInputMethod();
+            }
         } else {
             keyboardPending = false;
             imm.hideSoftInputFromWindow(keyboard.getWindowToken(), 0);
