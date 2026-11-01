@@ -1,21 +1,17 @@
-//! The settings from "Local Desktop settings" in Android's App info (`SettingsActivity`), kept in
+//! The settings from "Additional settings in the app" in Android's App info (`SettingsActivity`), kept in
 //! the app's SharedPreferences: only what differs from the defaults is stored there.
 
-use crate::core::config::{parse_config, LocalConfig};
+use crate::core::config::LocalConfig;
 use jni::{
     objects::{JObject, JString, JValue},
     JNIEnv,
 };
-use std::{fs, path::Path};
 
 const PREFERENCES: &str = "settings";
 const DEFAULTS: &str = "defaults";
-/// Set once the settings of `localdesktop.toml` have been carried over.
-const MIGRATED: &str = "migrated_toml";
 
-/// Write the defaults for the settings page, carry `localdesktop.toml` over once, and return the
-/// settings to start with.
-pub fn load(env: &mut JNIEnv, activity: &JObject, legacy_config: &Path) -> LocalConfig {
+/// Write the defaults for the settings page, and return the settings to start with.
+pub fn load(env: &mut JNIEnv, activity: &JObject) -> LocalConfig {
     let defaults = LocalConfig::default();
     let result = (|| -> jni::errors::Result<LocalConfig> {
         let stored = preferences(env, activity, DEFAULTS)?;
@@ -27,44 +23,27 @@ pub fn load(env: &mut JNIEnv, activity: &JObject, legacy_config: &Path) -> Local
                 &[],
             )?
             .l()?;
-        for (key, value) in texts(&defaults) {
-            put_string(env, &editor, key, value)?;
-        }
+        put_string(env, &editor, "username", &defaults.user.username)?;
+        put_string(env, &editor, "check", &defaults.command.check)?;
+        put_string(env, &editor, "install", &defaults.command.install)?;
+        put_string(env, &editor, "launch", &defaults.command.launch)?;
         put_boolean(env, &editor, "android_keyboard", defaults.android_keyboard)?;
         env.call_method(&editor, "apply", "()V", &[])?;
 
         let settings = preferences(env, activity, PREFERENCES)?;
-        if !get_boolean(env, &settings, MIGRATED, false)? {
-            let editor = env
-                .call_method(
-                    &settings,
-                    "edit",
-                    "()Landroid/content/SharedPreferences$Editor;",
-                    &[],
-                )?
-                .l()?;
-            if legacy_config.exists() {
-                let legacy = parse_config(legacy_config.to_string_lossy().into_owned());
-                for ((key, value), (_, default)) in texts(&legacy).into_iter().zip(texts(&defaults))
-                {
-                    if value != default {
-                        put_string(env, &editor, key, value)?;
-                    }
-                }
-                retire(legacy_config);
-            }
-            put_boolean(env, &editor, MIGRATED, true)?;
-            env.call_method(&editor, "commit", "()Z", &[])?;
-        }
-
         let mut config = defaults.clone();
-        config.user.username =
-            get_string(env, &settings, "username")?.unwrap_or(config.user.username);
-        config.command.check = get_string(env, &settings, "check")?.unwrap_or(config.command.check);
-        config.command.install =
-            get_string(env, &settings, "install")?.unwrap_or(config.command.install);
-        config.command.launch =
-            get_string(env, &settings, "launch")?.unwrap_or(config.command.launch);
+        if let Some(username) = get_string(env, &settings, "username")? {
+            config.user.username = username;
+        }
+        if let Some(check) = get_string(env, &settings, "check")? {
+            config.command.check = check;
+        }
+        if let Some(install) = get_string(env, &settings, "install")? {
+            config.command.install = install;
+        }
+        if let Some(launch) = get_string(env, &settings, "launch")? {
+            config.command.launch = launch;
+        }
         config.android_keyboard =
             get_boolean(env, &settings, "android_keyboard", config.android_keyboard)?;
         Ok(config)
@@ -74,27 +53,6 @@ pub fn load(env: &mut JNIEnv, activity: &JObject, legacy_config: &Path) -> Local
         let _ = env.exception_clear();
         defaults
     })
-}
-
-fn texts(config: &LocalConfig) -> [(&'static str, &str); 4] {
-    [
-        ("username", &config.user.username),
-        ("check", &config.command.check),
-        ("install", &config.command.install),
-        ("launch", &config.command.launch),
-    ]
-}
-
-/// Leave a note where the settings used to be, for anyone who opens the file to change them.
-fn retire(legacy_config: &Path) {
-    let old = fs::read_to_string(legacy_config).unwrap_or_default();
-    let note = format!(
-        "# Local Desktop no longer reads this file. Its settings moved to Android:\n# App info for Local Desktop > Additional settings in the app, where the values below were copied.\n#\n{}",
-        old.lines().map(|line| format!("# {line}\n")).collect::<String>()
-    );
-    if let Err(error) = fs::write(legacy_config, note) {
-        log::warn!("Failed to update {}: {error}", legacy_config.display());
-    }
 }
 
 fn preferences<'local>(

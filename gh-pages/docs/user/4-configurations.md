@@ -26,7 +26,3 @@ Changes apply the next time Local Desktop starts. **Restart Local Desktop** at t
 See [Using other Desktop Environments](/docs/user/custom-de) for other **Check**, **Install** and **Launch** commands.
 
 If a setting leaves you with a black screen, change it back here, or tap **Restore defaults**.
-
-## From `localdesktop.toml`
-
-Earlier versions read their settings from `/etc/localdesktop/localdesktop.toml` in Linux. The first time this version starts, it copies them to the settings above and leaves a note in the file. Local Desktop doesn't read the file anymore, and the `try_*` settings are gone: a setting that doesn't work can now be undone from Android.
