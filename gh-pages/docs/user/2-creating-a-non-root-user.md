@@ -70,19 +70,6 @@ sudo ls /root # Make sure it does not output something like: "teddy is not in th
 
 ## [Important] Tell Local Desktop
 
-You must tell Local Desktop who to log in as, or it will log in as root. To (create and) edit the config file:
+You must tell Local Desktop who to log in as, or it will log in as root. In Android, open **App info** for Local Desktop > **Additional settings in the app**, and set **User** to `teddy` _(the username you created [previously](#create-your-user))_. Then tap **Restart Local Desktop**.
 
-```
-nano /etc/localdesktop/localdesktop.toml
-```
-
-Add the following content:
-
-```toml title="/etc/localdesktop/localdesktop.toml"
-[user]
-username = "teddy"
-```
-
-_(Replace `teddy` with the username you created [previously](#create-your-user))_
-
-The changes will take effect the next time you launch Local Desktop. If something goes wrong, you can always delete this config file and restart as root.
+If something goes wrong, set **User** back to `root` there. See [Settings](/docs/user/configurations).

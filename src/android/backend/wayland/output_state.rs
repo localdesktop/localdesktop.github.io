@@ -5,8 +5,8 @@ use std::path::PathBuf;
 ///
 /// The file lives in the proot-visible `/tmp` directory so scripts running inside the
 /// Xfce/labwc session can align wlroots output mode/scale with the Android winit window.
-/// `touch_keyboard` is off while the desktop is on an external display, where the phone is the
-/// trackpad and the Android keyboard types instead (see `localdesktop-keyboard-relay`).
+/// `touch_keyboard` is on when Squeekboard types rather than the Android keyboard: the setting is
+/// off, and the desktop is on the phone's screen (see `localdesktop-keyboard-relay`).
 pub fn write_guest_output_state(width: i32, height: i32, scale: i32, touch_keyboard: bool) {
     if width <= 0 || height <= 0 || scale <= 0 {
         return;

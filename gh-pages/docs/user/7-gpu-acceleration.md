@@ -22,11 +22,10 @@ On a supported device this prints a renderer like `zink Vulkan 1.4(Turnip Adreno
 
 ## Turn it off
 
-If an app misbehaves with the GPU, prefix your [`launch` command](/docs/user/custom-de#launch) with `LOCALDESKTOP_GPU=0`:
+If an app misbehaves with the GPU, put `LOCALDESKTOP_GPU=0 ` in front of the **Launch** command in [Local Desktop settings](/docs/user/configurations), for example:
 
-```toml title="/etc/localdesktop/localdesktop.toml"
-[command]
-try_launch="LOCALDESKTOP_GPU=0 XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=XFCE /usr/local/bin/startxfce4-localdesktop 2>&1"
+```bash
+LOCALDESKTOP_GPU=0 XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=XFCE /usr/local/bin/startxfce4-localdesktop 2>&1
 ```
 
 To turn it off for a single app, start it with the distro's Mesa instead:

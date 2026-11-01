@@ -13,3 +13,7 @@
 -keep class io.github.localdesktop.TrackpadControls {
     native <methods>;
 }
+
+-keep class io.github.localdesktop.PhoneKeyboard {
+    native <methods>;
+}

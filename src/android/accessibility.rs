@@ -23,8 +23,10 @@ pub enum AppUserEvent {
     ExternalDisplayChanged,
     /// A mouse (or touch) on the external monitor moved, clicked or scrolled.
     ExternalPointer,
-    /// A text field on the desktop took focus while the phone is a trackpad.
+    /// A text field on the desktop took focus.
     KeyboardRequested,
+    /// The Android keyboard on the phone's screen came up, changed height or went away.
+    KeyboardInset,
 }
 
 #[derive(Clone, Copy, Debug)]

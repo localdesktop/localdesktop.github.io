@@ -89,12 +89,13 @@ struct Bridge {
     /// The event loop holds an EGL surface on `surface`.
     in_use: bool,
     pointer_events: VecDeque<PointerEvent>,
+    /// How much of the phone's screen the Android keyboard covers, in pixels.
+    keyboard_inset: i32,
 }
 
 static BRIDGE: OnceLock<(Mutex<Bridge>, Condvar)> = OnceLock::new();
 
-/// The guest touches this when a text field takes focus while the phone is a trackpad (see
-/// `localdesktop-keyboard-relay`).
+/// The guest touches this when a text field takes focus (see `localdesktop-keyboard-relay`).
 const KEYBOARD_REQUEST: &str = "tmp/localdesktop-keyboard";
 
 fn bridge() -> &'static (Mutex<Bridge>, Condvar) {
@@ -136,6 +137,10 @@ pub fn set_in_use(in_use: bool) {
     if !in_use {
         released.notify_all();
     }
+}
+
+pub fn keyboard_inset() -> i32 {
+    bridge().0.lock().unwrap().keyboard_inset
 }
 
 pub fn drain_pointer_events() -> Vec<PointerEvent> {
@@ -195,7 +200,7 @@ pub fn start(env: &mut JNIEnv, android_app: &AndroidApp) {
     call_java(env, android_app, "start");
 }
 
-/// Open the Android keyboard over the trackpad.
+/// Open the Android keyboard, over the trackpad or on the phone's screen.
 pub fn show_keyboard(env: &mut JNIEnv, android_app: &AndroidApp) {
     call_java(env, android_app, "showKeyboard");
 }
@@ -328,4 +333,17 @@ pub extern "system" fn Java_io_github_localdesktop_TrackpadControls_nativeOnKey(
         ElementState::Released
     };
     accessibility::inject_key(scancode, state, event_time_ms.max(0) as u64);
+}
+
+#[no_mangle]
+pub extern "system" fn Java_io_github_localdesktop_PhoneKeyboard_nativeOnInset(
+    _env: JNIEnv,
+    _class: JClass,
+    bottom: jint,
+) {
+    let mut bridge = bridge().0.lock().unwrap();
+    if bridge.keyboard_inset != bottom {
+        bridge.keyboard_inset = bottom;
+        notify(&bridge, AppUserEvent::KeyboardInset);
+    }
 }
