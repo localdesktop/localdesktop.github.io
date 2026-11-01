@@ -11,7 +11,7 @@ Local Desktop's settings are in Android, so you can change them even when the de
 
 Changes apply the next time Local Desktop starts. **Restart Local Desktop** at the bottom applies them right away.
 
-<img src="/img/settings.webp" width="48%" alt="Local Desktop settings on a phone" /> <img src="/img/settings-foldable.webp" width="48%" alt="Local Desktop settings on a foldable" />
+![Local Desktop settings](/img/settings.webp#boxed)
 
 ## What you can change
 
