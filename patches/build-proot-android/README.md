@@ -30,6 +30,11 @@ guest rootfs is still dropped, except on the app's own files (a directory bound
 into the guest, such as `/home`), so a script or binary written there can be
 made executable.
 
+And in `src/extension/fake_id0/fake_id0.c`: `fstat` on a socket, eventfd or other descriptor
+that isn't a file gets the real `fstat`, instead of a `stat` of its `/proc/self/fd` link
+(`socket:[N]`), which fails. Node checks its standard streams with `fstat`, and a child process
+gets sockets for them, so every Node or Electron child process aborted at startup.
+
 The shipped `libproot.so` is built with `./build.sh` (NDK r26d). On macOS, put a
 GNU `install` (or a wrapper that handles `install -D`) first in `PATH`.
 
