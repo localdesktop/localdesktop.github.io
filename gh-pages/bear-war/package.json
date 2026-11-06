@@ -1,0 +1,46 @@
+{
+  "name": "bear-war",
+  "version": "0.1.0",
+  "description": "Open-source real-time strategy game for desktop and mobile browsers: three asymmetric races, skirmish vs AI offline, and online multiplayer.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "dev:server": "node --watch server/index.ts",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node server/index.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run",
+    "simtest": "node scripts/simtest.ts",
+    "icons": "node scripts/make-icons.ts",
+    "docs": "node scripts/gen-docs.ts",
+    "battle": "node scripts/battle.ts",
+    "mapview": "node scripts/mapview.ts"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/ws": "^8.18.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
+  },
+  "keywords": [
+    "rts",
+    "strategy",
+    "game",
+    "html5",
+    "canvas",
+    "mobile",
+    "multiplayer",
+    "lockstep",
+    "pwa"
+  ]
+}

@@ -45,6 +45,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build Bear War
+        working-directory: gh-pages/bear-war
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build -- --outDir ../static/bear-war --emptyOutDir
+
       - name: Build Docusaurus site
         run: pnpm run build
 

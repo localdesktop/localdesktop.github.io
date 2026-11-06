@@ -16,6 +16,14 @@ $ pnpm start
 
 This command starts a local development server and opens up a browser window. Most changes are reflected live without having to restart the server.
 
+### Bear War
+
+The home page embeds the game from `bear-war/`. Its build lives in `static/bear-war/` (gitignored), so build it once, and again after changing the game:
+
+```
+$ cd bear-war && npm ci && npm run build -- --outDir ../static/bear-war --emptyOutDir
+```
+
 ### Build
 
 ```
