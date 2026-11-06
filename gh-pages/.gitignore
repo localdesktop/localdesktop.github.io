@@ -3,9 +3,11 @@
 
 # Production
 /build
+/static/bear-war
 
 # Generated files
 .docusaurus
+.docusaurus-build
 .cache-loader
 
 # Misc

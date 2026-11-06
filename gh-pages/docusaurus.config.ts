@@ -82,6 +82,7 @@ const config: Config = {
   ],
 
   scripts: [],
+  stylesheets: ["https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&display=swap"],
 
   themeConfig: {
     // Replace with your project's social card
@@ -113,6 +114,7 @@ const config: Config = {
           label: "Developer Manual",
         },
         { to: "/blog", label: "News", position: "left" },
+        { to: "/support-us", label: "Support us", position: "left" },
         {
           href: repositoryUrl,
           label: "GitHub",
@@ -121,34 +123,15 @@ const config: Config = {
       ],
     },
     footer: {
-      style: "dark",
-      links: [
-        {
-          label: "User Manual",
-          to: "/docs/user/getting-started",
-        },
-        {
-          label: "Developer Manual",
-          to: "/docs/developer/how-to-build",
-        },
-        {
-          label: "Support us 🎗️",
-          to: "/support-us",
-        },
-        {
-          label: "Download",
-          href: downloadUrl,
-        },
-        {
-          label: "Source Code",
-          href: repositoryUrl,
-        },
-      ],
       copyright: `Copyright © ${new Date().getFullYear()} Local Desktop.`,
     },
+    colorMode: {
+      defaultMode: "dark",
+      disableSwitch: true,
+      respectPrefersColorScheme: false,
+    },
     prism: {
-      theme: prismThemes.github,
-      darkTheme: prismThemes.dracula,
+      theme: prismThemes.nightOwl,
     },
     mermaid: {
       theme: { light: "neutral", dark: "dark" },
@@ -190,9 +173,6 @@ const config: Config = {
     downloadUrl,
     repositoryUrl,
     emailCollectForm: "https://forms.gle/UDrYH9xwhznT2u8Y9",
-    // Landing page only — always the dark-themed Looker report (docs keep light/dark toggle).
-    audienceChartEmbedUrlDark:
-      "https://lookerstudio.google.com/embed/reporting/adb676dc-c6b1-4161-a995-ec93d008ab79/page/JoHzF",
   },
 };
 

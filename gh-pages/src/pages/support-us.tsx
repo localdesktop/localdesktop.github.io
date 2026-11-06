@@ -17,6 +17,7 @@ function SupportUs() {
             support helps us continue building and improving this open-source
             tool.
           </p>
+          <p className="site-label">Choose how to help</p>
           <div className="flex flex-col md:flex-row gap-4 items-center justify-center">
             <Link
               className="button button--primary button--lg"
@@ -32,6 +33,7 @@ function SupportUs() {
             </Link>
           </div>
         </section>
+        <p className="site-label text-center">Or buy us a coffee</p>
         <div className="flex justify-center items-center">
           <BuyMeACoffee />
         </div>
