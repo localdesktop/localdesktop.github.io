@@ -103,8 +103,7 @@ html {
 /* ------------------------------------------------------------------ */
 .docs-wrapper .main-wrapper > div,
 .blog-wrapper .main-wrapper > .container,
-.main-wrapper > main.container,
-.home-game {
+.main-wrapper > main.container {
   border: 1px solid #4a9dff;
   border-radius: 12px;
   background: var(--ld-glass);
@@ -376,8 +375,8 @@ details > summary.button::-webkit-details-marker {
     width: 2.75rem;
   }
 
-  .site-footer__long {
-    display: none;
+  .site-footer {
+    flex-wrap: wrap;
   }
 }
 
@@ -421,18 +420,75 @@ html[class*="docs-doc-id-developer/"] .main-wrapper > div::before {
   margin: -1.5rem -1.5rem 1.5rem;
 }
 
-html:has(.home-game) #__docusaurus {
-  height: 100dvh;
+main.home {
+  max-width: 1100px;
 }
 
-html:has(.home-game) .main-wrapper {
+.home section + section {
+  margin-top: 2.5rem;
+}
+
+.home__hero {
+  padding: 1.5rem 0 0.5rem;
+}
+
+.home__hero h1 {
+  font-family: var(--ld-display);
+  font-size: clamp(1.8rem, 4vw, 2.8rem);
+  line-height: 1.15;
+}
+
+.home__lead {
+  max-width: 62ch;
+  font-size: 1.1rem;
+}
+
+.home__actions {
   display: flex;
-  padding: 1rem;
+  flex-wrap: wrap;
+  gap: 0.75rem;
 }
 
-.home-game {
-  flex: 1;
-  display: block;
+.home__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 1rem;
+}
+
+.home__card {
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--ld-line-dim);
+  border-radius: 8px;
+  background: rgba(60, 140, 255, 0.06);
+  color: var(--ld-ink);
+}
+
+.home__card p {
+  margin: 0;
+  color: var(--ld-muted);
+}
+
+.home__card--link:hover {
+  border-color: var(--ld-line);
+  text-decoration: none;
+}
+
+.home__steps li + li {
+  margin-top: 0.5rem;
+}
+
+.home__faq {
+  margin-bottom: 0.75rem;
+}
+
+.home__faq summary {
+  color: var(--ld-heading);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.home__faq p {
+  margin: 0.4rem 0 0;
 }
 
 .blog-list-page article {
@@ -554,4 +610,14 @@ p:has(img[src$="#boxed"]) {
 
 .site-footer__clock {
   color: var(--ld-heading);
+}
+
+.site-footer__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+}
+
+.site-footer__links a {
+  color: var(--ld-ink);
 }
