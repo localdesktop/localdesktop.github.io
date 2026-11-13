@@ -67,14 +67,6 @@ if (q.has('join')) {
   document.querySelector<HTMLElement>('.spec-auto')?.click();
 }
 
-if (!q.has('attract')) {
-  // AdSense H5 Games Ads: the preroll is a no-op until game ads are enabled for the site
-  ((window as unknown as { adsbygoogle?: object[] }).adsbygoogle ??= []).push({ type: 'preroll' });
-  const ads = Object.assign(document.createElement('script'), { async: true, crossOrigin: 'anonymous', src: 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8496762857844623' });
-  if (import.meta.env.DEV) ads.dataset.adbreakTest = 'on';
-  document.head.append(ads);
-}
-
 // offline support: cache the whole game once it has been loaded (production builds only)
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {

@@ -40,7 +40,7 @@ export default function LayoutWrapper(props: Props): ReactNode {
     GENERATED_LISTING_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix));
   const noAdsense =
     (typeof window !== "undefined" && window.self !== window.top) ||
-    ["/privacy", "/support-us"].includes(pathname) ||
+    ["/privacy", "/support-us", "/about", "/contact"].includes(pathname) ||
     isNoindexPage ||
     routes.plugin.name === "native";
 

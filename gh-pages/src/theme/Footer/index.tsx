@@ -1,5 +1,13 @@
 import React, { type ReactNode, useEffect, useState } from "react";
+import Link from "@docusaurus/Link";
 import { useThemeConfig } from "@docusaurus/theme-common";
+
+const LINKS = [
+  { to: "/about", label: "About" },
+  { to: "/contact", label: "Contact" },
+  { to: "/privacy", label: "Privacy" },
+  { to: "/blog", label: "News" },
+];
 
 export default function Footer(): ReactNode {
   const { footer } = useThemeConfig();
@@ -14,9 +22,14 @@ export default function Footer(): ReactNode {
 
   return (
     <footer className="site-footer">
-      <a className="button button--primary" href="/bear-war/" target="_blank">
-        ▶ Play<span className="site-footer__long"> the game to support the developers</span>
-      </a>
+      <nav className="site-footer__links">
+        {LINKS.map((l) => (
+          <Link key={l.to} to={l.to}>
+            {l.label}
+          </Link>
+        ))}
+        <a href="/bear-war/">Bear War</a>
+      </nav>
       <span>{footer?.copyright}</span>
       <b className="site-footer__clock">{time}</b>
     </footer>
