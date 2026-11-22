@@ -202,7 +202,7 @@ export default function Home(): ReactNode {
           </ul>
           <p>
             Installing software works like on any Arch system. <code>pacman -Syu libreoffice-fresh</code> installs
-            LibreOffice, and an AUR helper such as <code>yay</code> adds apps like Visual Studio Code. See{" "}
+            LibreOffice, and an AUR helper such as <code>yay</code> adds apps like Google Chrome or Visual Studio Code. See{" "}
             <Link to="/docs/user/installing-apps">Installing apps</Link>, and the{" "}
             <Link to="/docs/user/app-compatibility/firefox">app guides</Link> for tested apps and the tweaks they
             need.

@@ -3,7 +3,7 @@ title: Chromium
 description: Install Chromium in Local Desktop, why it shows a --no-sandbox warning, and how to start it from the terminal as a normal user.
 ---
 
-Chromium is the open-source browser that Google Chrome is built on. It's a good second browser next to Firefox, for sites that only test with Chrome, or for Chrome's developer tools. Google Chrome itself is not available, because Google only builds it for PCs (x86_64).
+Chromium is the open-source browser that Google Chrome is built on. It's a good second browser next to Firefox, for sites that only test with Chrome, or for Chrome's developer tools. Google Chrome itself is not in pacman, but it is in the [AUR](/docs/user/installing-apps#the-aur): `yay -S google-chrome` installs Google's own ARM64 build.
 
 ![Chromium on Local Desktop, showing the --no-sandbox warning](/img/chromium.webp#boxed)
 

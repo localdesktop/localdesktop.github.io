@@ -71,13 +71,13 @@ pacman -Qi | awk '/^Name/{n=$3} /^Installed Size/{print $4$5, n}' | sort -h | ta
 
 Arch Linux ARM builds most of what Arch Linux has, but a few groups of apps are missing:
 
-- **Apps only made for PCs.** Google Chrome, Spotify, Steam, Discord and most commercial games only exist for x86_64 processors. Your phone has an ARM processor (aarch64), so they can't run. Look for an alternative: Chromium instead of Chrome, the web version of Spotify or Discord in Firefox.
+- **Apps only made for PCs.** Spotify, Steam, Discord and most commercial games only exist for x86_64 processors. Your phone has an ARM processor (aarch64), so they can't run. Look for an alternative, like the web version of Spotify or Discord in Firefox.
 - **Apps that are not open source.** The official repositories only carry software that can be shared freely. Many of those are in the AUR instead, see below.
 - **Apps that need Flatpak or Snap.** Both need Linux features that Android doesn't give to apps (user namespaces), so they don't work in Local Desktop.
 
 ## The AUR
 
-The **AUR** (Arch User Repository) is a collection of build scripts written by the community. Instead of a ready package, you download a script, and your phone builds the package from it. It has thousands of apps that are not in the official repositories, Visual Studio Code for example.
+The **AUR** (Arch User Repository) is a collection of build scripts written by the community. Instead of a ready package, you download a script, and your phone builds the package from it. It has thousands of apps that are not in the official repositories, Google Chrome and Visual Studio Code for example.
 
 AUR packages are not checked by anyone. Before you install one, look at its page on [aur.archlinux.org](https://aur.archlinux.org): who maintains it, when it was updated, and what other people say in the comments.
 
