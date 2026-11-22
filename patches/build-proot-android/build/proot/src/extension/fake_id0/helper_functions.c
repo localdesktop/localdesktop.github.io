@@ -284,10 +284,19 @@ int get_dir_path(char path[PATH_MAX], char dir_path[PATH_MAX])
 int get_meta_path(char orig_path[PATH_MAX], char meta_path[PATH_MAX]) 
 {
 	char *filename;
+	char path[PATH_MAX];
+	size_t length;
+
+	/* "dir/" names "dir": without this, the meta file was ".proot-meta-file..meta"
+	 * inside the directory, where nothing ever removes it. */
+	strcpy(path, orig_path);
+	length = strlen(path);
+	while (length > 1 && path[length - 1] == '/')
+		path[--length] = '\0';
 
 	/*Separate the final component from the path. */
-	get_dir_path(orig_path, meta_path);
-	filename = get_name(orig_path);
+	get_dir_path(path, meta_path);
+	filename = get_name(path);
 
 	/* Add a / between the final component and the rest of the path. */
 	if(strcmp(meta_path, "/") != 0)

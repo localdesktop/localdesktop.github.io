@@ -35,7 +35,14 @@ that isn't a file gets the real `fstat`, instead of a `stat` of its `/proc/self/
 (`socket:[N]`), which fails. Node checks its standard streams with `fstat`, and a child process
 gets sockets for them, so every Node or Electron child process aborted at startup.
 
-The shipped `libproot.so` is built with `./build.sh` (NDK r26d). On macOS, put a
-GNU `install` (or a wrapper that handles `install -D`) first in `PATH`.
+And in `src/extension/fake_id0/helper_functions.c` and `unlink.c`: the meta file for a path
+with a trailing slash (`dir/`) goes next to the directory, not inside it as
+`.proot-meta-file..meta`, and `rmdir` removes the meta files left in a directory that holds
+nothing else. The app runs PRoot with `-H`, which hides meta files from directory listings
+(or `makepkg` packs them and fails), so a program that empties a directory can't see them.
+
+The shipped `libproot.so` is built with `./build.sh` (NDK r28). On macOS, put a
+GNU `install` (or a wrapper that handles `install -D`) first in `PATH`, and set
+`STRIP` to the NDK's `llvm-strip`, since Apple's `strip` can't read Android binaries.
 
 See https://github.com/green-green-avk/proot for more info.
