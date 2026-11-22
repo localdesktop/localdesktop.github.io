@@ -1,5 +1,7 @@
 ---
 title: "xkbcommon: ERROR: failed to add default include path"
+sidebar_label: xkbcommon include path
+description: Why libxkbcommon cannot find its keyboard data on Android, and how Local Desktop builds it with the right XKB config root.
 ---
 
 ## Issue
@@ -14,4 +16,6 @@ This error occurs because by default, xkbcommon will look for configuration file
 
 ## Solution
 
-To resolve this issue, you need to re-cross-compile `libxkbcommon.so` for Android with the right `xkb-config-root`. Please check this [working example](https://github.com/localdesktop/localdesktop.github.io/blob/40fb83cfbe588f1fc23f4bf14e733297a0e64473/patches/build-libxkbcommon/Dockerfile#L48-L49) on how to specify the correct config root (and other important parameters such as locale root).
+To resolve this issue, you need to re-cross-compile `libxkbcommon.so` for Android with the right `xkb-config-root`. See `patches/build-libxkbcommon/Dockerfile` (the `xkb-config-root` and `x-locale-root` options) for how we point it at the guest's `/usr/share/X11/xkb`, inside the app's data folder (`/data/data/io.github.localdesktop/files/arch/...`).
+
+That path is different for secondary Android users and Private Space, so at runtime Local Desktop also sets `XKB_CONFIG_ROOT` and `XLOCALEDIR` to the real location (`src/android/utils/application_context.rs`). And the last setup stage, `fix_xkb_symlink`, makes sure the XKB data in the guest is where libxkbcommon expects it.

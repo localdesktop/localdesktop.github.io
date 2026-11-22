@@ -85,17 +85,17 @@ const FAQ = [
   },
   {
     q: "Why does the app close in the background on Android 12 and newer?",
-    a: "Android's phantom process killer stops apps that start many child processes. The Getting Started guide explains how to turn it off on Samsung and other devices.",
+    a: "Android's phantom process killer stops apps that start many child processes. The Getting started guide explains how to turn it off on Samsung and other devices.",
   },
 ];
 
 const GUIDES = [
-  { to: "/docs/user/getting-started", title: "Getting started", body: "Install apps with pacman and the AUR, fix tiny text and keep Android from killing the desktop." },
-  { to: "/docs/user/creating-a-non-root-user", title: "Create a normal user", body: "Set up your own account with sudo instead of working as root." },
-  { to: "/docs/user/custom-de", title: "Use another desktop", body: "Replace Xfce with KDE Plasma or another Wayland desktop environment." },
-  { to: "/docs/user/gpu-acceleration", title: "GPU acceleration", body: "How Turnip and Zink work, how to check them and how to turn them off." },
-  { to: "/docs/user/external-display", title: "External display", body: "Use a monitor with the phone as a trackpad, and every gesture it supports." },
-  { to: "/docs/developer/how-it-works", title: "How it works", body: "A deeper tour of proot, Wayland and the Rust code behind the app." },
+  { to: "/docs/user/getting-started", title: "Getting started", body: "What you need, the first install, and how to keep Android from closing the desktop." },
+  { to: "/docs/user/installing-apps", title: "Installing apps", body: "Find, install, update and remove apps with pacman, and build community packages from the AUR." },
+  { to: "/docs/user/creating-a-normal-user", title: "Creating a normal user", body: "Set up your own account with sudo instead of working as root." },
+  { to: "/docs/user/changing-the-desktop-environment", title: "Changing the desktop environment", body: "Replace Xfce with KDE Plasma or another Wayland desktop environment." },
+  { to: "/docs/user/using-an-external-display", title: "Using an external display", body: "Use a monitor with the phone as a trackpad, and every gesture it supports." },
+  { to: "/docs/developer/understanding-the-architecture", title: "Understanding the architecture", body: "A deeper tour of proot, Wayland and the Rust code behind the app." },
 ];
 
 export default function Home(): ReactNode {
@@ -188,7 +188,7 @@ export default function Home(): ReactNode {
           </ol>
           <p>
             The app itself is written in Rust and runs as native code. The{" "}
-            <Link to="/docs/developer/how-it-works">developer manual</Link> covers each part in detail, and the
+            <Link to="/docs/developer/understanding-the-architecture">developer manual</Link> covers each part in detail, and the
             code is on <Link to={repositoryUrl}>GitHub</Link>.
           </p>
         </section>
@@ -201,10 +201,11 @@ export default function Home(): ReactNode {
             ))}
           </ul>
           <p>
-            Installing software works like on any Arch system. <code>pacman -S firefox</code> installs Firefox,
-            and an AUR helper such as <code>yay</code> adds proprietary apps like Google Chrome or Visual Studio
-            Code. The <Link to="/docs/user/app-compatibility/firefox">app compatibility</Link> pages list tested
-            apps and the tweaks they need.
+            Installing software works like on any Arch system. <code>pacman -Syu libreoffice-fresh</code> installs
+            LibreOffice, and an AUR helper such as <code>yay</code> adds apps like Google Chrome or Visual Studio Code. See{" "}
+            <Link to="/docs/user/installing-apps">Installing apps</Link>, and the{" "}
+            <Link to="/docs/user/app-compatibility/firefox">app guides</Link> for tested apps and the tweaks they
+            need.
           </p>
         </section>
 

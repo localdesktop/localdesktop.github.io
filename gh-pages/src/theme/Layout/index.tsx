@@ -16,7 +16,7 @@ const THIN_PAGE_PATHS = new Set([
   "/docs/developer/bug-cheat-sheet/pacman-progress",
   "/docs/developer/bug-cheat-sheet/random-crashes",
   "/docs/developer/bug-cheat-sheet/xkb-error",
-  "/docs/user/android-storage",
+  "/docs/user/sharing-files-with-android",
   "/docs/user/app-compatibility/gimp",
   "/docs/user/app-compatibility/visual-studio-code",
 ]);

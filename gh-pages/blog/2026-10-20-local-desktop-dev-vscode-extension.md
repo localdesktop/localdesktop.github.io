@@ -57,4 +57,4 @@ Forks like [elementary mobile](https://github.com/localdesktop/elementary-mobile
 
 ## Try it
 
-Get it from [Open VSX](https://open-vsx.org/extension/mister-teddy/localdesktop-dev): in Cursor, VSCodium or Windsurf, search for **Local Desktop Dev** in the Extensions view. In VS Code, download the `.vsix` and choose **Install from VSIX**. Then read [Maintainer tools](/docs/developer/maintainer-tools/) to get started. The source is in [`vscode-extension/`](https://github.com/localdesktop/localdesktop.github.io/tree/main/vscode-extension), and as always, contributions are welcome. See you in the chat! 👋
+Get it from [Open VSX](https://open-vsx.org/extension/mister-teddy/localdesktop-dev): in Cursor, VSCodium or Windsurf, search for **Local Desktop Dev** in the Extensions view. In VS Code, download the `.vsix` and choose **Install from VSIX**. Then read [Using the maintainer tools](/docs/developer/using-the-maintainer-tools/) to get started. The source is in [`vscode-extension/`](https://github.com/localdesktop/localdesktop.github.io/tree/main/vscode-extension), and as always, contributions are welcome. See you in the chat! 👋

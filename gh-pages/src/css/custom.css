@@ -584,6 +584,19 @@ p:has(img[src$="#boxed"]) {
   text-align: center;
 }
 
+/* Annotated phone screenshots, shown side by side */
+img[src$="#step"] {
+  width: 32%;
+  margin: 0 0.5% 0.5rem;
+  vertical-align: top;
+  border: 1px solid var(--ld-line-dim);
+  border-radius: 8px;
+}
+
+p:has(img[src$="#step"]) {
+  text-align: center;
+}
+
 /* ------------------------------------------------------------------ */
 /* Bottom status bar                                                  */
 /* ------------------------------------------------------------------ */

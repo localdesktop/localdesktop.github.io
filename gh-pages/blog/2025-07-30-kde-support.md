@@ -10,7 +10,7 @@ We're excited to announce that our experiments with **KDE Plasma** have yielded 
 
 ## How to
 
-Please visit [this document](/docs/user/custom-de) for detailed instructions.
+Please visit [this document](/docs/user/changing-the-desktop-environment) for detailed instructions.
 In simpler terms, just add the following configuration to your `localdesktop.toml` file:
 
 ```toml title="/etc/localdesktop/localdesktop.toml"

@@ -1,5 +1,7 @@
 ---
 title: "Debugger can't find lldb-server (Cannot determine ndk root)"
+sidebar_label: lldb-server not found
+description: How to fix "No arm64 lldb-server found" and "Cannot determine ndk root" when debugging Local Desktop with LLDB.
 ---
 
 ## Issue
@@ -10,7 +12,7 @@ When you press <kbd>F5</kbd> for the first time, the debug session stops with:
 No arm64 lldb-server found in any Android NDK.
 ```
 
-Older setups that used the third-party **Android Debug** extension showed a similar error, `Error updating android paths: Cannot determine ndk root`. That extension is no longer needed: the Local Desktop Dev extension handles building, installing and attaching by itself (see [How to develop locally?](/docs/developer/how-to-dev)). You can uninstall Android Debug.
+Older setups that used the third-party **Android Debug** extension showed a similar error, `Error updating android paths: Cannot determine ndk root`. That extension is no longer needed: the Local Desktop Dev extension handles building, installing and attaching by itself (see [Running and debugging](/docs/developer/running-and-debugging)). You can uninstall Android Debug.
 
 ## Solution
 
