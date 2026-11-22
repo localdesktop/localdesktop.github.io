@@ -1,5 +1,7 @@
 ---
 title: "Why stdbuf -oL pacman -S --noprogressbar?"
+sidebar_label: pacman and stdbuf
+description: Why Local Desktop runs pacman with stdbuf -oL and --noprogressbar, so the installer log updates line by line instead of getting stuck.
 ---
 
 ## Issue

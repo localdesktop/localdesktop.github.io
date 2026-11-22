@@ -43,4 +43,4 @@ The device is chosen in this order: the tool's `serial`, then `$ANDROID_SERIAL`,
 
 ## Pull requests
 
-PRs to `main` need exactly one `release:*` label (`breaking`, `feature`, `bugfix`, `patch`, `improvement`, `optimisation`, or `docs` for no release). PRs that only touch `gh-pages/`, `vscode-extension/`, `.vscode/` or the agent config files are exempt. See `gh-pages/docs/developer/1-how-to-build.md`.
+PRs to `main` need exactly one `release:*` label (`breaking`, `feature`, `bugfix`, `patch`, `improvement`, `optimisation`, or `docs` for no release). PRs that only touch `gh-pages/`, `vscode-extension/`, `.vscode/` or the agent config files are exempt. See `gh-pages/docs/developer/05-contributing.md`.

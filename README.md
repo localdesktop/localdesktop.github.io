@@ -129,4 +129,4 @@ Recommended setup:
 
 > **Tip**: You can debug the app on either a physical device or a virtual device.
 
-For more instructions on how to work on this project, please visit the [Developer Manual](https://localdesktop.github.io/docs/developer/how-it-works).
+For more instructions on how to work on this project, please visit the [Developer Manual](https://localdesktop.github.io/docs/developer/understanding-the-architecture).

@@ -56,7 +56,7 @@ This is an experiment, and it has rough edges:
 
 - Apps that elementary now ships only as Flatpaks (Calculator, Music, Videos, Photos, AppCenter) can't run, because Flatpak needs Linux user namespaces. Web, Document Viewer and File Roller are included as normal packages instead.
 - Rendering is done on the CPU, so it's not fast.
-- With more than a couple of apps open you can still hit Android's process limit. Lifting it once in Developer options ([how](/docs/user/getting-started#disable-phantom-process-killer)) is still recommended.
+- With more than a couple of apps open you can still hit Android's process limit. Lifting it once in Developer options ([how](/docs/user/getting-started#read-this-if-you-use-android-12-or-newer)) is still recommended.
 - Sound is not working reliably yet, the desktop is English only, and the panel and dock sometimes need a first tap to appear.
 - So far it has been tested on an Android emulator, not on many real devices.
 

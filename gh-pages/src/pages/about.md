@@ -26,7 +26,7 @@ The project was started at the end of 2024 by [Mister Teddy](https://mister-tedd
 ## What this website covers
 
 - The [User Manual](/docs/user/getting-started) explains how to install software, configure the desktop, use a keyboard, mouse or external display, and enable GPU acceleration.
-- The [Developer Manual](/docs/developer/how-to-build) explains how to build the app, how its parts fit together, and how to debug it.
+- The [Developer Manual](/docs/developer/building-the-app) explains how to build the app, how its parts fit together, and how to debug it.
 - The [News](/blog) section has release notes, technical deep dives and community milestones.
 
 ## Get in touch

@@ -27,7 +27,7 @@ function SupportUs() {
             </Link>
             <Link
               className="button button--secondary button--lg"
-              to="/docs/developer/how-to-build"
+              to="/docs/developer/building-the-app"
             >
               Join us as a developer
             </Link>

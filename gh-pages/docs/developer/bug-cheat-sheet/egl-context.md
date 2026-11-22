@@ -1,10 +1,14 @@
 ---
 title: Failed to create EGLContext
+sidebar_label: EGLContext not created
+description: Why the compositor can fail to create an EGL context on some Android devices and emulators, and how Local Desktop works around EGL_BAD_MATCH and EGL_BAD_ATTRIBUTE.
 ---
 
 ## Issue
 
-You would likely (and hopefully only) encounter this problem when using an emulator. Local Desktop will crash immediately, and the log will show `Failed to create EGLContext` with an error variant, such as `EGL_BAD_MATCH` or `EGL_BAD_ATTRIBUTE`.
+You would likely (and hopefully only) encounter this problem when using an emulator. The screen stays black, and the log shows `Failed to create EGLContext. Tried: ...`, with an error for each EGL config that the compositor tried, such as `EGL_BAD_MATCH` or `EGL_BAD_ATTRIBUTE`.
+
+The compositor (`create_egl_context` in `src/android/backend/wayland/winit_backend.rs`) tries several configs in order: OpenGL ES 3.0 with a hardware-accelerated surface, then emulator-friendly surfaces, then OpenGL ES 2.0. You only see this error when every one of them failed.
 
 [Khronos EGL documentation](https://registry.khronos.org/EGL/sdk/docs/man/html/eglMakeCurrent.xhtml#errors) points out these errors very clearly. It seems like the cause of our specific case is:
 
@@ -22,11 +26,13 @@ So remember: **whenever you get stuck, come back here!** And don't just read - p
 
 Local Desktop patched this [portion of Smithay](https://github.com/localdesktop/localdesktop.github.io/commit/58ffc6fc37da2d799db0d68b8549abe57fa2e636) to create a dummy 1x1 pbuffer surface and use it as both the draw and read surface when calling `eglMakeCurrent` to avoid the `EGL_BAD_MATCH` error.
 
-Dear EGL experts, does the above hack make sense?
+If you know EGL better than us and have a cleaner fix, we'd love a pull request.
 
 ### EGL_BAD_ATTRIBUTE
 
-If the error variant is `EGL_BAD_ATTRIBUTE`, you must toggle the `Experimental: Enable ANGLE` setting in Developer options:
+Some drivers reject the EGL 1.5 context attributes with `EGL_BAD_ATTRIBUTE`. Since [#208](https://github.com/localdesktop/localdesktop.github.io/pull/208), our Smithay patch retries with the older `EGL_CONTEXT_CLIENT_VERSION` attribute by itself, so you shouldn't see this any more.
+
+If you still do (on an emulator, for example), toggle the `Experimental: Enable ANGLE` setting in Developer options:
 
 ![ANGLE](/img/angle-setting.webp)
 

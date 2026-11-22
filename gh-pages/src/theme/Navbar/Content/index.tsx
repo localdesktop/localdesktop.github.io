@@ -8,7 +8,7 @@ import LatestNews from "@site/src/components/latest-news";
 
 const TABS = [
   { label: "User Manual", to: "/docs/user/getting-started", base: "/docs/user" },
-  { label: "Developer Manual", to: "/docs/developer/how-to-build", base: "/docs/developer" },
+  { label: "Developer Manual", to: "/docs/developer/building-the-app", base: "/docs/developer" },
 ];
 
 export default function NavbarContent(): ReactNode {
