@@ -119,6 +119,9 @@ impl ArchProcess {
             .arg("--sysvipc")
             .arg("--kill-on-exit")
             .arg("--root-id")
+            // --root-id keeps fake owners and modes in `.proot-meta-file.*` files next to each
+            // file. -H hides them from directory listings, or makepkg packs them and fails.
+            .arg("-H")
             .arg("--bind=/dev")
             .arg("--bind=/proc")
             .arg("--bind=/sys")
