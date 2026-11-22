@@ -63,7 +63,10 @@ type StageOutput = Option<JoinHandle<()>>;
 
 const GUEST_MESA_ASSET: &str = "guest-mesa.tar.xz";
 
-const PIPEWIRE_GUEST_LOCK_PACKAGES: &[&str] = &[
+/// Older versions held these back with `IgnorePkg`. That turned every `pacman -Syu` into a
+/// partial upgrade, which fails as soon as Arch updates a library they depend on, so the
+/// hold is now removed on every start.
+const PIPEWIRE_LEGACY_LOCK_PACKAGES: &[&str] = &[
     "libpipewire",
     "pipewire",
     "pipewire-alsa",
@@ -323,7 +326,7 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
         return None;
     }
 
-    clear_pipewire_package_lock_for_install();
+    release_pipewire_package_lock();
 
     let mpsc_sender = mpsc_sender.clone();
     return Some(thread::spawn(move || {
@@ -398,24 +401,25 @@ fn download_user_manual() {
     }
 }
 
-fn clear_pipewire_package_lock_for_install() {
+fn release_pipewire_package_lock() {
     let pacman_conf = Path::new(arch_fs_root()).join("etc/pacman.conf");
     let content = match fs::read_to_string(&pacman_conf) {
         Ok(content) => content,
         Err(error) => {
             log::warn!(
-                "Skipping PipeWire pacman unlock before install; failed to read {}: {error}",
+                "Skipping PipeWire pacman unlock; failed to read {}: {error}",
                 pacman_conf.display()
             );
             return;
         }
     };
 
-    let updated = remove_pacman_ignore_pkg(&content, PIPEWIRE_GUEST_LOCK_PACKAGES);
+    let updated = remove_pacman_ignore_pkg(&content, PIPEWIRE_LEGACY_LOCK_PACKAGES);
     if updated != content {
-        fs::write(&pacman_conf, updated)
-            .expect("Failed to clear PipeWire pacman lock before install");
-        log::info!("Temporarily cleared guest PipeWire package lock before dependency install");
+        match fs::write(&pacman_conf, updated) {
+            Ok(()) => log::info!("Removed the old guest PipeWire package hold from pacman.conf"),
+            Err(error) => log::warn!("Failed to remove the PipeWire package hold: {error}"),
+        }
     }
 }
 
@@ -469,28 +473,48 @@ fn setup_guest_mesa(options: &SetupOptions) -> StageOutput {
 }
 
 fn setup_pipewire_package_lock(_: &SetupOptions) -> StageOutput {
-    let pacman_conf = Path::new(arch_fs_root()).join("etc/pacman.conf");
-    let content = match fs::read_to_string(&pacman_conf) {
-        Ok(content) => content,
-        Err(error) => {
-            log::warn!(
-                "Skipping PipeWire pacman lock; failed to read {}: {error}",
-                pacman_conf.display()
-            );
-            return None;
-        }
-    };
+    release_pipewire_package_lock();
+    None
+}
 
-    let updated = ensure_pacman_ignore_pkg(&content, PIPEWIRE_GUEST_LOCK_PACKAGES);
-    if updated != content {
-        fs::write(&pacman_conf, updated).expect("Failed to write PipeWire pacman lock");
-        log::info!(
-            "Locked guest PipeWire packages in {}: {}",
-            pacman_conf.display(),
-            PIPEWIRE_GUEST_LOCK_PACKAGES.join(" ")
-        );
+/// pacman runs `systemd-sysusers` when a package adds a system user, and the way it rewrites
+/// `/etc/passwd` and `/etc/group` leaves PRoot's recorded mode at 600. A normal user then can't
+/// read them: `whoami` fails, and so do pacman and makepkg. This hook puts the mode back after
+/// every transaction.
+const ACCOUNT_FILES_HOOK: &str = "[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Target = *
+
+[Action]
+Description = Keeping /etc/passwd and /etc/group readable for normal users...
+When = PostTransaction
+Exec = /usr/bin/chmod 644 /etc/passwd /etc/group
+";
+
+fn setup_account_files(_: &SetupOptions) -> StageOutput {
+    let hooks_dir = Path::new(arch_fs_root()).join("etc/pacman.d/hooks");
+    let hook = hooks_dir.join("zz-localdesktop-account-files.hook");
+    if fs::read_to_string(&hook).is_ok_and(|current| current == ACCOUNT_FILES_HOOK) {
+        return None;
     }
 
+    if let Err(error) =
+        fs::create_dir_all(&hooks_dir).and_then(|_| fs::write(&hook, ACCOUNT_FILES_HOOK))
+    {
+        log::warn!("Failed to install the account files pacman hook: {error}");
+        return None;
+    }
+    // Fix installs where pacman already ran it.
+    ArchProcess {
+        command: "chmod 644 /etc/passwd /etc/group".into(),
+        user: None,
+        log: None,
+    }
+    .run();
+    log::info!("Installed the account files pacman hook");
     None
 }
 
@@ -623,80 +647,6 @@ fn upsert_kv_file(path: &Path, delimiter: char, updates: &[(&str, String)]) {
     }
     let content = render_kv_lines(&lines);
     fs::write(path, content).expect("Failed to write key/value file");
-}
-
-fn ensure_pacman_ignore_pkg(content: &str, packages: &[&str]) -> String {
-    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
-    let value = packages.join(" ");
-
-    let Some(options_start) = lines.iter().position(|line| line.trim() == "[options]") else {
-        if !lines.is_empty() {
-            lines.push(String::new());
-        }
-        lines.push("[options]".to_string());
-        lines.push(format!("IgnorePkg   = {value}"));
-        let mut out = lines.join("\n");
-        out.push('\n');
-        return out;
-    };
-
-    let options_end = lines
-        .iter()
-        .enumerate()
-        .skip(options_start + 1)
-        .find(|(_, line)| {
-            let trimmed = line.trim();
-            trimmed.starts_with('[') && trimmed.ends_with(']')
-        })
-        .map(|(index, _)| index)
-        .unwrap_or(lines.len());
-
-    let mut insert_after_comment = None;
-    for index in options_start + 1..options_end {
-        let trimmed = lines[index].trim_start();
-        let active = !trimmed.starts_with('#');
-        let candidate = if active {
-            trimmed
-        } else {
-            trimmed.trim_start_matches('#').trim_start()
-        };
-
-        let Some((key, existing)) = candidate.split_once('=') else {
-            continue;
-        };
-        if key.trim() != "IgnorePkg" {
-            continue;
-        }
-
-        if active {
-            let merged = merge_pacman_list(existing, packages);
-            lines[index] = format!("IgnorePkg   = {merged}");
-            let mut out = lines.join("\n");
-            out.push('\n');
-            return out;
-        }
-
-        insert_after_comment = Some(index + 1);
-    }
-
-    lines.insert(
-        insert_after_comment.unwrap_or(options_start + 1),
-        format!("IgnorePkg   = {value}"),
-    );
-
-    let mut out = lines.join("\n");
-    out.push('\n');
-    out
-}
-
-fn merge_pacman_list(existing: &str, packages: &[&str]) -> String {
-    let mut values: Vec<String> = existing.split_whitespace().map(str::to_string).collect();
-    for package in packages {
-        if !values.iter().any(|value| value == package) {
-            values.push((*package).to_string());
-        }
-    }
-    values.join(" ")
 }
 
 fn remove_pacman_ignore_pkg(content: &str, packages: &[&str]) -> String {
@@ -1350,14 +1300,15 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
         Box::new(install_dependencies),         // Step 3. Install dependencies
         Box::new(setup_machine_id),             // Step 4. Seed /etc/machine-id for D-Bus clients
-        Box::new(setup_pipewire_package_lock), // Step 5. Hold guest PipeWire packages for the Android-side PipeWire POC
-        Box::new(setup_firefox_config),        // Step 6. Setup Firefox config
-        Box::new(setup_fake_bwrap), // Step 7. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
-        Box::new(setup_chromium_no_sandbox), // Step 8. Make Chromium/Electron apps launchable without a terminal
-        Box::new(setup_onboard_signal_fix), // Step 9. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
-        Box::new(setup_guest_mesa), // Step 10. Unpack the Turnip/Zink GPU drivers on Qualcomm devices
-        Box::new(setup_xfce_wayland), // Step 11. Setup Xfce Wayland launch and HiDPI scaling
-        Box::new(fix_xkb_symlink),  // Step 12. Fix xkb symlink
+        Box::new(setup_pipewire_package_lock), // Step 5. Remove the old PipeWire package hold, so pacman -Syu works
+        Box::new(setup_account_files), // Step 6. Keep /etc/passwd and /etc/group readable for normal users
+        Box::new(setup_firefox_config), // Step 7. Setup Firefox config
+        Box::new(setup_fake_bwrap), // Step 8. Replace bwrap with a no-sandbox shim (Android has no user namespaces)
+        Box::new(setup_chromium_no_sandbox), // Step 9. Make Chromium/Electron apps launchable without a terminal
+        Box::new(setup_onboard_signal_fix), // Step 10. Wrap Onboard to survive proot fstat/signal.set_wakeup_fd failure
+        Box::new(setup_guest_mesa), // Step 11. Unpack the Turnip/Zink GPU drivers on Qualcomm devices
+        Box::new(setup_xfce_wayland), // Step 12. Setup Xfce Wayland launch and HiDPI scaling
+        Box::new(fix_xkb_symlink),  // Step 13. Fix xkb symlink
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
