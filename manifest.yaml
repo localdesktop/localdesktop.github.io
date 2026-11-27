@@ -45,6 +45,11 @@ android:
           meta_data:
             - name: android.accessibilityservice
               resource: "@xml/keyboard_accessibility_service"
+      providers:
+        - name: io.github.localdesktop.ClipboardProvider
+          authorities: io.github.localdesktop.clipboard
+          exported: false
+          grant_uri_permissions: true
       meta_data:
         - name: com.samsung.android.dex.launchwidth
           value: 0

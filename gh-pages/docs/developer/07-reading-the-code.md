@@ -73,6 +73,7 @@ So `android/main.rs` is the genesis of all the spaghetti code. In case you get l
 | `proot/process.rs` | Builds the `proot` command line: binds, environment, user |
 | `proot/launch.rs` | Runs the **Launch** command once the compositor is ready |
 | `accessibility.rs` | The bridge to the keyboard accessibility service |
+| `clipboard.rs` | Shares text and images between the Android clipboard and the Linux one (with `ClipboardProvider.java` and `localdesktop-clipboard` in the guest) |
 | `external_display.rs` | The bridge to `ExternalDisplay.java`, for monitors |
 | `utils/settings.rs` | Reads the settings saved by `SettingsActivity` |
 | `utils/application_context.rs` | Paths, permissions and other facts about the app, read once at start |

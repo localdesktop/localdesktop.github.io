@@ -13,7 +13,7 @@ use crate::android::{
         },
         webview::ErrorVariant,
     },
-    external_display,
+    clipboard, external_display,
     proot::launch::launch,
     utils::{
         application_context::get_application_context,
@@ -195,6 +195,7 @@ impl ApplicationHandler<AppUserEvent> for PolarBearApp {
                 start_frame_loop(backend, &self.frontend.proxy);
                 handle(CentralizedEvent::Redraw, backend, event_loop);
                 launch();
+                clipboard::start(self.frontend.android_app.clone());
                 // Start the standalone-client PipeWire/AAudio backend.
                 pipewire_standalone_aaudio::spawn_after_ready(self.frontend.android_app.clone());
             }

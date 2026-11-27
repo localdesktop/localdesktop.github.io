@@ -1207,11 +1207,78 @@ while true; do
 done
 "#,
     );
+    // labwc doesn't pass its clipboard on to our compositor, so share it with the app through
+    // a FIFO and a file instead (see `src/android/clipboard.rs`). Text and images; passwords that
+    // a password manager marks as sensitive stay in Linux.
+    write_executable(
+        &fs_root.join("usr/local/bin/localdesktop-clipboard"),
+        r#"#!/bin/sh
+dir=/tmp/localdesktop-clipboard
+lock_file=/tmp/localdesktop-clipboard.pid
+
+command -v wl-copy >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1 || exit 0
+if [ -r "$lock_file" ]; then
+    old_pid=$(cat "$lock_file" 2>/dev/null)
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+        exit 0
+    fi
+fi
+echo "$$" > "$lock_file"
+
+# Always a new FIFO: the app sees it appear, and sends what was copied on Android meanwhile.
+mkdir -p "$dir"
+rm -f "$dir/in" "$dir/in.mime" "$dir/out" "$dir/out.mime"
+mkfifo "$dir/in"
+
+# Linux to Android: the app reacts when a new selection is renamed to "out".
+# Watch text and images separately so wl-paste sees both text and image-only selections.
+for mime in image/png image/jpeg image/webp; do
+    while true; do
+        wl-paste --type "$mime" --watch sh -c '
+            [ "${CLIPBOARD_STATE:-data}" = data ] || exit 0
+            cat > "$0/out.tmp" || exit 0
+            [ -s "$0/out.tmp" ] || { rm -f "$0/out.tmp"; exit 0; }
+            printf "%s\n" "$1" > "$0/out.mime"
+            mv -f "$0/out.tmp" "$0/out"' "$dir" "$mime"
+        sleep 1
+    done &
+done
+while true; do
+    wl-paste --no-newline --type text --watch sh -c '
+        [ "${CLIPBOARD_STATE:-data}" = data ] || exit 0
+        types=$(wl-paste --list-types 2>/dev/null) || exit 0
+        for img in image/png image/jpeg image/webp; do
+            case "
+$types
+" in
+                *"
+$img
+"*) exit 0 ;;
+            esac
+        done
+        cat > "$0/out.tmp" || exit 0
+        [ -s "$0/out.tmp" ] || { rm -f "$0/out.tmp"; exit 0; }
+        printf "text/plain;charset=utf-8\n" > "$0/out.mime"
+        mv -f "$0/out.tmp" "$0/out"' "$dir"
+    sleep 1
+done &
+
+# Android to Linux: blocks, without using the CPU, until the app writes what was copied.
+while true; do
+    exec 3< "$dir/in" || { sleep 1; continue; }
+    mime=$(cat "$dir/in.mime" 2>/dev/null)
+    [ -n "$mime" ] || mime="text/plain;charset=utf-8"
+    wl-copy --type "$mime" <&3 || sleep 1
+    exec 3<&-
+done
+"#,
+    );
     write_executable(
         &labwc_dir.join("autostart"),
         r#"#!/bin/sh
 /usr/local/bin/localdesktop-wlroots-output >/tmp/localdesktop-wlroots-output.log 2>&1 &
 /usr/local/bin/localdesktop-keyboard-relay >/tmp/localdesktop-keyboard-relay.log 2>&1 &
+/usr/local/bin/localdesktop-clipboard >/tmp/localdesktop-clipboard.log 2>&1 &
 "#,
     );
 
