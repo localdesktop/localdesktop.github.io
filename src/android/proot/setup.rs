@@ -1208,8 +1208,8 @@ done
 "#,
     );
     // labwc doesn't pass its clipboard on to our compositor, so share it with the app through
-    // a FIFO and a file instead (see `src/android/clipboard.rs`). Text only; passwords that a password manager
-    // marks as sensitive stay in Linux.
+    // a FIFO and a file instead (see `src/android/clipboard.rs`). Text and images; passwords that
+    // a password manager marks as sensitive stay in Linux.
     write_executable(
         &fs_root.join("usr/local/bin/localdesktop-clipboard"),
         r#"#!/bin/sh
@@ -1227,20 +1227,47 @@ echo "$$" > "$lock_file"
 
 # Always a new FIFO: the app sees it appear, and sends what was copied on Android meanwhile.
 mkdir -p "$dir"
-rm -f "$dir/in" "$dir/out"
+rm -f "$dir/in" "$dir/in.mime" "$dir/out" "$dir/out.mime"
 mkfifo "$dir/in"
 
 # Linux to Android: the app reacts when a new selection is renamed to "out".
 while true; do
-    wl-paste --no-newline --type text --watch sh -c '
+    wl-paste --watch sh -c '
         [ "${CLIPBOARD_STATE:-data}" = data ] || exit 0
-        cat > "$0/out.tmp" && mv -f "$0/out.tmp" "$0/out"' "$dir"
+        types=$(wl-paste --list-types 2>/dev/null) || exit 0
+        mime=""
+        for candidate in image/png image/jpeg image/webp image/gif image/bmp image/svg+xml; do
+            case "
+$types
+" in
+                *"
+$candidate
+"*) mime="$candidate"; break ;;
+            esac
+        done
+        if [ -n "$mime" ]; then
+            printf "%s\n" "$mime" > "$0/out.mime"
+            wl-paste --type "$mime" > "$0/out.tmp" 2>/dev/null && mv -f "$0/out.tmp" "$0/out"
+        else
+            case "
+$types
+" in
+                *text/*|*UTF8_STRING*|*STRING*)
+                    printf "text/plain;charset=utf-8\n" > "$0/out.mime"
+                    wl-paste --no-newline --type text > "$0/out.tmp" 2>/dev/null && mv -f "$0/out.tmp" "$0/out"
+                    ;;
+            esac
+        fi' "$dir"
     sleep 1
 done &
 
 # Android to Linux: blocks, without using the CPU, until the app writes what was copied.
 while true; do
-    wl-copy --type 'text/plain;charset=utf-8' < "$dir/in" || sleep 1
+    exec 3< "$dir/in" || { sleep 1; continue; }
+    mime=$(cat "$dir/in.mime" 2>/dev/null)
+    [ -n "$mime" ] || mime="text/plain;charset=utf-8"
+    wl-copy --type "$mime" <&3 || sleep 1
+    exec 3<&-
 done
 "#,
     );

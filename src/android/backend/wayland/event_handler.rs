@@ -427,7 +427,6 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
         // The desktop is on the external display, so the phone's own window doesn't size it.
         CentralizedEvent::Resized { .. } if backend.is_trackpad() => paint_trackpad(backend),
         CentralizedEvent::Resized { size, .. } => resize_desktop(backend, size),
-        // Something may have been copied in another app (split screen, or before switching back).
         CentralizedEvent::Focus(true) => clipboard::on_focus(backend.android_app.clone()),
         _ => (),
     }

@@ -1159,6 +1159,9 @@ pub mod apk {
             #[serde(rename(serialize = "service"))]
             #[serde(default)]
             pub services: Vec<Service>,
+            #[serde(rename(serialize = "provider"))]
+            #[serde(default)]
+            pub providers: Vec<Provider>,
             #[serde(rename(serialize = "android:usesCleartextTraffic"))]
             pub use_cleartext_traffic: Option<bool>,
             #[serde(rename(serialize = "android:extractNativeLibs"))]
@@ -1220,6 +1223,20 @@ pub mod apk {
             #[serde(rename(serialize = "intent-filter"))]
             #[serde(default)]
             pub intent_filters: Vec<IntentFilter>,
+        }
+
+        /// Android [provider element](https://developer.android.com/guide/topics/manifest/provider-element).
+        #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+        #[serde(deny_unknown_fields)]
+        pub struct Provider {
+            #[serde(rename(serialize = "android:name"))]
+            pub name: Option<String>,
+            #[serde(rename(serialize = "android:authorities"))]
+            pub authorities: Option<String>,
+            #[serde(rename(serialize = "android:exported"))]
+            pub exported: Option<bool>,
+            #[serde(rename(serialize = "android:grantUriPermissions"))]
+            pub grant_uri_permissions: Option<bool>,
         }
 
         /// Android [intent filter element](https://developer.android.com/guide/topics/manifest/intent-filter-element).

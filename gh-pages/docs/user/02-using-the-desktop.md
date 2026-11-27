@@ -54,12 +54,11 @@ The microphone is not supported yet.
 
 ## Copy and paste
 
-Copy and paste work between Linux apps, as on any desktop, and text is shared with Android both ways:
+The clipboard is shared between Android and Linux:
 
-- **Android to Linux.** Copy something in an Android app, switch back to Local Desktop, and paste it with **Ctrl+V** or the app's **Paste** menu. This also works side by side in split screen: copy on the other side, then tap the desktop.
-- **Linux to Android.** Copy something on the desktop, and it's ready to paste in any Android app. Android may show a small "Copied" message when this happens.
-
-Only text is shared. Images and files still stay on their own side, so move them through your [Android storage](/docs/user/sharing-files-with-android). Passwords that a Linux password manager marks as sensitive aren't sent to Android.
+- **Text and images:** work both ways.
+- **Files:** not shared. Move them through your [Android storage](/docs/user/sharing-files-with-android) instead.
+- **Passwords:** items that a Linux password manager marks as sensitive aren't sent to Android.
 
 ## When you switch to another app
 
