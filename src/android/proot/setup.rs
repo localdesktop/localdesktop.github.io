@@ -1231,33 +1231,35 @@ rm -f "$dir/in" "$dir/in.mime" "$dir/out" "$dir/out.mime"
 mkfifo "$dir/in"
 
 # Linux to Android: the app reacts when a new selection is renamed to "out".
+# Watch text and images separately so wl-paste sees both text and image-only selections.
+for mime in image/png image/jpeg image/webp; do
+    while true; do
+        wl-paste --type "$mime" --watch sh -c '
+            [ "${CLIPBOARD_STATE:-data}" = data ] || exit 0
+            cat > "$0/out.tmp" || exit 0
+            [ -s "$0/out.tmp" ] || { rm -f "$0/out.tmp"; exit 0; }
+            printf "%s\n" "$1" > "$0/out.mime"
+            mv -f "$0/out.tmp" "$0/out"' "$dir" "$mime"
+        sleep 1
+    done &
+done
 while true; do
-    wl-paste --watch sh -c '
+    wl-paste --no-newline --type text --watch sh -c '
         [ "${CLIPBOARD_STATE:-data}" = data ] || exit 0
         types=$(wl-paste --list-types 2>/dev/null) || exit 0
-        mime=""
-        for candidate in image/png image/jpeg image/webp image/gif image/bmp image/svg+xml; do
+        for img in image/png image/jpeg image/webp; do
             case "
 $types
 " in
                 *"
-$candidate
-"*) mime="$candidate"; break ;;
+$img
+"*) exit 0 ;;
             esac
         done
-        if [ -n "$mime" ]; then
-            printf "%s\n" "$mime" > "$0/out.mime"
-            wl-paste --type "$mime" > "$0/out.tmp" 2>/dev/null && mv -f "$0/out.tmp" "$0/out"
-        else
-            case "
-$types
-" in
-                *text/*|*UTF8_STRING*|*STRING*)
-                    printf "text/plain;charset=utf-8\n" > "$0/out.mime"
-                    wl-paste --no-newline --type text > "$0/out.tmp" 2>/dev/null && mv -f "$0/out.tmp" "$0/out"
-                    ;;
-            esac
-        fi' "$dir"
+        cat > "$0/out.tmp" || exit 0
+        [ -s "$0/out.tmp" ] || { rm -f "$0/out.tmp"; exit 0; }
+        printf "text/plain;charset=utf-8\n" > "$0/out.mime"
+        mv -f "$0/out.tmp" "$0/out"' "$dir"
     sleep 1
 done &
 
