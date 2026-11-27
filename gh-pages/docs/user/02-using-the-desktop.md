@@ -54,7 +54,12 @@ The microphone is not supported yet.
 
 ## Copy and paste
 
-Copy and paste work between Linux apps, as on any desktop. The Linux clipboard is not shared with Android yet, so you can't copy a link in Chrome on Android and paste it in Firefox on the desktop. To move text between the two, save it to a file in your [Android storage](/docs/user/sharing-files-with-android).
+Copy and paste work between Linux apps, as on any desktop, and text is shared with Android both ways:
+
+- **Android to Linux.** Copy something in an Android app, switch back to Local Desktop, and paste it with **Ctrl+V** or the app's **Paste** menu. This also works side by side in split screen: copy on the other side, then tap the desktop.
+- **Linux to Android.** Copy something on the desktop, and it's ready to paste in any Android app. Android may show a small "Copied" message when this happens.
+
+Only text is shared. Images and files still stay on their own side, so move them through your [Android storage](/docs/user/sharing-files-with-android). Passwords that a Linux password manager marks as sensitive aren't sent to Android.
 
 ## When you switch to another app
 

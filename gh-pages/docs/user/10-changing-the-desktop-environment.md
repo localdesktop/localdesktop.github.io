@@ -24,10 +24,10 @@ There are 2 modes in Local Desktop:
 
 ### Check
 
-A command that succeeds when everything the desktop needs is installed. The default checks for 19 packages, one by one:
+A command that succeeds when everything the desktop needs is installed. The default checks for 20 packages, one by one:
 
 ```bash
-pacman -Q noto-fonts && pacman -Q xfce4-session && pacman -Q xfce4-panel && ... && pacman -Q pipewire-alsa
+pacman -Q noto-fonts && pacman -Q xfce4-session && pacman -Q xfce4-panel && ... && pacman -Q wl-clipboard
 ```
 
 :::info Recipe
@@ -41,7 +41,7 @@ Check runs every time the app starts, so keep it fast. `pacman -Q` only reads th
 Runs as `root` when Check fails. This is the command that you watch in the installer's log panel. The default is:
 
 ```bash
-stdbuf -oL pacman -Syu --needed --noconfirm --noprogressbar noto-fonts xfce4 labwc wlr-randr xorg-xwayland xdg-desktop-portal xdg-desktop-portal-gtk squeekboard firefox evince pipewire pipewire-audio pipewire-alsa
+stdbuf -oL pacman -Syu --needed --noconfirm --noprogressbar noto-fonts xfce4 labwc wlr-randr xorg-xwayland xdg-desktop-portal xdg-desktop-portal-gtk squeekboard firefox evince pipewire pipewire-audio pipewire-alsa wl-clipboard
 ```
 
 Some important notes:
